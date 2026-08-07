@@ -508,23 +508,6 @@ def render_anomaly(row: dict[str, Any]) -> str:
     )
 
 
-def render_false_consensus_pair(pair: dict[str, Any]) -> str | None:
-    reverted = count_value(pair.get("reverted_pr"))
-    if reverted <= 0:
-        return None
-    evidence = str(pair.get("evidence") or "explicit-revert-pr")
-    revert_pr = count_value(pair.get("revert_pr"))
-    if revert_pr > 0:
-        return f"- PR #{reverted} reverted-by PR #{revert_pr} evidence={evidence}"
-    issue_number = count_value(pair.get("issue_number"))
-    if issue_number > 0:
-        return f"- PR #{reverted} issue=#{issue_number} evidence={evidence}"
-    revert_commit = str(pair.get("revert_commit") or "")
-    if revert_commit:
-        return f"- PR #{reverted} reverted-by commit {revert_commit} evidence={evidence}"
-    return None
-
-
 def render(
     data: Any,
     *,
@@ -591,15 +574,10 @@ def render(
 
     lines.extend(["", "False consensus churn"])
     if churn_pairs:
-        shown = 0
         for pair in churn_pairs[:MAX_ENTITIES]:
-            rendered = render_false_consensus_pair(pair)
-            if rendered is None:
-                continue
-            lines.append(rendered)
-            shown += 1
-        if len(churn_pairs) > shown:
-            lines.append(f"- ... {len(churn_pairs) - shown} more")
+            lines.append(json.dumps(pair, sort_keys=True, separators=(",", ":")))
+        if len(churn_pairs) > MAX_ENTITIES:
+            lines.append(f"- ... {len(churn_pairs) - MAX_ENTITIES} more")
     else:
         lines.append("- none")
 

@@ -33,3 +33,21 @@ def test_observe_success_is_typed(tmp_path):
     assert body["ok"] is True
     assert body["result"]["view"] == "engine-durable"
     assert body["result"]["health"] == {"status": "HEALTHY", "anomalies": []}
+
+
+def test_false_consensus_facts_are_rendered_without_interpretation(tmp_path):
+    engine = tmp_path / "engine"
+    fact = {"reverted_pr": 41, "producer_meaning": "package-owned"}
+    observed = {"entities": [], "queues": [], "avm_scoreboard": [], "false_consensus_evidence": [fact]}
+    engine.write_text(f"#!/bin/sh\nprintf '%s\\n' '{json.dumps(observed)}'\n", encoding="utf-8")
+    engine.chmod(0o755)
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    payload = {"version": "fkst.ops.invocation.v1", "contract": "fkst.ops.board.engine-durable.v1", "input": {
+        "engine_binary": str(engine), "durable_root": str(durable), "cache": str(tmp_path / "cache.json"),
+        "refresh": True, "ttl_seconds": 60, "stall_seconds": 1800,
+    }}
+    body = json.loads(invoke(payload).stdout)
+    rendered = [row["fields"]["text"] for row in body["result"]["rows"]]
+    assert json.dumps(fact, sort_keys=True, separators=(",", ":")) in rendered
+    assert all("explicit-revert-pr" not in line for line in rendered)
