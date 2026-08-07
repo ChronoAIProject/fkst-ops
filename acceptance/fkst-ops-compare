@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Bounded five-action equivalence gate for an fkst-ops cutover."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+
+VERSION = "fkst.ops.compare.v1"
+REQUIRED_CELLS = {
+    "board": {"both-healthy", "engine-durable-failed", "github-control-failed", "both-failed"},
+    "status": {"stopped", "running"},
+    "logs": {"default-n", "explicit-n", "multiple-candidate-logs"},
+    "restart": {"success", "failure-with-rollback"},
+    "sync": {"current", "stale-package", "stale-engine", "dirty-worktree", "diverged-branch"},
+}
+RESOURCE_NAMES = ("source", "runtime", "durable", "logs", "cache", "process")
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+TIMESTAMP_RE = re.compile(
+    r"\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-6]\d(?:\.\d+)?Z?|\d{10}(?:\.\d+)?)\b"
+)
+PID_RE = re.compile(r"(?i)\b(pid|ppid|pgid|sid)(\s*[=:]?\s*)\d+\b")
+
+
+class SetupError(Exception):
+    """Fixture or comparator setup is invalid."""
+
+
+def tree_identifier(root: Path) -> str:
+    digest = hashlib.sha256()
+    if not root.exists():
+        return "missing"
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode())
+        if path.is_symlink():
+            digest.update(b"L" + os.readlink(path).encode())
+        elif path.is_file():
+            digest.update(b"F" + path.read_bytes())
+        elif path.is_dir():
+            digest.update(b"D")
+    return digest.hexdigest()
+
+
+def git_identifier(root: Path) -> dict[str, str]:
+    if not (root / ".git").exists():
+        return {"tree": tree_identifier(root), "head": "not-a-git-checkout", "status": ""}
+    values: dict[str, str] = {"tree": tree_identifier(root)}
+    for key, args in (("head", ["rev-parse", "HEAD"]), ("status", ["status", "--porcelain=v1"])):
+        result = subprocess.run(
+            ["git", "-C", str(root), *args], text=True, capture_output=True, check=False, timeout=5
+        )
+        if result.returncode != 0:
+            raise SetupError(f"cannot inspect fixture git {key}: {result.stderr.strip()}")
+        values[key] = result.stdout.strip()
+    return values
+
+
+def process_identifier(root: Path) -> dict[str, Any]:
+    return {"namespace": root.name, "state": tree_identifier(root)}
+
+
+def normalize(value: str, roots: list[Path]) -> str:
+    value = ANSI_RE.sub("", value)
+    for root in sorted((str(path.resolve()) for path in roots), key=len, reverse=True):
+        value = value.replace(root, "<ROOT>")
+    value = TIMESTAMP_RE.sub("<TIMESTAMP>", value)
+    value = PID_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}<PID>", value)
+    return value
+
+
+def load_manifest(path: Path) -> dict[str, Any]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SetupError(f"cannot read fixture manifest: {error}") from error
+    if manifest.get("version") != VERSION or not isinstance(manifest.get("cells"), list):
+        raise SetupError(f"manifest must be {VERSION} with a cells array")
+    return manifest
+
+
+def validate_matrix(cells: list[dict[str, Any]]) -> list[str]:
+    present: dict[str, set[str]] = {action: set() for action in REQUIRED_CELLS}
+    duplicates: list[str] = []
+    for cell in cells:
+        action, fixture_id = cell.get("action"), cell.get("fixture_id")
+        if action not in REQUIRED_CELLS or fixture_id not in REQUIRED_CELLS[action]:
+            raise SetupError(f"unknown matrix cell {action!r}/{fixture_id!r}")
+        if fixture_id in present[action]:
+            duplicates.append(f"{action}/{fixture_id}")
+        present[action].add(fixture_id)
+    if duplicates:
+        raise SetupError("duplicate matrix cells: " + ", ".join(sorted(duplicates)))
+    return [
+        f"{action}/{fixture_id}"
+        for action, required in REQUIRED_CELLS.items()
+        for fixture_id in sorted(required - present[action])
+    ]
+
+
+def seed_side(seed: Path, destination: Path, side: str) -> dict[str, Path]:
+    if not seed.is_dir():
+        raise SetupError(f"seed root is not a directory: {seed}")
+    resources: dict[str, Path] = {}
+    destination.mkdir(parents=True)
+    for name in RESOURCE_NAMES:
+        source = seed / name
+        if not source.is_dir():
+            raise SetupError(f"seed lacks required isolation resource: {name}")
+        target = destination / name
+        shutil.copytree(source, target, symlinks=True)
+        marker = target / ".fkst-ops-isolation.json"
+        marker.write_text(json.dumps({"resource": name}) + "\n", encoding="utf-8")
+        resources[name] = target.resolve()
+    resolved = list(resources.values())
+    if len(set(resolved)) != len(RESOURCE_NAMES) or any(seed.resolve() in path.parents for path in resolved):
+        raise SetupError("resources are not independently seeded")
+    return resources
+
+
+def command_for(cell: dict[str, Any], side: str) -> list[str]:
+    entry = cell.get(f"{side}_entry")
+    argv = cell.get("argv", [])
+    if not isinstance(entry, list) or not entry or not all(isinstance(item, str) for item in entry):
+        raise SetupError(f"{side}_entry must be a non-empty string array")
+    if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+        raise SetupError("argv must be a string array")
+    return [*entry, cell["action"], *argv]
+
+
+def observe(cell: dict[str, Any], side: str, resources: dict[str, Path], timeout: float) -> dict[str, Any]:
+    command = command_for(cell, side)
+    roots = list(resources.values())
+    before = {
+        "git": git_identifier(resources["source"]),
+        "runtime": tree_identifier(resources["runtime"]),
+        "durable": tree_identifier(resources["durable"]),
+        "process": process_identifier(resources["process"]),
+    }
+    env = os.environ.copy()
+    env.update({
+        "FKST_OPS_FIXTURE_MODE": "1",
+        "FKST_OPS_NETWORK_DISABLED": "1",
+        "FKST_OPS_COMPARE_SIDE": side,
+        "FKST_OPS_SOURCE_CHECKOUT": str(resources["source"]),
+        "FKST_RUNTIME_ROOT": str(resources["runtime"]),
+        "FKST_DURABLE_ROOT": str(resources["durable"]),
+        "FKST_LOG_DIR": str(resources["logs"]),
+        "FKST_CACHE_ROOT": str(resources["cache"]),
+        "FKST_PROCESS_NAMESPACE": str(resources["process"]),
+    })
+    try:
+        result = subprocess.run(
+            command, cwd=resources["source"], env=env, text=True, capture_output=True,
+            check=False, timeout=timeout, start_new_session=True,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise SetupError(f"{cell['action']}/{cell['fixture_id']} {side} timed out") from error
+    after = {
+        "git": git_identifier(resources["source"]),
+        "runtime": tree_identifier(resources["runtime"]),
+        "durable": tree_identifier(resources["durable"]),
+        "process": process_identifier(resources["process"]),
+    }
+    return {
+        "fixture_id": cell["fixture_id"], "action": cell["action"], "argv": command,
+        "provider_fixture_ids": cell.get("provider_fixture_ids", []),
+        "seed_refs": {name: tree_identifier(path) for name, path in resources.items()},
+        "exit_code": result.returncode,
+        "stdout_normalized": normalize(result.stdout, roots),
+        "stderr_normalized": normalize(result.stderr, roots),
+        "git_before": before["git"], "git_after": after["git"],
+        "runtime_before": before["runtime"], "runtime_after": after["runtime"],
+        "durable_before": before["durable"], "durable_after": after["durable"],
+        "process_state_before": before["process"], "process_state_after": after["process"],
+    }
+
+
+def comparable(record: dict[str, Any]) -> dict[str, Any]:
+    ignored = {"argv", "seed_refs"}
+    result = {key: value for key, value in record.items() if key not in ignored}
+    for key in ("process_state_before", "process_state_after"):
+        result[key] = {"state": record[key]["state"]}
+    return result
+
+
+def verify_cross_side_isolation(old: dict[str, Path], new: dict[str, Path]) -> None:
+    old_paths, new_paths = set(old.values()), set(new.values())
+    if old_paths & new_paths:
+        raise SetupError("old and new sides share an isolation resource")
+    for left in old_paths:
+        for right in new_paths:
+            if left in right.parents or right in left.parents:
+                raise SetupError("one side can contain the other side's resources")
+    for side, resources in (("old", old), ("new", new)):
+        for name, root in resources.items():
+            marker = json.loads((root / ".fkst-ops-isolation.json").read_text(encoding="utf-8"))
+            if marker != {"resource": name} or root.parent.name != side:
+                raise SetupError("per-side isolation marker mismatch")
+
+
+def run(manifest_path: Path, output_path: Path, timeout_override: float | None) -> int:
+    manifest = load_manifest(manifest_path)
+    missing = validate_matrix(manifest["cells"])
+    report: dict[str, Any] = {"version": VERSION, "passed": False, "missing_cells": missing, "cells": []}
+    if missing:
+        output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return 1
+    seed = (manifest_path.parent / manifest.get("seed_root", "seed")).resolve()
+    timeout = timeout_override if timeout_override is not None else float(manifest.get("timeout_seconds", 30))
+    if timeout <= 0:
+        raise SetupError("timeout must be positive")
+    all_passed = True
+    with tempfile.TemporaryDirectory(prefix="fkst-ops-compare-") as temporary:
+        work = Path(temporary)
+        for index, cell in enumerate(manifest["cells"]):
+            cell_root = work / f"{index:02d}-{cell['action']}-{cell['fixture_id']}"
+            old_resources = seed_side(seed, cell_root / "old", "old")
+            new_resources = seed_side(seed, cell_root / "new", "new")
+            verify_cross_side_isolation(old_resources, new_resources)
+            old_record = observe(cell, "old", old_resources, timeout)
+            new_record = observe(cell, "new", new_resources, timeout)
+            passed = comparable(old_record) == comparable(new_record)
+            all_passed &= passed
+            report["cells"].append({"passed": passed, "old": old_record, "new": new_record})
+    report["passed"] = all_passed
+    output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return 0 if all_passed else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fixture", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--timeout", type=float)
+    args = parser.parse_args()
+    try:
+        return run(args.fixture.resolve(), args.output.resolve(), args.timeout)
+    except SetupError as error:
+        print(f"fkst-ops-compare: setup error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,78 @@
+schema = "fkst.ops.deployment.v1"
+
+[[deployment]]
+id = "packages"
+target_identity = "ChronoAIProject/fkst-packages"
+
+[deployment.github_devloop_profile]
+version = "1"
+id = "packages-dogfood"
+producer_binding = "packages-github-control"
+data = { rate_pool = "packages-rate-pool", bot_login = "packages-bot-login", managed_bot_set = "packages-managed-bots" }
+
+[deployment.sources.target]
+lock_ref = "fkst-packages"
+[deployment.sources.platform]
+lock_ref = "fkst-packages"
+[deployment.sources.engine]
+lock_ref = "fkst-substrate"
+
+[deployment.packages]
+platform = [
+  "github-devloop",
+  "github-devloop-pr",
+  "github-devloop-integration",
+  "github-devloop-intake",
+  "github-devloop-workflow",
+  "github-devloop-decompose",
+  "github-devloop-ops",
+  "github-proxy",
+  "github-external-pr-intake",
+  "github-ratchet-migration-slicer",
+  "fkst-substrate-ref-maintainer",
+  "integration-coverage-producer",
+  "idle-detector",
+  "git-branch-detector",
+  "github-devloop-worktree-gc",
+]
+host = []
+
+[deployment.integration]
+upstream_branch = "dev"
+integration_branch = "machine:packages-integration-branch"
+rollup_merge = "auto"
+
+[deployment.machine]
+target_checkout = "packages-target-checkout"
+platform_checkout = "packages-platform-checkout"
+engine_checkout = "packages-engine-checkout"
+engine_binary = "packages-engine-binary"
+durable = "packages-durable"
+runtime = "packages-runtime"
+logs = "packages-logs"
+rate_pool = "packages-rate-pool"
+bot_login = "packages-bot-login"
+managed_bot_set = "packages-managed-bots"
+
+[deployment.providers]
+engine = "packages-engine"
+board_engine_durable = "packages-engine-durable"
+board_github_control = "packages-github-control"
+
+[[provider]]
+id = "packages-engine"
+kind = "engine"
+implementation = "fkst-substrate:scripts/run.sh"
+contract = "fkst.ops.engine.v1"
+
+[[provider]]
+id = "packages-engine-durable"
+kind = "board.engine-durable"
+implementation = "fkst-packages:scripts/run.sh"
+contract = "fkst.ops.board.engine-durable.v1"
+
+[[provider]]
+id = "packages-github-control"
+kind = "board.github-control"
+implementation = "fkst-packages:scripts/run.sh"
+contract = "fkst.ops.board.github-control.v1"

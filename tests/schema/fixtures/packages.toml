@@ -1,0 +1,59 @@
+schema = "fkst.ops.deployment.v1"
+
+[[deployment]]
+id = "packages"
+target_identity = "ChronoAIProject/fkst-packages"
+
+[deployment.github_devloop_profile]
+version = "1"
+id = "github-devloop-default"
+data = { rollup_label = "rollup" }
+producer_binding = "github-board"
+
+[deployment.sources.target]
+lock_ref = "target-source"
+[deployment.sources.platform]
+lock_ref = "target-source"
+[deployment.sources.engine]
+lock_ref = "engine-source"
+
+[deployment.packages]
+platform = ["github-devloop", "github-devloop-pr", "github-devloop-integration"]
+
+[deployment.integration]
+upstream_branch = "dev"
+integration_branch = "machine:integration-branch"
+rollup_merge = "enabled"
+
+[deployment.machine]
+target_checkout = "packages-host"
+platform_checkout = "packages-host"
+engine_checkout = "engine-source"
+engine_binary = "engine"
+durable = "packages-durable"
+runtime = "packages-runtime"
+logs = "packages-logs"
+rate_pool = "shared-rate-pool"
+bot_login = "github-bot"
+managed_bot_set = "managed-bots"
+
+[deployment.providers]
+engine = "engine"
+board_engine_durable = "engine-board"
+board_github_control = "github-board"
+
+[[provider]]
+id = "engine"
+kind = "engine"
+implementation = "engine-source:bin/build-provider"
+contract = "fkst.ops.engine.v1"
+[[provider]]
+id = "engine-board"
+kind = "board.engine-durable"
+implementation = "target-source:providers/engine-board"
+contract = "fkst.ops.board.engine-durable.v1"
+[[provider]]
+id = "github-board"
+kind = "board.github-control"
+implementation = "target-source:providers/github-board"
+contract = "fkst.ops.board.github-control.v1"

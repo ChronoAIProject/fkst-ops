@@ -1,0 +1,31 @@
+schema = "fkst.ops.machine-profile.v1"
+
+[roots]
+packages-host = "/srv/dogfood/pkgs-dogfood"
+substrate-host = "/srv/dogfood/substrate-dogfood/sub"
+substrate-platform = "/srv/dogfood/substrate-dogfood/pkgs"
+website-host = "/srv/dogfood/website-dogfood/site"
+website-platform = "/srv/dogfood/website-dogfood/pkgs"
+engine-source = "/srv/src/engine"
+packages-durable = "/srv/durable/packages"
+substrate-durable = "/srv/durable/substrate"
+website-durable = "/srv/durable/website"
+packages-runtime = "/run/fkst/packages"
+substrate-runtime = "/run/fkst/substrate"
+website-runtime = "/run/fkst/website"
+packages-logs = "/var/log/fkst/packages"
+substrate-logs = "/var/log/fkst/substrate"
+website-logs = "/var/log/fkst/website"
+shared-rate-pool = "/var/lib/fkst/rates"
+
+[binaries]
+engine = "/srv/bin/fkst-framework"
+
+[credentials]
+github-bot = "fkst-bot"
+
+[sets]
+managed-bots = ["fkst-bot", "fkst-review-bot"]
+
+[defaults]
+integration-branch = "integration"

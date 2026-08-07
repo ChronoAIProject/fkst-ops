@@ -1,0 +1,23 @@
+[[external_source]]
+id = "fkst-ops"
+git = "https://github.com/ChronoAIProject/fkst-ops.git"
+intent = "Pinned generic operator mechanism. Replace placeholder pins during installation."
+[external_source.resolved]
+rev = "0000000000000000000000000000000000000000"
+tree_sha256 = "sha256-0000000000000000000000000000000000000000000000000000000000000000"
+
+[[external_source]]
+id = "fkst-packages"
+git = "https://github.com/ChronoAIProject/fkst-packages.git"
+intent = "Packages deployment target and platform source."
+[external_source.resolved]
+rev = "9070fc3aa498cde141112175eafb690a214f2384"
+tree_sha256 = "sha256-37ec55f6a76a79ada249a93677443a66703578ee8489b0d851b52beab8c2bbb8"
+
+[[external_source]]
+id = "fkst-substrate"
+git = "https://github.com/ChronoAIProject/fkst-substrate.git"
+intent = "Packages deployment engine source."
+[external_source.resolved]
+rev = "a8029a9ad316ed43b414824aeadac49e14292c80"
+tree_sha256 = "sha256-3d486346bc3d59f320549e75d0cfc76f8808ab71f375ec9765aee941a7684e9b"

@@ -1,0 +1,1 @@
+run_self_test_with_optional_lua_coverage | host/host_entry.sh | fkst-packages/scripts/run.sh | duplicated because fkst-packages CI must not change (constraint C4/S3) | engine self-test invocation belongs to the engine's own contract; remove this entry when fkst-substrate exposes it or when fkst-packages becomes a deployment of fkst-ops

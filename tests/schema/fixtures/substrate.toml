@@ -1,0 +1,48 @@
+schema = "fkst.ops.deployment.v1"
+
+[[deployment]]
+id = "substrate"
+target_identity = "ChronoAIProject/fkst-substrate"
+[deployment.sources.target]
+lock_ref = "target-source"
+[deployment.sources.platform]
+lock_ref = "platform-source"
+[deployment.sources.engine]
+lock_ref = "engine-source"
+[deployment.packages]
+platform = ["github-devloop", "github-devloop-pr", "github-devloop-integration"]
+[deployment.integration]
+upstream_branch = "dev"
+integration_branch = "integration"
+rollup_merge = "enabled"
+[deployment.machine]
+target_checkout = "substrate-host"
+platform_checkout = "substrate-platform"
+engine_checkout = "engine-source"
+engine_binary = "engine"
+durable = "substrate-durable"
+runtime = "substrate-runtime"
+logs = "substrate-logs"
+rate_pool = "shared-rate-pool"
+bot_login = "github-bot"
+managed_bot_set = "managed-bots"
+[deployment.providers]
+engine = "engine"
+board_engine_durable = "engine-board"
+board_github_control = "github-board"
+
+[[provider]]
+id = "engine"
+kind = "engine"
+implementation = "engine-source:bin/build-provider"
+contract = "fkst.ops.engine.v1"
+[[provider]]
+id = "engine-board"
+kind = "board.engine-durable"
+implementation = "platform-source:providers/engine-board"
+contract = "fkst.ops.board.engine-durable.v1"
+[[provider]]
+id = "github-board"
+kind = "board.github-control"
+implementation = "platform-source:providers/github-board"
+contract = "fkst.ops.board.github-control.v1"

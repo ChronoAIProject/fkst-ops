@@ -1,0 +1,20 @@
+[[external_source]]
+id = "target-source"
+git = "https://invalid.example/target.git"
+[external_source.resolved]
+rev = "1111111111111111111111111111111111111111"
+tree_sha256 = "sha256-1111111111111111111111111111111111111111111111111111111111111111"
+
+[[external_source]]
+id = "platform-source"
+git = "https://invalid.example/platform.git"
+[external_source.resolved]
+rev = "2222222222222222222222222222222222222222"
+tree_sha256 = "sha256-2222222222222222222222222222222222222222222222222222222222222222"
+
+[[external_source]]
+id = "engine-source"
+git = "https://invalid.example/engine.git"
+[external_source.resolved]
+rev = "3333333333333333333333333333333333333333"
+tree_sha256 = "sha256-3333333333333333333333333333333333333333333333333333333333333333"

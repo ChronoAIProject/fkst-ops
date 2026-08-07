@@ -1,0 +1,14 @@
+# Board provider ports
+
+The executables in this directory implement the two direct board ports defined
+by `fkst.ops.invocation.v1`. They read one JSON document from standard input and
+write one JSON document to standard output.
+
+`board_github_control.sh` retains the GitHub classifier and resolves its
+package-owned workflow and lifecycle fact tools through
+`input.platform_checkout`.
+
+`board_engine_durable.py` retains the engine observation, cache, health,
+anomaly, and durable rendering behavior. AVM scoring rows are producer-owned;
+the provider renders producer-supplied `avm_scoreboard` rows and owns only the
+revert/reopen evidence analysis that is absent from the package producer.
