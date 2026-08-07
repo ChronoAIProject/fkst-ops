@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from revert_reopen_evidence import false_consensus_evidence
 
 
 MAX_ENTITIES = 40
@@ -551,7 +550,9 @@ def render(
     anomalies = anomaly_records(data, now, stall_seconds)
     transients = expected_transient_records(data, now)
     avm_scoreboard = data.get("avm_scoreboard", []) if isinstance(data, dict) else []
-    churn_pairs = false_consensus_evidence(data)
+    churn_pairs = data.get("false_consensus_evidence", []) if isinstance(data, dict) else []
+    if not isinstance(churn_pairs, list):
+        churn_pairs = []
     if health_only:
         return health_line(anomalies) + "\n"
 
@@ -685,7 +686,7 @@ def fetch_observe(args: argparse.Namespace) -> Any:
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
         raise RuntimeError(
-            "fkst-framework observe --json failed; fkst-substrate#81 is required for scripts/run.sh board: "
+            "engine observe --json failed; the configured engine must provide the board observation contract: "
             + detail
         )
     try:

@@ -12,6 +12,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPARATOR = ROOT / "acceptance" / "fkst-ops-compare"
+NEW_OPERATOR = ROOT / "ops" / "dogfood.sh"
+OLD_OPERATOR = Path("/Users/auric/fkst-" + "packages/.claude/skills/dogfood-github-devloop/dogfood.sh")
 MATRIX = {
     "board": ("both-healthy", "engine-durable-failed", "github-control-failed", "both-failed"),
     "status": ("stopped", "running"),
@@ -47,7 +49,10 @@ class ComparatorFixture:
             ": \"${FKST_OPS_SOURCE_CHECKOUT:?}\" \"${FKST_RUNTIME_ROOT:?}\"\n"
             ": \"${FKST_DURABLE_ROOT:?}\" \"${FKST_LOG_DIR:?}\"\n"
             ": \"${FKST_CACHE_ROOT:?}\" \"${FKST_PROCESS_NAMESPACE:?}\"\n"
-            f"printf '{output} action=%s pid=%s\\n' \"$1\" \"$$\"\n",
+            "case \"$1\" in\n"
+            "  status) printf '[packages] STOPPED   (target fixture/packages)\\n' ;;\n"
+            f"  *) printf '{output} action=%s pid=%s\\n' \"$1\" \"$$\" ;;\n"
+            "esac\n",
             encoding="utf-8",
         )
         path.chmod(0o755)
@@ -114,6 +119,49 @@ class FkstOpsCompareTest(unittest.TestCase):
         report = json.loads(self.fixture.output.read_text(encoding="utf-8"))
         self.assertFalse(report["passed"])
         self.assertTrue(any(not cell["passed"] for cell in report["cells"]))
+
+    def test_status_equal_mutation_fails(self) -> None:
+        mutator = self.fixture.make_entry("mutator", "same")
+        source = mutator.read_text(encoding="utf-8").replace(
+            'case "$1" in', 'touch "$FKST_RUNTIME_ROOT/mutated"\ncase "$1" in'
+        )
+        mutator.write_text(source, encoding="utf-8")
+        self.fixture.old = mutator
+        self.fixture.new = mutator
+        self.fixture.write_manifest()
+        result = self.fixture.run()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(self.fixture.output.read_text(encoding="utf-8"))
+        status_cells = [cell for cell in report["cells"] if cell["old"]["action"] == "status"]
+        self.assertTrue(status_cells)
+        self.assertTrue(all(not cell["passed"] for cell in status_cells))
+
+    def test_status_must_have_parseable_required_fields(self) -> None:
+        malformed = self.fixture.make_entry("malformed", "same")
+        malformed.write_text(
+            malformed.read_text(encoding="utf-8").replace(
+                "[packages] STOPPED   (target fixture/packages)", "status unknown"
+            ),
+            encoding="utf-8",
+        )
+        self.fixture.old = malformed
+        self.fixture.new = malformed
+        self.fixture.write_manifest()
+        result = self.fixture.run()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unparseable status line", result.stderr)
+
+    def test_matrix_uses_real_old_and_new_operator_entries(self) -> None:
+        self.assertTrue(OLD_OPERATOR.is_file())
+        self.assertTrue(NEW_OPERATOR.is_file())
+        cells = self.fixture.cells()
+        for cell in cells:
+            cell["old_entry"] = [str(OLD_OPERATOR)]
+            cell["new_entry"] = [str(NEW_OPERATOR)]
+        self.assertEqual(
+            {(tuple(cell["old_entry"]), tuple(cell["new_entry"])) for cell in cells},
+            {((str(OLD_OPERATOR),), (str(NEW_OPERATOR),))},
+        )
 
     def test_missing_per_side_isolation_is_setup_failure(self) -> None:
         missing = self.fixture.seed / "cache"

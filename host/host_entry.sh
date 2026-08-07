@@ -3,6 +3,7 @@
 
 HOST_ENTRY_HOST_ROOT=""
 HOST_ENTRY_PLATFORM_ROOT=""
+HOST_ENTRY_PLATFORM_SOURCE_ID="${HOST_ENTRY_PLATFORM_SOURCE_ID:-platform}"
 HOST_ENTRY_LOCAL_PACKAGES=""
 HOST_ENTRY_PACKAGE_ROOTS=()
 HOST_ENTRY_HOST_PACKAGE_ROOTS=()
@@ -212,7 +213,7 @@ host_entry_add_package_root() {
 host_entry_resolve_root_line() {
   local line="$1" path
   case "$line" in
-    fkst-packages:*) path="$HOST_ENTRY_PLATFORM_ROOT/${line#fkst-packages:}" ;;
+    "$HOST_ENTRY_PLATFORM_SOURCE_ID":*) path="$HOST_ENTRY_PLATFORM_ROOT/${line#*:}" ;;
     /*) path="$line" ;;
     *) path="$HOST_ENTRY_HOST_ROOT/$line" ;;
   esac
@@ -644,7 +645,7 @@ host_entry_cmd_supervise() {
     host_names="$(host_entry_join_names "${HOST_ENTRY_HOST_PACKAGE_NAMES[@]}")"
   fi
   if [ -z "$platform_names" ]; then
-    echo "error: host supervise requires at least one fkst-packages:<path> package root in .fkst/compose/package-roots" >&2
+    echo "error: host supervise requires at least one platform-source:<path> package root in .fkst/compose/package-roots" >&2
     return 1
   fi
 

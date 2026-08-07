@@ -8,7 +8,7 @@ from typing import Final
 import sys
 
 
-_CACHE_PREFIX: Final = "fkst-substrate-bin"
+_CACHE_PREFIX: Final = "fkst-engine-bin"
 _CACHE_VERSION: Final = "v1"
 _BIN_RELATIVE_PATH: Final = ("target", "debug", "fkst-framework")
 _SAFE_BYTES: Final = frozenset(
@@ -40,7 +40,7 @@ def substrate_bin_cache_path(cache_root: str | Path, owner: str, repo: str, ref:
     """Return the deterministic per-source-pin fkst-framework binary path.
 
     Path shape:
-      <cache_root>/fkst-substrate-bin/v1/<owner>/<repo>/<ref>/target/debug/fkst-framework
+      <cache_root>/fkst-engine-bin/v1/<owner>/<repo>/<ref>/target/debug/fkst-framework
 
     The owner, repo, and ref path components are independently percent-encoded
     UTF-8 components. Component boundaries are therefore structural separators,

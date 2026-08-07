@@ -65,10 +65,15 @@ if dep is None:
 m=dep["machine"]
 profile=dep.get("github_devloop_profile", {})
 empty="__FKST_OPS_EMPTY__"
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"]," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["platform"]["lock_ref"],dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"]]
+roots={source["lock_ref"]:m[role+"_checkout"] for role,source in dep["sources"].items()}
+def provider(field):
+    binding=dep["providers"][field]
+    source,relative=binding["implementation"].split(":",1)
+    return [roots[source]+"/"+relative,binding["contract"]]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"]," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["platform"]["lock_ref"],dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE PLATFORM_SOURCE_ID TARGET_GIT_URL PLATFORM_GIT_URL <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE PLATFORM_SOURCE_ID TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
@@ -127,9 +132,7 @@ wait_supervise_ready() { # $1 pid, $2 log
 }
 expand() { [ "${1:-all}" = all ] && echo "$DOGFOOD_REPOS" || echo "$1"; }
 
-if [ -f "$_repo_root/board/dogfood_board.sh" ]; then
-  . "$_repo_root/board/dogfood_board.sh"
-fi
+invoke_provider() { python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }
 
 # Sync a dogfood RUN checkout (behavior PKGSRC + target HOST) to the machine's
 # INTEGRATION_BRANCH — the dogfood runs its own pre-rollup code (feature ->
@@ -225,49 +228,29 @@ ensure_integration_caught_up() { # $1 checkout dir
   fi
 }
 
-# Engine BIN freshness. Stale = substrate origin/dev ahead of the build checkout, OR any
-# crate .rs newer than the BIN binary. _bin_state echoes "behind newer head" (read-only,
-# fetches first) and is shared by the read-only report and the rebuild.
-_bin_state() {
-  git -C "$SUBSTRATE_SRC" fetch origin "$UPSTREAM_BRANCH" -q 2>/dev/null
-  local behind newer head
-  head=$(git -C "$SUBSTRATE_SRC" rev-parse --short HEAD 2>/dev/null)
-  behind=$(git -C "$SUBSTRATE_SRC" rev-list --count "HEAD..origin/$UPSTREAM_BRANCH" 2>/dev/null || echo 0)
-  newer=$(find "$SUBSTRATE_SRC/crates" -name '*.rs' -newer "$BIN" 2>/dev/null | wc -l | tr -d ' ')
-  echo "${behind:-0} ${newer:-0} ${head:-?}"
+engine_build_result() {
+  python3 -c 'import json,sys; print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build"}))' "$SUBSTRATE_SRC" "$BIN" "$UPSTREAM_BRANCH" \
+    | invoke_provider "$ENGINE_PROVIDER" "$ENGINE_CONTRACT" || return $?
 }
 
-# Read-only freshness report — used by `doctor`, which must NOT mutate. Rebuilding here would
-# make the BIN file current while the RUNNING supervise still executes the old engine, masking
-# the staleness behind a "fresh" line. So doctor only reports; `restart`/`bin` rebuild + reload.
-bin_freshness_report() {
-  git -C "$SUBSTRATE_SRC" rev-parse --git-dir >/dev/null 2>&1 || { echo "$SUBSTRATE_SRC not a substrate checkout"; return 0; }
-  local behind newer head; read -r behind newer head <<<"$(_bin_state)"
-  if [ -x "$BIN" ] && [ "$behind" = 0 ] && [ "$newer" = 0 ]; then
-    echo "fresh: substrate@$head (0 behind origin/$UPSTREAM_BRANCH, 0 newer .rs)"
-  else
-    echo "STALE: substrate@$head behind=$behind newer_rs=$newer → run 'dogfood.sh restart' (or 'bin') to rebuild + reload"
-  fi
-}
-
-# Rebuild the BIN from substrate origin/dev if stale — used by bin/sync (mutating).
 bin_ensure_fresh() {
-  git -C "$SUBSTRATE_SRC" rev-parse --git-dir >/dev/null 2>&1 \
-    || { echo "BIN: $SUBSTRATE_SRC not a substrate checkout — skipping freshness check"; return 0; }
-  local behind newer head; read -r behind newer head <<<"$(_bin_state)"
-  if [ -x "$BIN" ] && [ "$behind" = 0 ] && [ "$newer" = 0 ]; then
-    echo "BIN fresh: substrate@$head (0 behind origin/$UPSTREAM_BRANCH, 0 newer .rs)"
-    return 0
-  fi
-  echo "BIN STALE (behind=$behind newer_rs=$newer) — rebuild from origin/$UPSTREAM_BRANCH"
-  if [ -n "$(git -C "$SUBSTRATE_SRC" status --porcelain 2>/dev/null)" ]; then
-    echo "  ! $SUBSTRATE_SRC working tree dirty — building current HEAD without reset:"
-    git -C "$SUBSTRATE_SRC" status --short | head -5 | sed 's/^/    /'
-  else
-    git -C "$SUBSTRATE_SRC" reset --hard "origin/$UPSTREAM_BRANCH" 2>&1 | tail -1 | sed 's/^/  /'
-  fi
-  ( cd "$SUBSTRATE_SRC" && cargo build -p fkst-framework 2>&1 | tail -2 | sed 's/^/  /' )
-  echo "  built: substrate@$(git -C "$SUBSTRATE_SRC" rev-parse --short HEAD)"
+  local response
+  response=$(engine_build_result) || return $?
+  printf '%s\n' "$response" | python3 -c 'import json,sys; r=json.load(sys.stdin)["result"]; print("built: %s@%s" % (r["binary"],r["source_rev"][:8]))'
+}
+
+cmd_board() {
+  local target="${1:-all}" n failed=0 tmp github_input engine_input
+  for n in $(expand "$target"); do
+    cfg "$n" || { failed=1; continue; }
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/fkst-ops-board.XXXXXX") || return 1
+    github_input="$tmp/github.json"; engine_input="$tmp/engine.json"
+    python3 -c 'import json,sys; p=json.loads(sys.argv[3]); p["stale_hours"]=int(sys.argv[6] or 6); json.dump({"target_identity":sys.argv[1],"platform_checkout":sys.argv[2],"profile":p,"bot_login":sys.argv[4],"managed_bot_set":json.loads(sys.argv[5])},open(sys.argv[7],"w"))' "$REPO" "$PKGSRC" "$GITHUB_DEVLOOP_PROFILE" "$BOT" "$MANAGED_BOT_LOGINS" "${2:-}" "$github_input"
+    python3 -c 'import json,sys; json.dump({"engine_binary":sys.argv[1],"durable_root":sys.argv[2],"cache":sys.argv[3],"refresh":False,"ttl_seconds":300,"stall_seconds":900},open(sys.argv[4],"w"))' "$BIN" "$DUR" "$tmp/cache.json" "$engine_input"
+    python3 "$_repo_root/board/board.py" --github-provider "$GITHUB_BOARD_PROVIDER" --engine-provider "$ENGINE_BOARD_PROVIDER" --github-input "$github_input" --engine-input "$engine_input" || failed=1
+    rm -rf "$tmp"
+  done
+  return "$failed"
 }
 
 # Prune worktrees + scratch dirs from OLD runtime roots of this dogfood (implement/fix
@@ -482,17 +465,15 @@ status_one() {
 # worktree/BIN file (those can be updated without reloading the process — only a restart reloads).
 # Echoes: stopped | current | skew (dev moved, non-package files only) | pkg-stale | engine-stale.
 # PKG freshness is vs PKGSRC origin/$INTEGRATION_BRANCH (the run branch the dogfood loads);
-# ENGINE freshness is vs SUBSTRATE_SRC origin/$UPSTREAM_BRANCH (the BIN is built from dev).
-# Side effect: fetches origin/$INTEGRATION_BRANCH for $PKGSRC and origin/$UPSTREAM_BRANCH for $SUBSTRATE_SRC.
+# ENGINE freshness is the revision returned by the declared engine build provider.
 _proc_stale() {
   cfg "$1" || { echo unknown; return; }
   local p log procpkg proceng pdev sdev; p=$(pidof_df); log=$(latest_log "$1")
   [ -z "$p" ] && { echo stopped; return; }
   derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
   git -C "$PKGSRC" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null
-  git -C "$SUBSTRATE_SRC" fetch origin "$UPSTREAM_BRANCH" -q 2>/dev/null
   pdev=$(git -C "$PKGSRC" rev-parse "origin/$INTEGRATION_BRANCH" 2>/dev/null)
-  sdev=$(git -C "$SUBSTRATE_SRC" rev-parse "origin/$UPSTREAM_BRANCH" 2>/dev/null)
+  sdev=$(engine_build_result | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["source_rev"])') || { echo engine-provider-failed; return; }
   procpkg=$(grep -aoE "${DEVLOOP_PKGS%% *}@[a-f0-9]+" "$log" 2>/dev/null | tail -1 | cut -d@ -f2)   # any platform pkg's commit reflects the running code
   proceng=$(grep -aoE 'ENGINE_VER=[a-f0-9]+' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
   if [ -n "$proceng" ] && [ "${sdev:0:${#proceng}}" != "$proceng" ]; then echo engine-stale; return; fi
@@ -537,7 +518,6 @@ cmd_sync() {
   echo "operator checkouts -> origin/$UPSTREAM_BRANCH:"
   local co_failed=0
   _sync_checkout "$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null)" || co_failed=1  # repo this skill lives in
-  _sync_checkout "$SUBSTRATE_SRC" || co_failed=1                                                # engine BIN source
   echo "engine BIN:"; bin_ensure_fresh | sed 's/^/  /'
   echo "supervises (auto-restart only on real code change):"
   local n st failed=0
@@ -582,7 +562,7 @@ case "$cmd" in
   sync)    cmd_sync "$arg2" ;;
   status)  for n in $(expand "${arg2:-all}"); do status_one "$n"; done ;;
   config)  cmd_config ;;
-  board)   command -v cmd_board >/dev/null 2>&1 || { echo "board front-end unavailable" >&2; exit 1; }; cmd_board "$arg2" "$arg3" ;;
+  board)   cmd_board "$arg2" "$arg3" ;;
   logs)    target="${arg2:-${DOGFOOD_REPOS%% *}}"; cfg "$target" || exit 1; f=$(latest_log "$target"); echo "$f"; tail -"${arg3:-40}" "$f" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' ;;
   *) echo "usage: $0 {status|config|board|bin|start|stop|restart|sync|logs} [deployment-id|all] [stale_h|lines]"; exit 1 ;;
 esac

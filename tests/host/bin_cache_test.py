@@ -34,7 +34,7 @@ class SubstrateBinCachePathTest(unittest.TestCase):
 
         self.assertEqual(
             path.as_posix(),
-            "/var/cache/fkst/fkst-substrate-bin/v1/"
+            "/var/cache/fkst/fkst-engine-bin/v1/"
             "ChronoAIProject/fkst-packages/refs%2Fheads%2Fdev/"
             "target/debug/fkst-framework",
         )
@@ -61,7 +61,7 @@ class SubstrateBinCachePathTest(unittest.TestCase):
 
         self.assertEqual(
             path.as_posix(),
-            "/cache/fkst-substrate-bin/v1/%2E/%2E%2E/"
+            "/cache/fkst-engine-bin/v1/%2E/%2E%2E/"
             "feature%2Fa%20b%3Fc%23d%2520/target/debug/fkst-framework",
         )
 

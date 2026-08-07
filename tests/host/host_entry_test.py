@@ -140,7 +140,7 @@ class HostEntryTest(unittest.TestCase):
                 "\n".join(
                     [
                         ".fkst/local-packages/site-board",
-                        "fkst-packages:packages/idle-detector",
+                        "platform:packages/idle-detector",
                         "",
                     ]
                 ),
@@ -200,7 +200,7 @@ class HostEntryTest(unittest.TestCase):
         runtime = h.root / "runtime"
         try:
             (h.host / ".fkst" / "compose" / "package-roots").write_text(
-                ".fkst/local-packages/site-board\nfkst-packages:packages/github-proxy\n",
+                ".fkst/local-packages/site-board\nplatform:packages/github-proxy\n",
                 encoding="utf-8",
             )
             h.write_platform_workspace(["github-proxy"])
@@ -282,7 +282,7 @@ class HostEntryTest(unittest.TestCase):
         try:
             h.write_host_metadata()
             (h.host / ".fkst" / "compose" / "package-roots").write_text(
-                ".fkst/local-packages/site-board\nfkst-packages:packages/idle-detector\n",
+                ".fkst/local-packages/site-board\nplatform:packages/idle-detector\n",
                 encoding="utf-8",
             )
             result = h.run_helper(
@@ -421,7 +421,7 @@ class HostEntryTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (h.host / ".fkst" / "compose" / "package-roots").write_text(
-                ".fkst/local-packages/site-board\nfkst-packages:packages/idle-detector\n",
+                ".fkst/local-packages/site-board\nplatform:packages/idle-detector\n",
                 encoding="utf-8",
             )
             result = h.run_helper(
@@ -560,7 +560,7 @@ class HostEntryTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (h.host / ".fkst" / "compose" / "package-roots").write_text(
-                ".fkst/local-packages/site-board\nfkst-packages:packages/idle-detector\n",
+                ".fkst/local-packages/site-board\nplatform:packages/idle-detector\n",
                 encoding="utf-8",
             )
 

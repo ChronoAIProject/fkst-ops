@@ -30,6 +30,14 @@ TIMESTAMP_RE = re.compile(
     r"\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-6]\d(?:\.\d+)?Z?|\d{10}(?:\.\d+)?)\b"
 )
 PID_RE = re.compile(r"(?i)\b(pid|ppid|pgid|sid)(\s*[=:]?\s*)\d+\b")
+STATUS_STOPPED_RE = re.compile(
+    r"^\[(?P<deployment>[^]]+)] STOPPED\s+\(target (?P<target>[^)]+)\)$"
+)
+STATUS_RUNNING_RE = re.compile(
+    r"^\[(?P<deployment>[^]]+)] RUNNING pid (?:<PID>|\d+) up (?P<uptime>\S+) "
+    r"panic=(?P<panic>\d+) \| host@(?P<host_revision>\S*) "
+    r"pkgs@(?P<package_revision>\S*) \| (?P<readiness>.*)$"
+)
 
 
 class SetupError(Exception):
@@ -194,6 +202,49 @@ def comparable(record: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def parse_status(record: dict[str, Any]) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    lines = [line for line in record["stdout_normalized"].splitlines() if line.strip()]
+    if not lines:
+        raise SetupError(f"status/{record['fixture_id']} produced no status records")
+    for line in lines:
+        stopped = STATUS_STOPPED_RE.fullmatch(line)
+        if stopped:
+            parsed.append({**stopped.groupdict(), "state": "stopped"})
+            continue
+        running = STATUS_RUNNING_RE.fullmatch(line)
+        if running:
+            fields = running.groupdict()
+            parsed.append({
+                "deployment": fields["deployment"], "target": fields.get("target"),
+                "state": "running", "panic": int(fields["panic"]),
+                "host_revision": fields["host_revision"],
+                "package_revision": fields["package_revision"],
+                "uptime_present": bool(fields["uptime"]), "readiness": fields["readiness"],
+            })
+            continue
+        raise SetupError(
+            f"status/{record['fixture_id']} has an unparseable status line: {line!r}"
+        )
+    return parsed
+
+
+def status_is_non_mutating(record: dict[str, Any]) -> bool:
+    return all(
+        record[f"{name}_before"] == record[f"{name}_after"]
+        for name in ("git", "runtime", "durable", "process_state")
+    )
+
+
+def records_equivalent(action: str, old: dict[str, Any], new: dict[str, Any]) -> bool:
+    if action != "status":
+        return comparable(old) == comparable(new)
+    if not status_is_non_mutating(old) or not status_is_non_mutating(new):
+        return False
+    old_parsed, new_parsed = parse_status(old), parse_status(new)
+    return old_parsed == new_parsed and comparable(old) == comparable(new)
+
+
 def verify_cross_side_isolation(old: dict[str, Path], new: dict[str, Path]) -> None:
     old_paths, new_paths = set(old.values()), set(new.values())
     if old_paths & new_paths:
@@ -230,7 +281,7 @@ def run(manifest_path: Path, output_path: Path, timeout_override: float | None) 
             verify_cross_side_isolation(old_resources, new_resources)
             old_record = observe(cell, "old", old_resources, timeout)
             new_record = observe(cell, "new", new_resources, timeout)
-            passed = comparable(old_record) == comparable(new_record)
+            passed = records_equivalent(cell["action"], old_record, new_record)
             all_passed &= passed
             report["cells"].append({"passed": passed, "old": old_record, "new": new_record})
     report["passed"] = all_passed

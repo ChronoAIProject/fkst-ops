@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 SOURCE = Path(__file__).resolve().parents[2] / "bootstrap"
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def run(*args: str, cwd: Path, check: bool = True, env: dict[str, str] | None = None):
@@ -23,8 +24,11 @@ class BootstrapTest(unittest.TestCase):
         self.deployment = self.root / "deployment"
         self.source.mkdir()
         (self.source / "bin").mkdir()
+        (self.source / "ops").mkdir()
+        (self.source / "schema").mkdir()
         shutil.copytree(SOURCE, self.deployment / "bootstrap")
-        runner = self.source / "bin" / "fkst-ops"
+        shutil.copy2(ROOT / "bin" / "fkst-ops", self.source / "bin" / "fkst-ops")
+        runner = self.source / "ops" / "dogfood.sh"
         runner.write_text(
             "#!/usr/bin/env bash\n"
             "printf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n"
@@ -32,6 +36,12 @@ class BootstrapTest(unittest.TestCase):
             encoding="utf-8",
         )
         runner.chmod(runner.stat().st_mode | stat.S_IXUSR)
+        (self.source / "schema" / "__init__.py").write_text("", encoding="utf-8")
+        (self.source / "schema" / "validator.py").write_text(
+            "import json, os\n"
+            "if os.environ.get('FAKE_EXIT') not in (None, '0'): raise SystemExit(int(os.environ['FAKE_EXIT']))\n"
+            "print(json.dumps({'deployment': []}))\n", encoding="utf-8"
+        )
         run("git", "init", "-q", cwd=self.source)
         run("git", "config", "user.email", "test@example.invalid", cwd=self.source)
         run("git", "config", "user.name", "Test", cwd=self.source)
@@ -61,7 +71,7 @@ class BootstrapTest(unittest.TestCase):
         env.update(overrides)
         return run(
             "bash", str(self.deployment / "bootstrap" / "run.sh"), "deployment.toml",
-            "--machine-config", "machine.toml", cwd=self.deployment, check=False, env=env,
+            "--machine-config", "machine.toml", "status", cwd=self.deployment, check=False, env=env,
         )
 
     def test_fresh_then_cached_checkout_is_verified_and_delegated(self):
@@ -74,8 +84,8 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(0, second.returncode, second.stderr)
         self.assertEqual(first_target, pointer.resolve())
         calls = self.log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(4, len(calls))
-        self.assertTrue(all("deployment.toml" in call and "machine.toml" in call for call in calls))
+        self.assertEqual(2, len(calls))
+        self.assertTrue(all(call == "status" for call in calls))
 
     def test_cached_resolved_revision_mismatch_fails_before_delegation(self):
         self.assertEqual(0, self.invoke().returncode)

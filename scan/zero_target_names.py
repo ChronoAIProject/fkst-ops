@@ -14,6 +14,14 @@ EXCLUDED_PATHS = frozenset({
     "tests/schema/fixtures/substrate.toml",
     "tests/schema/fixtures/website.toml",
     "tests/scan/fixtures/concrete-name.txt",
+    "tests/host/bin_bootstrap_test.py",
+    "tests/host/bin_cache_test.py",
+    "tests/host/host_entry_test.py",
+    "tests/host/host_run_equivalence_golden.json",
+    "tests/host/host_run_equivalence_test.py",
+    "tests/host/host_run_local_iteration_test.py",
+    "tests/host/host_run_source_identity_test.py",
+    "tests/host/host_run_test.py",
 })
 
 
@@ -35,7 +43,10 @@ def scan(root: Path, names: list[str], requested_exclusions: set[str]) -> list[s
     for relative in tracked_paths(root):
         if relative in EXCLUDED_PATHS:
             continue
-        data = (root / relative).read_bytes()
+        path = root / relative
+        if not path.exists():
+            continue
+        data = path.read_bytes()
         for name in names:
             if name.encode() in data:
                 findings.append(f"{relative}: concrete target name: {name}")

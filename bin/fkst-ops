@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+usage() {
+  echo "usage: fkst-ops [preflight] --declaration PATH --machine-config PATH [--lock PATH] [board|status|logs|restart|sync] [args...]" >&2
+}
+
+preflight=0
+[ "${1:-}" = preflight ] && { preflight=1; shift; }
+declaration="" machine="" lock=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --declaration) [ "$#" -ge 2 ] || { usage; exit 2; }; declaration="$2"; shift 2 ;;
+    --machine-config|--machine-profile) [ "$#" -ge 2 ] || { usage; exit 2; }; machine="$2"; shift 2 ;;
+    --lock) [ "$#" -ge 2 ] || { usage; exit 2; }; lock="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+[ -n "$declaration" ] && [ -n "$machine" ] || { usage; exit 2; }
+deployment_root="$(cd "$(dirname "$declaration")" && pwd)"
+[ -n "$lock" ] || lock="${FKST_OPS_LOCK_FILE:-$deployment_root/fkst.lock}"
+
+export FKST_OPS_DECLARATION="$declaration"
+export FKST_OPS_MACHINE_PROFILE="$machine"
+export FKST_OPS_LOCK="$lock"
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m schema.validator "$declaration" "$machine" "$lock" >/dev/null
+[ "$preflight" -eq 0 ] || exit 0
+
+action="${1:-status}"
+shift || true
+case "$action" in
+  board|status|logs|restart|sync) exec "$ROOT/ops/dogfood.sh" "$action" "$@" ;;
+  doctor) exec "$ROOT/doctor/doctor.sh" "$@" ;;
+  *) usage; exit 2 ;;
+esac
