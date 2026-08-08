@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden-master test for dogfood launch delegation."""
+"""Golden-master test for deployment operator launch delegation."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from host_run_test_support import run_bounded
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEPLOYMENT_OPERATOR_FIXTURE_ROOT = REPO_ROOT / "ops"
 HOST_FIXTURE_ROOT_ENV = "FKST_HOST_FIXTURE_ROOT"
 HOST_FIXTURE_ROOT = Path(value) if (value := os.environ.get(HOST_FIXTURE_ROOT_ENV)) else None
 REQUIRES_HOST_FIXTURE = unittest.skipUnless(
@@ -61,7 +62,7 @@ def self_workspace_platform_packages() -> str:
             if isinstance(name, str) and name:
                 packages.append(name)
     if not packages:
-        raise AssertionError("fkst.workspace.toml must declare self-host dogfood platform packages")
+        raise AssertionError("fkst.workspace.toml must declare self-host deployment operator platform packages")
     return " ".join(packages)
 
 
@@ -165,22 +166,22 @@ def git_stdout(args: list[str], cwd: Path, env: dict[str, str]) -> str:
     return result.stdout.strip()
 
 
-class DogfoodLayout:
+class DeploymentOperatorLayout:
     def __init__(
         self,
         root: Path,
-        dogfood_script: str,
+        deployment_operator_script: str,
         *,
         stale_website_manifest: bool = False,
     ) -> None:
         self.root = root
-        self.dogfood_root = root / "dogfood"
+        self.deployment_operator_root = root / "deployment-operator"
         self.skill_dir = root / "skill"
         self.bin_dir = root / "bin"
         self.capture = root / "capture.json"
         self.fake_bin = root / "fake-fkst-framework"
         self.substrate_src = root / "substrate-src"
-        self.script = self.skill_dir / "dogfood.sh"
+        self.script = self.skill_dir / "deployment_operator.sh"
 
         self.skill_dir.mkdir(parents=True)
         self.bin_dir.mkdir()
@@ -188,9 +189,9 @@ class DogfoodLayout:
         (self.substrate_src / "crates").mkdir()
         make_fake_tools(self.bin_dir)
         make_fake_bin(self.fake_bin)
-        write_executable(self.script, dogfood_script)
+        write_executable(self.script, deployment_operator_script)
         shutil.copy2(
-            DOGFOOD_FIXTURE_ROOT / "workspace_manifest.py",
+            DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "workspace_manifest.py",
             self.skill_dir / "workspace_manifest.py",
         )
         self.stale_website_manifest = stale_website_manifest
@@ -199,18 +200,18 @@ class DogfoodLayout:
 
     def _populate_repos(self) -> None:
         for host in (
-            self.dogfood_root / "pkgs-dogfood",
-            self.dogfood_root / "substrate-dogfood" / "pkgs",
-            self.dogfood_root / "substrate-dogfood" / "sub",
-            self.dogfood_root / "website-dogfood" / "pkgs",
-            self.dogfood_root / "website-dogfood" / "site",
+            self.deployment_operator_root / "pkgs-deployment-operator",
+            self.deployment_operator_root / "substrate-deployment-operator" / "pkgs",
+            self.deployment_operator_root / "substrate-deployment-operator" / "sub",
+            self.deployment_operator_root / "website-deployment-operator" / "pkgs",
+            self.deployment_operator_root / "website-deployment-operator" / "site",
         ):
             (host / ".git").mkdir(parents=True)
 
         platform_roots = (
-            self.dogfood_root / "pkgs-dogfood",
-            self.dogfood_root / "substrate-dogfood" / "pkgs",
-            self.dogfood_root / "website-dogfood" / "pkgs",
+            self.deployment_operator_root / "pkgs-deployment-operator",
+            self.deployment_operator_root / "substrate-deployment-operator" / "pkgs",
+            self.deployment_operator_root / "website-deployment-operator" / "pkgs",
         )
         for platform in platform_roots:
             for package in ALL_PLATFORM_PACKAGES:
@@ -237,15 +238,15 @@ class DogfoodLayout:
             shutil.copy2(REPO_ROOT / "host" / "bin_cache.py", platform / "scripts" / "bin_cache.py")
             self.platform_revs[platform] = self._make_platform_git_repo(platform)
 
-        (self.dogfood_root / "website-dogfood" / "site" / ".fkst" / "local-packages" / "site-board").mkdir(
+        (self.deployment_operator_root / "website-deployment-operator" / "site" / ".fkst" / "local-packages" / "site-board").mkdir(
             parents=True,
             exist_ok=True,
         )
 
         for host, platform in (
-            (self.dogfood_root / "pkgs-dogfood", self.dogfood_root / "pkgs-dogfood"),
-            (self.dogfood_root / "substrate-dogfood" / "sub", self.dogfood_root / "substrate-dogfood" / "pkgs"),
-            (self.dogfood_root / "website-dogfood" / "site", self.dogfood_root / "website-dogfood" / "pkgs"),
+            (self.deployment_operator_root / "pkgs-deployment-operator", self.deployment_operator_root / "pkgs-deployment-operator"),
+            (self.deployment_operator_root / "substrate-deployment-operator" / "sub", self.deployment_operator_root / "substrate-deployment-operator" / "pkgs"),
+            (self.deployment_operator_root / "website-deployment-operator" / "site", self.deployment_operator_root / "website-deployment-operator" / "pkgs"),
         ):
             self._write_host_workspace(host, platform)
         for platform in platform_roots:
@@ -265,7 +266,7 @@ class DogfoodLayout:
             return
 
         packages = PLATFORM_PACKAGES.split()
-        if host == self.dogfood_root / "website-dogfood" / "site":
+        if host == self.deployment_operator_root / "website-deployment-operator" / "site":
             packages = WEBSITE_PLATFORM_PACKAGES.split()
             if self.stale_website_manifest:
                 packages = STALE_WEBSITE_PACKAGES.split()
@@ -330,9 +331,9 @@ class DogfoodLayout:
         base_path = os.environ.get("PATH", "")
         env = {
             "PATH": f"{self.bin_dir}:{base_path}",
-            "DOGFOOD_ROOT": str(self.dogfood_root),
-            "DOGFOOD_REPOS": target,
-            "DOGFOOD_CONFIG": str(self.root / "missing-config.sh"),
+            "DEPLOYMENT_OPERATOR_ROOT": str(self.deployment_operator_root),
+            "DEPLOYMENT_OPERATOR_DEPLOYMENTS": target,
+            "DEPLOYMENT_OPERATOR_CONFIG": str(self.root / "missing-config.sh"),
             "SUBSTRATE_SRC": str(self.substrate_src),
             "BIN": str(self.fake_bin),
             "BOT": "test-bot",
@@ -341,16 +342,16 @@ class DogfoodLayout:
             "INTEGRATION_BRANCH": "integration-test",
             "ROLLUP_MERGE": "auto",
             "MANAGED_BOT_LOGINS": "test-bot,peer-bot",
-            "RATE_POOL": str(self.dogfood_root / "rate-pools"),
-            "LOGDIR": str(self.dogfood_root),
+            "RATE_POOL": str(self.deployment_operator_root / "rate-pools"),
+            "LOGDIR": str(self.deployment_operator_root),
             "CAPTURE_FILE": str(self.capture),
             "FKST_NO_AUTOBUILD": "1",
             "FKST_DEVLOOP_LOCAL_TEST_COMMAND": "true",
-            "DUR_PACKAGES": str(self.dogfood_root / "stable-durable-packages"),
-            "DUR_SUBSTRATE": str(self.dogfood_root / "stable-durable-substrate"),
-            "DUR_WEBSITE": str(self.dogfood_root / "stable-durable-website"),
+            "DUR_PACKAGES": str(self.deployment_operator_root / "stable-durable-packages"),
+            "DUR_SUBSTRATE": str(self.deployment_operator_root / "stable-durable-substrate"),
+            "DUR_WEBSITE": str(self.deployment_operator_root / "stable-durable-website"),
         }
-        env["DOGFOOD_REPOS"] = target
+        env["DEPLOYMENT_OPERATOR_DEPLOYMENTS"] = target
         return env
 
     def launch(self, target: str) -> dict[str, object]:
@@ -362,14 +363,14 @@ class DogfoodLayout:
         )
         if result.returncode != 0:
             raise AssertionError(
-                f"dogfood start {target} failed with {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                f"deployment operator start {target} failed with {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if self.capture.exists():
                 return json.loads(self.capture.read_text(encoding="utf-8"))
             time.sleep(0.05)
-        raise AssertionError(f"dogfood start {target} did not invoke fake supervise\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        raise AssertionError(f"deployment operator start {target} did not invoke fake supervise\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
     def run_start(self, target: str) -> subprocess.CompletedProcess[str]:
         self.capture.unlink(missing_ok=True)
@@ -458,7 +459,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
                             pass
 
     @REQUIRES_HOST_FIXTURE
-    def test_delegated_dogfood_launch_matches_committed_golden_for_all_targets(self) -> None:
+    def test_delegated_deployment_operator_launch_matches_committed_golden_for_all_targets(self) -> None:
         golden = load_golden_launches()
         self.assertEqual(set(golden), set(TARGETS))
         new_script = host_fixture_path(".claude", "skills", "dogfood-github-devloop", "dogfood.sh").read_text(
@@ -466,7 +467,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             tmp_root = Path(tmp)
-            new_layout = DogfoodLayout(
+            new_layout = DeploymentOperatorLayout(
                 tmp_root / "new",
                 new_script,
             )
@@ -480,17 +481,17 @@ class HostRunEquivalenceTest(unittest.TestCase):
                     self.assertEqual(env["FKST_DEVLOOP_LOCAL_TEST_COMMAND"], "true")  # type: ignore[index]
                     self.assertEqual(
                         env["FKST_RUNTIME_ROOT"],  # type: ignore[index]
-                        f"$ROOT/dogfood/dogfood-rt-{target}.{FIXED_TS}",
+                        f"$ROOT/deployment-operator/deployment-operator-rt-{target}.{FIXED_TS}",
                     )
                     hydrated_roots = {
-                        "substrate": new_layout.dogfood_root
-                        / "substrate-dogfood"
+                        "substrate": new_layout.deployment_operator_root
+                        / "substrate-deployment-operator"
                         / "sub"
                         / ".fkst"
                         / "run"
                         / "fkst-packages-platform",
-                        "website": new_layout.dogfood_root
-                        / "website-dogfood"
+                        "website": new_layout.deployment_operator_root
+                        / "website-deployment-operator"
                         / "site"
                         / ".fkst"
                         / "run"
@@ -501,11 +502,11 @@ class HostRunEquivalenceTest(unittest.TestCase):
 
     @REQUIRES_HOST_FIXTURE
     def test_website_start_uses_manifest_without_rewriting_it(self) -> None:
-        new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
+        new_script = (DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_operator.sh").read_text(
             encoding="utf-8"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            layout = DogfoodLayout(
+            layout = DeploymentOperatorLayout(
                 Path(tmp) / "stale-website",
                 new_script,
                 stale_website_manifest=True,
@@ -515,7 +516,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertTrue(layout.capture.exists())
-            workspace = layout.dogfood_root / "website-dogfood" / "site" / "fkst.workspace.toml"
+            workspace = layout.deployment_operator_root / "website-deployment-operator" / "site" / "fkst.workspace.toml"
             self.assertIn(
                 f"packages = {json.dumps(STALE_WEBSITE_PACKAGES.split())}",
                 workspace.read_text(encoding="utf-8"),
@@ -529,15 +530,15 @@ class HostRunEquivalenceTest(unittest.TestCase):
 
     @REQUIRES_HOST_FIXTURE
     def test_non_self_host_without_platform_source_fails_before_launch(self) -> None:
-        new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
+        new_script = (DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_operator.sh").read_text(
             encoding="utf-8"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            layout = DogfoodLayout(
+            layout = DeploymentOperatorLayout(
                 Path(tmp) / "missing-platform",
                 new_script,
             )
-            workspace = layout.dogfood_root / "website-dogfood" / "site" / "fkst.workspace.toml"
+            workspace = layout.deployment_operator_root / "website-deployment-operator" / "site" / "fkst.workspace.toml"
             workspace.write_text('[workspace]\nunits = [".fkst/local-packages/*"]\n', encoding="utf-8")
 
             result = layout.run_start("website")
@@ -550,12 +551,12 @@ class HostRunEquivalenceTest(unittest.TestCase):
             self.assertFalse(layout.capture.exists())
 
     @REQUIRES_HOST_FIXTURE
-    def test_dogfood_start_fails_when_supervise_exits_before_readiness(self) -> None:
-        new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
+    def test_deployment_operator_start_fails_when_supervise_exits_before_readiness(self) -> None:
+        new_script = (DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_operator.sh").read_text(
             encoding="utf-8"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            layout = DogfoodLayout(
+            layout = DeploymentOperatorLayout(
                 Path(tmp) / "failed",
                 new_script,
             )
@@ -581,21 +582,21 @@ class HostRunEquivalenceTest(unittest.TestCase):
             self.assertIn("startup error: schema validation failed", result.stdout)
 
     @REQUIRES_HOST_FIXTURE
-    def test_dogfood_sync_fails_when_selective_auto_restart_exits_before_readiness(self) -> None:
-        new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
+    def test_deployment_operator_sync_fails_when_selective_auto_restart_exits_before_readiness(self) -> None:
+        new_script = (DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_operator.sh").read_text(
             encoding="utf-8"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            layout = DogfoodLayout(
+            layout = DeploymentOperatorLayout(
                 Path(tmp) / "sync-failed",
                 new_script,
             )
-            (layout.dogfood_root / "stable-durable-packages").mkdir(parents=True, exist_ok=True)
-            (layout.dogfood_root / "stable-durable-packages" / ".fkst-supervise.pid").write_text(
+            (layout.deployment_operator_root / "stable-durable-packages").mkdir(parents=True, exist_ok=True)
+            (layout.deployment_operator_root / "stable-durable-packages" / ".fkst-supervise.pid").write_text(
                 "999999\n",
                 encoding="utf-8",
             )
-            (layout.dogfood_root / "packages-sv-100.log").write_text(
+            (layout.deployment_operator_root / "packages-sv-100.log").write_text(
                 "TIMESTAMP=2026-01-01T00:00:00Z LEVEL=info EVENT=code_provenance "
                 "ENGINE_VER=aaaaaaaa PKG_VERS=github-devloop@bbbbbbbb\n",
                 encoding="utf-8",
@@ -657,15 +658,15 @@ class HostRunEquivalenceTest(unittest.TestCase):
 
     @REQUIRES_HOST_FIXTURE
     def test_manifest_based_launch_keeps_workspace_byte_stable(self) -> None:
-        new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
+        new_script = (DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_operator.sh").read_text(
             encoding="utf-8"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            layout = DogfoodLayout(
+            layout = DeploymentOperatorLayout(
                 Path(tmp) / "byte-stable",
                 new_script,
             )
-            workspace = layout.dogfood_root / "website-dogfood" / "site" / "fkst.workspace.toml"
+            workspace = layout.deployment_operator_root / "website-deployment-operator" / "site" / "fkst.workspace.toml"
             packages = WEBSITE_PLATFORM_PACKAGES.split()
             committed_style = textwrap.dedent(
                 f"""\
@@ -674,7 +675,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
 
                 [[external_sources]]
                 id = "fkst-packages-platform"
-                git = {json.dumps(str(layout.dogfood_root / "website-dogfood" / "pkgs"))}
+                git = {json.dumps(str(layout.deployment_operator_root / "website-deployment-operator" / "pkgs"))}
                 packages = [
                 {''.join(f'  {json.dumps(package)},\n' for package in packages)}]
                 """
@@ -691,10 +692,10 @@ class HostRunEquivalenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env = self._git_env()
-            script = self._copy_dogfood_skill(root)
-            dogfood_root = root / "dogfood"
-            pkgs = dogfood_root / "substrate-dogfood" / "pkgs"
-            host = dogfood_root / "substrate-dogfood" / "sub"
+            script = self._copy_deployment_operator(root)
+            deployment_operator_root = root / "deployment-operator"
+            pkgs = deployment_operator_root / "substrate-deployment-operator" / "pkgs"
+            host = deployment_operator_root / "substrate-deployment-operator" / "sub"
             packages_remote = self._create_branch_remote(root, "packages-remote", {"README.md": "packages\n"})
             host_remote = self._create_host_remote(root, "host-remote")
             self._clone_branch(packages_remote, pkgs, env)
@@ -706,7 +707,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             )
             self.assertNotEqual((host / "fkst.workspace.toml").read_text(encoding="utf-8"), base_text)
 
-            result = self._run_dogfood_sync(script, root, "substrate")
+            result = self._run_deployment_operator_sync(script, root, "substrate")
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertIn("merged + pushed", result.stdout)
@@ -721,10 +722,10 @@ class HostRunEquivalenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env = self._git_env()
-            script = self._copy_dogfood_skill(root)
-            dogfood_root = root / "dogfood"
-            pkgs = dogfood_root / "substrate-dogfood" / "pkgs"
-            host = dogfood_root / "substrate-dogfood" / "sub"
+            script = self._copy_deployment_operator(root)
+            deployment_operator_root = root / "deployment-operator"
+            pkgs = deployment_operator_root / "substrate-deployment-operator" / "pkgs"
+            host = deployment_operator_root / "substrate-deployment-operator" / "sub"
             packages_remote = self._create_branch_remote(root, "packages-remote", {"README.md": "packages\n"})
             host_remote = self._create_host_remote(root, "host-remote")
             self._clone_branch(packages_remote, pkgs, env)
@@ -735,7 +736,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             )
             (host / "fkst.workspace.toml").write_text(real_edit, encoding="utf-8")
 
-            result = self._run_dogfood_sync(script, root, "substrate")
+            result = self._run_deployment_operator_sync(script, root, "substrate")
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertIn("does not merge cleanly", result.stdout)
@@ -747,35 +748,35 @@ class HostRunEquivalenceTest(unittest.TestCase):
         env = os.environ.copy()
         env.update(
             {
-                "GIT_AUTHOR_NAME": "Dogfood Sync Test",
-                "GIT_AUTHOR_EMAIL": "dogfood-sync-test@example.invalid",
-                "GIT_COMMITTER_NAME": "Dogfood Sync Test",
-                "GIT_COMMITTER_EMAIL": "dogfood-sync-test@example.invalid",
+                "GIT_AUTHOR_NAME": "Deployment Operator Sync Test",
+                "GIT_AUTHOR_EMAIL": "deployment-operator-sync-test@example.invalid",
+                "GIT_COMMITTER_NAME": "Deployment Operator Sync Test",
+                "GIT_COMMITTER_EMAIL": "deployment-operator-sync-test@example.invalid",
                 "GIT_AUTHOR_DATE": "2001-09-09T01:46:40Z",
                 "GIT_COMMITTER_DATE": "2001-09-09T01:46:40Z",
             }
         )
         return env
 
-    def _copy_dogfood_skill(self, root: Path) -> Path:
+    def _copy_deployment_operator(self, root: Path) -> Path:
         skill_dir = root / "skill"
         skill_dir.mkdir()
-        script = skill_dir / "dogfood.sh"
-        shutil.copy2(DOGFOOD_FIXTURE_ROOT / "dogfood.sh", script)
+        script = skill_dir / "deployment_operator.sh"
+        shutil.copy2(DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_operator.sh", script)
         script.chmod(0o755)
         shutil.copy2(
-            DOGFOOD_FIXTURE_ROOT / "workspace_manifest.py",
+            DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "workspace_manifest.py",
             skill_dir / "workspace_manifest.py",
         )
         return script
 
-    def _run_dogfood_sync(self, script: Path, root: Path, target: str) -> subprocess.CompletedProcess[str]:
+    def _run_deployment_operator_sync(self, script: Path, root: Path, target: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
             {
-                "DOGFOOD_ROOT": str(root / "dogfood"),
-                "DOGFOOD_REPOS": target,
-                "DOGFOOD_CONFIG": str(root / "missing-config.sh"),
+                "DEPLOYMENT_OPERATOR_ROOT": str(root / "deployment-operator"),
+                "DEPLOYMENT_OPERATOR_DEPLOYMENTS": target,
+                "DEPLOYMENT_OPERATOR_CONFIG": str(root / "missing-config.sh"),
                 "SUBSTRATE_SRC": str(root / "not-a-substrate-checkout"),
                 "BIN": str(root / "missing-framework"),
                 "BOT": "test-bot",
@@ -786,7 +787,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
                 "FKST_DEVLOOP_INTEGRATION_BRANCH": "integration-test",
                 "ROLLUP_MERGE": "auto",
                 "RATE_POOL": str(root / "rate-pools"),
-                "LOGDIR": str(root / "dogfood"),
+                "LOGDIR": str(root / "deployment-operator"),
             }
         )
         return run_bounded(

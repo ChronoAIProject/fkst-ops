@@ -118,7 +118,7 @@ tree_sha256 = "sha256-{'2' * 64}"
             results = {}
             for action in ACTIONS:
                 results[action] = subprocess.run(
-                    [str(mechanism / "ops/dogfood.sh"), action, "n-plus-one"],
+                    [str(mechanism / "ops/deployment_operator.sh"), action, "n-plus-one"],
                     cwd=deployment, env=env, text=True, capture_output=True,
                     timeout=8, check=False,
                 ).returncode

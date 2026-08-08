@@ -191,7 +191,7 @@ PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m schema.validator "$decl
 action="${1:-status}"
 shift || true
 case "$action" in
-  board|status|logs|restart|sync) exec "$ROOT/ops/dogfood.sh" "$action" "$@" ;;
+  board|status|logs|restart|sync) exec "$ROOT/ops/deployment_operator.sh" "$action" "$@" ;;
   doctor) exec "$ROOT/doctor/doctor.sh" "$@" ;;
   *) usage; exit 2 ;;
 esac

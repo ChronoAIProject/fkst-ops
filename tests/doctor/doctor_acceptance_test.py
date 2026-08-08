@@ -42,7 +42,7 @@ class DoctorFixture:
                 "FKST_OPS_DOCTOR_PROCESS_FIXTURE": str(self.processes),
                 "FKST_OPS_DOCTOR_SELF_PGID": "9999",
                 "FKST_OPS_ENGINE_BINARY": str(self.engine),
-                "DOGFOOD_RECEIPT_SWEEP_ROOT": str(self.receipts),
+                "DEPLOYMENT_OPERATOR_RECEIPT_SWEEP_ROOT": str(self.receipts),
                 "FKST_OPS_DOCTOR_TARGETS": "declared\t/fixture/declared\t/fixture/no-durable\t/fixture/logs",
             }
         )

@@ -1,11 +1,11 @@
 schema = "fkst.ops.machine-profile.v1"
 
 [roots]
-packages-host = "/srv/dogfood/pkgs-dogfood"
-substrate-host = "/srv/dogfood/substrate-dogfood/sub"
-substrate-platform = "/srv/dogfood/substrate-dogfood/pkgs"
-website-host = "/srv/dogfood/website-dogfood/site"
-website-platform = "/srv/dogfood/website-dogfood/pkgs"
+packages-host = "/srv/deployment-operator/pkgs-deployment-operator"
+substrate-host = "/srv/deployment-operator/substrate-deployment-operator/sub"
+substrate-platform = "/srv/deployment-operator/substrate-deployment-operator/pkgs"
+website-host = "/srv/deployment-operator/website-deployment-operator/site"
+website-platform = "/srv/deployment-operator/website-deployment-operator/pkgs"
 engine-source = "/srv/src/engine"
 packages-durable = "/srv/durable/packages"
 substrate-durable = "/srv/durable/substrate"

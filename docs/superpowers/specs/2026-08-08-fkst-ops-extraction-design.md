@@ -148,7 +148,7 @@ configuration = { build_command = ["<executable>", "<argument>"] } # engine; boa
 | `providers.*` | Exactly one binding of each required kind per deployment | New provider-binding contract; the two current board planes are evidenced at `scripts/board.py:43-50,528-542` and `dogfood_board.sh:9-16,67-116` |
 | `provider.implementation` | Required `<source lock id>:<relative executable entry point>`; absolute entry points are rejected | New provider-binding contract; current concrete producer lookup is at `dogfood_board.sh:57-102` |
 | `provider.contract` | Required closed contract version matching its kind | New provider-binding contract |
-| `provider.configuration` | Required closed table typed by provider kind; engine requires non-empty `build_command: [Arg]`, board configurations are empty | Validated at `schema/validator.py:provider-binding-configuration`; consumed at `ops/dogfood.sh:engine-provider-configuration` and `host/bin_bootstrap.sh:engine-provider-configuration` |
+| `provider.configuration` | Required closed table typed by provider kind; engine requires non-empty `build_command: [Arg]`, board configurations are empty | Validated at `schema/validator.py:provider-binding-configuration`; consumed at `ops/deployment_operator.sh:engine-provider-configuration` and `host/bin_bootstrap.sh:engine-provider-configuration` |
 
 Each referenced lock entry contains a Git URL, `resolved.rev`, and `tree_sha256`; the website lock has this shape at `fkst-website/fkst.lock:1-10`. Library export hashes are optional (`fkst-website/fkst.lock:12-15`) and do not replace source-tree verification.
 
@@ -161,7 +161,7 @@ to an inherited environment default.
 
 ### 4.1 Launch environment classification
 
-This table audits every environment variable that `ops/dogfood.sh` reads to resolve a launch or
+This table audits every environment variable that `ops/deployment_operator.sh` reads to resolve a launch or
 sets on the supervise command. Variables subsequently constructed inside the pinned host-run
 contract (for example `FKST_PROJECT_ROOT`, `FKST_RUNTIME_ROOT`, and `FKST_DURABLE_ROOT`) are derived
 launch arguments, not additional operator inputs.
@@ -218,7 +218,7 @@ The self-pinning entry preserves the declaration path and machine-reference reso
 
 `BoardRow` is `{key: String, classification: String, fields: Map<String, Scalar>}` and `BoardHealth` is `{status: String, anomalies: [BoardRow]}`. Providers return one typed result or one typed failure and never print an untyped success value. The engine contract reflects the present engine build at `scripts/run.sh:792-815`; the board contracts reflect the distinct current inputs and renderers at `scripts/board.py:43-50,528-542` and the GitHub label/comment producers at `dogfood_board.sh:9-16,67-116`.
 
-The engine input has one deliberate addition to the earlier four-field design: `build_command` is required as a non-empty argv list and is executed directly without a shell. The committed engine provider binding carries this deployment truth in its typed `configuration.build_command`; machine profiles have no command namespace or second carrier. Validation fails closed when the engine binding omits it. The resolved binding is wired into both live callers at `ops/dogfood.sh:engine-provider-configuration` and `host/bin_bootstrap.sh:engine-provider-configuration`, while `providers/engine.py:engine-contract-input` remains generic and owns no producer or build-system names.
+The engine input has one deliberate addition to the earlier four-field design: `build_command` is required as a non-empty argv list and is executed directly without a shell. The committed engine provider binding carries this deployment truth in its typed `configuration.build_command`; machine profiles have no command namespace or second carrier. Validation fails closed when the engine binding omits it. The resolved binding is wired into both live callers at `ops/deployment_operator.sh:engine-provider-configuration` and `host/bin_bootstrap.sh:engine-provider-configuration`, while `providers/engine.py:engine-contract-input` remains generic and owns no producer or build-system names.
 
 ## 5. Semantic Extraction Boundary
 

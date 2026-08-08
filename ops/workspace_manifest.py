@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Maintain dogfood host fkst.workspace.toml platform package entries."""
+"""Maintain deployment host fkst.workspace.toml platform package entries."""
 
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ def parse_workspace(text: str, workspace_path: Path, name: str) -> dict[str, Any
 def sync(name: str, host: Path, requested: list[str], git_url: str) -> None:
     workspace_path = host / "fkst.workspace.toml"
     if not workspace_path.is_file():
-        fail(f"{name}: target fkst.workspace.toml is required for dogfood platform sync: {workspace_path}")
+        fail(f"{name}: target fkst.workspace.toml is required for deployment platform sync: {workspace_path}")
     reject_duplicates(requested, "DEVLOOP_PKGS")
     text = workspace_path.read_text(encoding="utf-8")
     workspace = parse_workspace(text, workspace_path, name)
@@ -216,7 +216,7 @@ def sync(name: str, host: Path, requested: list[str], git_url: str) -> None:
 def platform_packages(name: str, host: Path, pkgsrc: Path, git_url: str) -> list[str]:
     workspace_path = host / "fkst.workspace.toml"
     if not workspace_path.is_file():
-        fail(f"{name}: target fkst.workspace.toml is required for dogfood platform package selection: {workspace_path}")
+        fail(f"{name}: target fkst.workspace.toml is required for deployment platform package selection: {workspace_path}")
     workspace = parse_workspace(workspace_path.read_text(encoding="utf-8"), workspace_path, name)
     if host.resolve() == pkgsrc.resolve():
         packages: list[str] = []
@@ -227,7 +227,7 @@ def platform_packages(name: str, host: Path, pkgsrc: Path, git_url: str) -> list
                 packages.append(name_value)
         reject_duplicates(packages, "package.name")
         if not packages:
-            fail(f"{name}: self-host fkst.workspace.toml must declare dogfood platform packages as [[package]] entries")
+            fail(f"{name}: self-host fkst.workspace.toml must declare deployment platform packages as [[package]] entries")
         return packages
 
     source_id, source = platform_source(workspace, git_url, name)

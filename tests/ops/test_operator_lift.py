@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-OPERATOR = ROOT / "ops" / "dogfood.sh"
+OPERATOR = ROOT / "ops" / "deployment_operator.sh"
 MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
@@ -135,7 +135,7 @@ engine_build_result
             self.assertTrue(binary.is_file())
             self.assertTrue(os.access(binary, os.X_OK))
 
-    def test_engine_provider_failure_is_visible_through_dogfood_caller(self) -> None:
+    def test_engine_provider_failure_is_visible_through_deployment_operator_caller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             provider = Path(directory) / "provider"
             provider.write_text(

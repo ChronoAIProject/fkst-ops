@@ -13,7 +13,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPARATOR = ROOT / "acceptance" / "fkst-ops-compare"
-NEW_OPERATOR = ROOT / "ops" / "dogfood.sh"
+NEW_OPERATOR = ROOT / "ops" / "deployment_operator.sh"
 OLD_OPERATOR_ENV = "FKST_OLD_OPERATOR"
 OLD_OPERATOR = Path(value) if (value := os.environ.get(OLD_OPERATOR_ENV)) else None
 REQUIRES_OLD_OPERATOR = unittest.skipUnless(

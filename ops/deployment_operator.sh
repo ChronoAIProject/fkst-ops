@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dogfood.sh — single operator multi-tool for dogfooding github-devloop on this device.
+# deployment_operator.sh - execute the operator surface for declared deployments.
 #
 # Each deployment drives one target's issue-to-change loop with declared target,
 # platform, and engine sources. GitHub write posture is a host environment fact:
@@ -12,18 +12,18 @@
 # the host-run contract in `$PKGSRC/scripts/run.sh supervise`.
 #
 # Commands:
-#   ./dogfood.sh status  [name|all]            pid/uptime/code-version/panic per supervise
-#   ./dogfood.sh board   [name|all] [stale_h]  GitHub board sweep: which issues/PRs flow vs are stuck (default stale 6h)
-#   ./dogfood.sh bin                           ensure engine BIN == substrate origin/dev; rebuild if stale (no restart)
-#   ./dogfood.sh start   [name|all]            launch via host-run contract
-#   ./dogfood.sh stop    [name|all]            SIGKILL (releases the redb lock)
-#   ./dogfood.sh restart [name|all]            sync run checkouts to origin/<integration> + relaunch (unconditional)
-#   ./dogfood.sh sync    [name|all]            auto-deploy: advance declared source checkouts, rebuild BIN,
+#   ./deployment_operator.sh status  [name|all]            pid/uptime/code-version/panic per supervise
+#   ./deployment_operator.sh board   [name|all] [stale_h]  GitHub board sweep: which issues/PRs flow vs are stuck (default stale 6h)
+#   ./deployment_operator.sh bin                           ensure engine BIN == substrate origin/dev; rebuild if stale (no restart)
+#   ./deployment_operator.sh start   [name|all]            launch via host-run contract
+#   ./deployment_operator.sh stop    [name|all]            SIGKILL (releases the redb lock)
+#   ./deployment_operator.sh restart [name|all]            sync run checkouts to origin/<integration> + relaunch (unconditional)
+#   ./deployment_operator.sh sync    [name|all]            auto-deploy: advance declared source checkouts, rebuild BIN,
 #                                              and restart ONLY supervises whose running code is a real
 #                                              package/engine change (skill/docs-only skew is left running)
-#   ./dogfood.sh logs    [name] [lines]        tail the latest log (default first declaration, 40 lines)
+#   ./deployment_operator.sh logs    [name] [lines]        tail the latest log (default first declaration, 40 lines)
 #
-# Dogfood resolves per-machine topology and delegates one-host launch invariants
+# The deployment operator resolves per-machine topology and delegates one-host launch invariants
 # (fresh runtime scratch, stable durable reuse, package loading, and restart) to
 # `scripts/run.sh supervise`.
 set -uo pipefail
@@ -36,7 +36,7 @@ _repo_root="$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null || true)
 : "${FKST_OPS_LOCK:?FKST_OPS_LOCK is required}"
 RESOLVED_DECLARATION="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" python3 -m schema.validator \
   "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK")" || exit $?
-DOGFOOD_REPOS="$(printf '%s' "$RESOLVED_DECLARATION" | python3 -c \
+DEPLOYMENT_OPERATOR_DEPLOYMENTS="$(printf '%s' "$RESOLVED_DECLARATION" | python3 -c \
   'import json,sys; print(" ".join(item["id"] for item in json.load(sys.stdin)["deployment"]))')"
 
 # The shared devloop family = the PLATFORM (like GitHub runners + marketplace actions), loaded from the
@@ -45,10 +45,10 @@ DOGFOOD_REPOS="$(printf '%s' "$RESOLVED_DECLARATION" | python3 -c \
 # (root stays website source) — so platform packages come from `$PKGSRC/packages/<pkg>`, a host's own package
 # from `$HOST/.fkst/local-packages/<pkg>`. (`.fkst/` is a tracked+ignored runtime INTERFACE dir, not
 # "all runtime": host repos may commit their own Lua there.)
-# Platform packages every dogfood supervise LOADS + RUNS from PKGSRC/packages/ are selected by the
+# Platform packages every deployment supervise LOADS + RUNS from PKGSRC/packages/ are selected by the
 # target host's `fkst.workspace.toml`. Non-self hosts use
 # the declared platform external source's packages; the self host uses explicit workspace
-# `[[package]]` entries. `dogfood.sh` only derives the launch argument from that manifest and never
+# `[[package]]` entries. `deployment_operator.sh` only derives the launch argument from that manifest and never
 # rewrites it, so a drift between committed composition and launch composition fails closed in the
 # host-run contract instead of being masked.
 DEVLOOP_PKGS=""
@@ -130,7 +130,7 @@ wait_supervise_ready() { # $1 pid, $2 log
   done
   return 2
 }
-expand() { [ "${1:-all}" = all ] && echo "$DOGFOOD_REPOS" || echo "$1"; }
+expand() { [ "${1:-all}" = all ] && echo "$DEPLOYMENT_OPERATOR_DEPLOYMENTS" || echo "$1"; }
 
 invoke_provider() { python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }
 
@@ -205,8 +205,8 @@ authorize_github_writer() {
   fi
 }
 
-# Sync a dogfood RUN checkout (behavior PKGSRC + target HOST) to the machine's
-# INTEGRATION_BRANCH — the dogfood runs its own pre-rollup code (feature ->
+# Sync a deployment RUN checkout (behavior PKGSRC + target HOST) to the machine's
+# INTEGRATION_BRANCH — the deployment runs its own pre-rollup code (feature ->
 # integration-<device> -> rollup -> dev), so it is the live integration test of
 # this device's autonomous changes BEFORE they promote to dev. The rollup target
 
@@ -266,7 +266,7 @@ sync_to_run_branch() { # $1 worktree dir
 
 # Ensure a checkout's INTEGRATION_BRANCH is >= UPSTREAM_BRANCH (dev) by merging upstream
 # FORWARD into integration and pushing. Why: operator out-of-band fixes land on dev; the
-# dogfood runs on integration; the in-pipeline sync_scan ff's dev->integration but can lag
+# deployment runs on integration; the in-pipeline sync_scan ff's dev->integration but can lag
 # (or the running supervise is itself stale), so _proc_stale reads "current" against a stale
 # integration and the supervise never picks up operator fixes. This deterministically merges
 # dev forward (plain ff when integration is an ancestor of dev; a merge commit when integration
@@ -333,7 +333,7 @@ cmd_board() {
   return "$failed"
 }
 
-# Prune worktrees + scratch dirs from OLD runtime roots of this dogfood (implement/fix
+# Prune worktrees + scratch dirs from OLD runtime roots of this deployment (implement/fix
 # depts create worktrees under the launch runtime scratch, registered in the shared .git; each
 # restart makes a fresh runtime root, orphaning the old registrations — registry leak #500).
 #
@@ -470,7 +470,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
 # succeeded first try, so the lock was never genuinely held). Retry ONLY this signature, so a real
 # failure (bad config, panic, missing BIN) still fails fast and loud on the first attempt.
 # Deliberately NOT named launch_one: that name carries the scripts/run.sh supervise delegation that
-# G-DOGFOOD-BOUNDARY audits, and this wrapper must not displace it from the audited surface.
+# G-DEPLOYMENT-OPERATOR-BOUNDARY audits, and this wrapper must not displace it from the audited surface.
 launch_with_lock_retry() { # $1 name, $2 restart flag (0|1)
   local attempts=5 i=1 log
   while :; do
@@ -561,7 +561,7 @@ status_one() {
 # the code the process loaded at startup (logged code_provenance PKG_VERS/ENGINE_VER), NOT the
 # worktree/BIN file (those can be updated without reloading the process — only a restart reloads).
 # Echoes: stopped | current | skew (dev moved, non-package files only) | pkg-stale | engine-stale.
-# PKG freshness is vs PKGSRC origin/$INTEGRATION_BRANCH (the run branch the dogfood loads);
+# PKG freshness is vs PKGSRC origin/$INTEGRATION_BRANCH (the run branch the deployment loads);
 # ENGINE freshness is the revision returned by the declared engine build provider.
 _proc_stale() {
   cfg "$1" || { echo unknown; return; }
@@ -612,7 +612,7 @@ cmd_config() {
   echo "platform pkgs resolve per repo from fkst.workspace.toml"
   echo "per-repo (HOST | PKGSRC | DURABLE | local pkgs | platform pkgs):"
   local n
-  for n in $DOGFOOD_REPOS; do
+  for n in $DEPLOYMENT_OPERATOR_DEPLOYMENTS; do
     if cfg "$n" && derive_devloop_pkgs_from_workspace "$n" 2>/dev/null; then
       printf '  %-9s %s | %s | %s | %s | %s\n' "$n" "$HOST" "$PKGSRC" "$DUR" "${LOCAL_PKGS:--}" "$DEVLOOP_PKGS"
     else
@@ -621,7 +621,7 @@ cmd_config() {
   done
 }
 
-# When sourced (e.g. by scripts/dogfood_reaper_test.py) define functions only — skip the CLI dispatch.
+# When sourced (e.g. by scripts/deployment_operator_reaper_test.py) define functions only — skip the CLI dispatch.
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0 2>/dev/null || true
 cmd="${1:-status}"; arg2="${2:-}"; arg3="${3:-}"
 case "$cmd" in
@@ -633,6 +633,6 @@ case "$cmd" in
   status)  for n in $(expand "${arg2:-all}"); do status_one "$n"; done ;;
   config)  cmd_config ;;
   board)   cmd_board "$arg2" "$arg3" ;;
-  logs)    target="${arg2:-${DOGFOOD_REPOS%% *}}"; cfg "$target" || exit 1; f=$(latest_log "$target"); echo "$f"; tail -"${arg3:-40}" "$f" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' ;;
+  logs)    target="${arg2:-${DEPLOYMENT_OPERATOR_DEPLOYMENTS%% *}}"; cfg "$target" || exit 1; f=$(latest_log "$target"); echo "$f"; tail -"${arg3:-40}" "$f" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' ;;
   *) echo "usage: $0 {status|config|board|bin|start|stop|restart|sync|logs} [deployment-id|all] [stale_h|lines]"; exit 1 ;;
 esac

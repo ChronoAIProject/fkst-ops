@@ -92,7 +92,7 @@ stray_supervise_report() {
 }
 
 reap_leaked_test_procs() {
-  local reap_min="${DOGFOOD_TEST_REAP_MINUTES:-45}" self_pgid pat pid pgid comm etime secs reaped=0 skipped=0
+  local reap_min="${DEPLOYMENT_OPERATOR_TEST_REAP_MINUTES:-45}" self_pgid pat pid pgid comm etime secs reaped=0 skipped=0
   local leader_comm leader_ppid
   self_pgid="${FKST_OPS_DOCTOR_SELF_PGID:-$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')}"
   for pat in 'fkst-framework test' 'scripts/[a-z0-9_]*_test\.py'; do
@@ -119,7 +119,7 @@ reap_leaked_test_procs() {
         printf '  guarded-skip leaked %s pid %s age %ss - own/supervise group\n' "$pat" "$pid" "$secs"
         skipped=$((skipped + 1)); continue
       fi
-      if [ "${DOGFOOD_REAP_DRYRUN:-0}" = "1" ]; then
+      if [ "${DEPLOYMENT_OPERATOR_REAP_DRYRUN:-0}" = "1" ]; then
         printf '  would-reap %s pid %s pgid %s age %ss\n' "$pat" "$pid" "$pgid" "$secs"
       else
         kill_group "$pgid" && printf '  reaped %s pid %s pgid %s age %ss\n' "$pat" "$pid" "$pgid" "$secs"
@@ -136,13 +136,13 @@ file_mtime() {
 }
 
 sweep_stale_tmp_receipts() {
-  local hours="${DOGFOOD_RECEIPT_SWEEP_HOURS:-6}" root="${DOGFOOD_RECEIPT_SWEEP_ROOT:-/tmp}" swept=0 preserved=0 f mtime
+  local hours="${DEPLOYMENT_OPERATOR_RECEIPT_SWEEP_HOURS:-6}" root="${DEPLOYMENT_OPERATOR_RECEIPT_SWEEP_ROOT:-/tmp}" swept=0 preserved=0 f mtime
   local now="${FKST_OPS_DOCTOR_NOW_EPOCH:-$(date +%s)}" threshold=$((hours*3600))
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     mtime=$(file_mtime "$f") || continue
     if [ "$((now-mtime))" -gt "$threshold" ]; then
-      if [ "${DOGFOOD_RECEIPT_SWEEP_DRYRUN:-0}" = "1" ]; then
+      if [ "${DEPLOYMENT_OPERATOR_RECEIPT_SWEEP_DRYRUN:-0}" = "1" ]; then
         printf '  would-sweep %s\n' "$f"
       else
         rm -f "$f" 2>/dev/null && printf '  swept %s\n' "$f"

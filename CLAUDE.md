@@ -38,11 +38,11 @@
 
 **机械动作(每次发现自己误解/受骗——无论当场自查抓到、还是事后才知——按此入账)**:
 1. **入账**(一条 memory·账本一行):`我当时相信什么 · 真值是什么(指到源头) · 什么骗了我(骗术的形状) · 我最终怎么识破的`。指不到「真值源头」就先别宣称已识破。
-2. **导出机制避免——首选修原材料的产出方(producer·natural owner),读者侧检查只是 fallback**:先问「什么原材料骗了我?能否在它的**产出方**把它做成**本身不可误读**?」——在产出方修:让 `dogfood.sh board` 把 `marker-age`/freshness 渲染进每行(stale 项就不可能看着 flowing)、让日志产出方发结构化字段(不可 grep 碰撞)、让时间戳带显式单位(`MM:SS` 不可当 `HH:MM`)、让工具在部分成功时 fail-loud 而非打印乐观的 `Updating…`。**修产出方一次 = 保护所有下游 + 该骗术构造上不可能**。**只有当产出方不归我 / 一时修不动时(`git`、GitHub API 的 stdout 等外部器),才退而在读者侧加一个可机械执行的检查**(如「判同态跨轮项前显式算 `marker-age`;存在 ≠ 新鲜」)——读者侧检查是 band-aid,能上提到产出方就上提(接 WORTH GATE「直接改根因 > band-aid」)。无论哪侧,都**不是**「下次小心」(靠记忆必漂移),**而是**一个落地的机械动作。
+2. **导出机制避免——首选修原材料的产出方(producer·natural owner),读者侧检查只是 fallback**:先问「什么原材料骗了我?能否在它的**产出方**把它做成**本身不可误读**?」——在产出方修:让 `deployment_operator.sh board` 把 `marker-age`/freshness 渲染进每行(stale 项就不可能看着 flowing)、让日志产出方发结构化字段(不可 grep 碰撞)、让时间戳带显式单位(`MM:SS` 不可当 `HH:MM`)、让工具在部分成功时 fail-loud 而非打印乐观的 `Updating…`。**修产出方一次 = 保护所有下游 + 该骗术构造上不可能**。**只有当产出方不归我 / 一时修不动时(`git`、GitHub API 的 stdout 等外部器),才退而在读者侧加一个可机械执行的检查**(如「判同态跨轮项前显式算 `marker-age`;存在 ≠ 新鲜」)——读者侧检查是 band-aid,能上提到产出方就上提(接 WORTH GATE「直接改根因 > band-aid」)。无论哪侧,都**不是**「下次小心」(靠记忆必漂移),**而是**一个落地的机械动作。
 3. **一次性 vs 一类**:一次性 → 入账 + 记住那个具体检查动作,修了走人;一类(三次法则 / 明显可泛化)→ 升成 conformance / review 透镜 / 引擎原语,让整类骗术**构造上不可再骗**(接「Harness 的本质:唯一写法 + 机械禁旁路」)。
 
 **账本(seed·本会话 + 历史;新受骗持续追加到 memory,复发成类的把 harness 蒸馏回此处)**:
-- **stale-marker 当 fresh**:把 #2687 冻结 5.5h 的 `08:59` markers 误读为「actively re-driven」——存在的 marker 被当成新鲜的。**根**:原材料(`board` 渲染)只显示 state 不显示 marker-age,把 freshness 信号吞了。**harness 首选(修产出方)**:`dogfood.sh board` 渲染器把 `marker-age`/freshness 渲染进每行,stale 项**不可能**显示成 flowing(接 sharpen-the-tools:board 吞 `awaiting-pr` 行事故 = 同一形状——修 board 而非绕 board)。**fallback(读者侧,产出方一时没修时)**:判「同态跨轮」项前显式算 `marker-age = now − last-marker-ts`;存在 ≠ 新鲜(接 detect-live-codex 的 freshness 教训)。
+- **stale-marker 当 fresh**:把 #2687 冻结 5.5h 的 `08:59` markers 误读为「actively re-driven」——存在的 marker 被当成新鲜的。**根**:原材料(`board` 渲染)只显示 state 不显示 marker-age,把 freshness 信号吞了。**harness 首选(修产出方)**:`deployment_operator.sh board` 渲染器把 `marker-age`/freshness 渲染进每行,stale 项**不可能**显示成 flowing(接 sharpen-the-tools:board 吞 `awaiting-pr` 行事故 = 同一形状——修 board 而非绕 board)。**fallback(读者侧,产出方一时没修时)**:判「同态跨轮」项前显式算 `marker-age = now − last-marker-ts`;存在 ≠ 新鲜(接 detect-live-codex 的 freshness 教训)。
 - **假绿/部分信号臆断成功**(本会话新增):`git pull` 打印 `Updating dccecae5..267c2abf` 却被 stale `.git/index.lock` 挡下**没真 ff**,我差点信「已更新」——`grep` 实际文件才发现没生效。**根**:`git` 的 stdout 乐观(打印意图行后才失败),原材料误导。**harness**:产出方(`git`)不归我修 → 读者侧 fallback:改文件类动作后**核实末态**(`grep`/`rev-parse HEAD`)而非信中间「意图」输出;`EXIT`/末态 > stdout 叙事(接实事求是门③「反证优先」)。
 - **plausible 前提当已核实**:先信「intake 误判 sound issue」→再信「decline 丢了 framing」,两次被合理叙事骗到差点 file/实现,均由源头核实推翻。**harness**:任何**驱动动作**(file / 实现 / 归因 / 喂下游)的前提,行动前必指到源头(fidelity/competence 门);越是推动我行动的前提,越要先核实。
 - **单位/字段误读**(历史):`MM:SS` 当 `HH:MM`、`elapsed_ms=429` 当 HTTP 429、`delivery_id` 段当 dedup。**harness**:一个值用前先验单位与含义;一个值出现 ≠ 它是我以为的那个含义。
@@ -147,7 +147,7 @@
 **做事·法自然**
 - **不以规矩，不能成方圆**——再聪明的单点不靠规矩也画不圆（第 13 条）；先立规矩后处理实例（第 18 条）；规矩随方圆生长而加固，但加固必走贵路（τ 成本），无后门（第 21 条）。〔元准则〕
 - **欲速则不达**——诚实 > 速度；打地鼠欲速反慢（第 1 条 + deferred cost 10-100×）。〔软〕
-- **工欲善其事，必先利其器**——先利器后做事（即本仓「sharpen-the-tools」：`dogfood.sh` 一器一门、本地＝CI 同一器、器坏优先修、用器看征不看愿）。〔软 + 半硬〕
+- **工欲善其事，必先利其器**——先利器后做事（即本仓「sharpen-the-tools」：`deployment_operator.sh` 一器一门、本地＝CI 同一器、器坏优先修、用器看征不看愿）。〔软 + 半硬〕
 - **磨刀不误砍柴工**——器坏即修优先于赶路，器之 bug 是最高优先级尸检对象，修器走同一门无免费捷径（第 17/20 条）。〔软〕
 - **过犹不及**——门只设会说谎处，不过度门控、不镀金（即 WORTH GATE「贵的气味」）。〔软〕
 - **大道至简**——唯一真源、规范最简形、删无可删（第 6 条 + 程序/数据递归）。〔软 + 硬投影·G-DEDUP/单一真源 helper〕
@@ -311,15 +311,15 @@ Incident of record (2026-06-17): `mkdir -p X && chmod 0555 X` on a worktree pare
 
 ## 随时可重启 supervise（crash-only restart contract）
 
-**部署即重启、随时可重启：`supervise` 必须能在任何时刻被 SIGKILL + 重启而不丢工作、不造成永久停滞。** 这是 crash-only software（Candea & Fox，见上一节）的硬契约，不是「尽量」。系统不做 drain / 优雅关停 / 在途排空；恢复靠两条既有机制：① **durable 投递**（redb at-least-once + lease/fencing + retry）让在途事件重启后续投；② **从 marker / git / 外部源回源 re-derive**（真相不在内存态）让任何中间态被重新推导、重驱。**重启只换掉 supervise 这一个进程；framework 部门进程与在途 codex 都不重启、不被杀（进程树实测，2026-08-02）。** 终止只发生在**一处**，且是 **`kill -9 <单个 pid>`**，不是 `kill -- -<pgid>`、不是进程树杀。完整调用链（2026-08-02 逐文件核实；早前本节写「`dogfood.sh` 的 `stop_one()` 执行 kill」是**错路径**，`stop_one` 只在缺 durable pidfile 时作迁移桥接跑）：
+**部署即重启、随时可重启：`supervise` 必须能在任何时刻被 SIGKILL + 重启而不丢工作、不造成永久停滞。** 这是 crash-only software（Candea & Fox，见上一节）的硬契约，不是「尽量」。系统不做 drain / 优雅关停 / 在途排空；恢复靠两条既有机制：① **durable 投递**（redb at-least-once + lease/fencing + retry）让在途事件重启后续投；② **从 marker / git / 外部源回源 re-derive**（真相不在内存态）让任何中间态被重新推导、重驱。**重启只换掉 supervise 这一个进程；framework 部门进程与在途 codex 都不重启、不被杀（进程树实测，2026-08-02）。** 终止只发生在**一处**，且是 **`kill -9 <单个 pid>`**，不是 `kill -- -<pgid>`、不是进程树杀。完整调用链（2026-08-02 逐文件核实；早前本节写「`deployment_operator.sh` 的 `stop_one()` 执行 kill」是**错路径**，`stop_one` 只在缺 durable pidfile 时作迁移桥接跑）：
 
 ```
-dogfood.sh sync → restart_one(:585) → launch_with_lock_retry(…,1) → launch_one(:491)
+deployment_operator.sh sync → restart_one(:585) → launch_with_lock_retry(…,1) → launch_one(:491)
    args=( $PKGSRC/scripts/run.sh supervise … ) + --restart          (:498/:507)
    → scripts/run.sh → scripts/host_run.sh  --restart ⇒ HOST_RUN_RESTART=1   (host_run.sh:371)
        → kill -9 "$pid"      ← 唯一的终止动作，pid 取自 durable pidfile     (host_run.sh:549)
        → 轮询至多 50 次确认它真死，再删 pidfile                              (:553)
-   → 新 supervise 等 redb 锁释放，最多 5 次退避重试                    (dogfood.sh:559)
+   → 新 supervise 等 redb 锁释放，最多 5 次退避重试                    (deployment_operator.sh:559)
 ```
 
 **两道等待是刻意的**：先确认旧进程真死再删 pidfile，再让新进程等锁——所以不会出现两个 supervise 抢同一 durable root。另外每次启动都以 `os.setsid()` 让 supervise 成为自己的 session/进程组 leader 并验 `PGID == PID`（打印 `own-pgroup=yes`）：注释记载实测过它曾留在**启动者的进程组**里、会被 `kill -- -<pgid>` 这类组信号误杀——这反证了组杀确实会伤及整棵树，而当前设计刻意不用组杀。
@@ -339,9 +339,9 @@ SIGKILL 不向下传播，所以这四层里**只有第一层没了**：departme
 
 **「重启不影响 codex 执行」是已两次实证的机械事实——写任何 restart 叙事之前先逐条过这四条，不许凭感觉推翻：**① SIGKILL 只达 supervise **这一个 pid**（唯一终止点是 `scripts/host_run.sh:549` 的 `kill -9 "$pid"`，pid 取自 durable pidfile；非进程组/进程树杀）；它下面的 framework 部门进程（`fkst-framework run <pkg>/<dept>`）、codex worker、codex 及其子进程**一个都不重启、不被杀，orphan 后继续执行到完成**（进程树实测 2026-08-02；早期实证 2026-06-19）。② 新 supervise 的 liveness 探针**跨代看得见**旧 runtime root 下的活 orphan 并正确 live-defer——不误判 `codex-run-not-running`、不 double-spawn（实证 2026-07-06：重启后对该 strand 零 timeout-attempt）。③ codex 的产出 = **git push，durable**——重启永远丢不掉一个真正产出的修复；可能丢的只有 completion envelope（#1101 类），由 push 回源重导自愈。④ 因此「重启后无进展」唯一合法的问题是「**那一跑 codex 为什么没有产出 push**」，永远不是「重启影响了它」。实证（2026-07-06）：操作者再犯此归因（把 PR#1908 的 fixing 慢归咎于小时级部署重启），被用户点破；核查确认 ①②③ 全部成立，且错误叙事已污染一个 filed issue（#1918，当日更正）——这就是本清单存在的原因。
 
-**铁律：重启永不作为问题的解释。** 看到重启后某 strand 没进展时，**默认归因不是「重启 churn 掉了它」**——这是违背本契约的偷懒归因，会掩盖真缺陷（活性盲区）。crash-only 下重启理应被 durable + re-derive 吸收；若重启**确实**导致永久丢失/停滞，那必然是一个**活性契约缺陷**（durable 没续投、re-derive 没重导、或「心跳变陈 → re-spawn」链断了），要 root-cause + 提 issue，绝不用「重启影响了它」搪塞，也绝不为「避免 churn」去不重启 / 攒批次（那让进程长跑陈旧代码，反害——见 dogfood「立即重启别攒批次」）。运营随时重启；把工作活下来是**系统的责任**，不是运营的小心翼翼。实证（2026-06-17）：误把一个 fixing-loop 停滞甩锅给「我反复 restart churn 掉 fix codex」，实查发现重启后 fix codex 已被正常 re-spawn（crash-only 生效），真信号是另一处 marker-visibility version-desync——偷懒归因差点掩盖真缺陷。
+**铁律：重启永不作为问题的解释。** 看到重启后某 strand 没进展时，**默认归因不是「重启 churn 掉了它」**——这是违背本契约的偷懒归因，会掩盖真缺陷（活性盲区）。crash-only 下重启理应被 durable + re-derive 吸收；若重启**确实**导致永久丢失/停滞，那必然是一个**活性契约缺陷**（durable 没续投、re-derive 没重导、或「心跳变陈 → re-spawn」链断了），要 root-cause + 提 issue，绝不用「重启影响了它」搪塞，也绝不为「避免 churn」去不重启 / 攒批次（那让进程长跑陈旧代码，反害——见 live operation「立即重启别攒批次」）。运营随时重启；把工作活下来是**系统的责任**，不是运营的小心翼翼。实证（2026-06-17）：误把一个 fixing-loop 停滞甩锅给「我反复 restart churn 掉 fix codex」，实查发现重启后 fix codex 已被正常 re-spawn（crash-only 生效），真信号是另一处 marker-visibility version-desync——偷懒归因差点掩盖真缺陷。
 
-**Codex 并发由引擎 admission 控制（默认全用，dogfood 不 override）**：`FKST_CODEX_PERMIT_SLOTS`=**20**（全局 codex 进程许可池上限）、`FKST_MAX_IN_FLIGHT_PER_DEPT`=**16**（每 department 并发 durable child 上限）、`FKST_DURABLE_ADMISSION_BURST_PER_DEPT`=**1**（每 dispatch pass 每 dept 只准入 1 个新 child——缓启，#512 thundering-herd 后特意设的稳态保护）。**实测同时在跑的 codex 数（常 3-5）远低于 20 cap，是「当下需求 + burst=1 缓启」而非被限流到顶**——别把低 codex 数误读成 admission 卡死或 cap 太小（纠错 2026-06-19，user-as-oracle：此前误判 cap≈3，实为 20）。想让排队的工作铺得更快可调高 `burst`，但 burst=1 是特意的 herd 保护，改前权衡（herd 风险 vs 铺开速度）。
+**Codex 并发由引擎 admission 控制（默认全用，deployment operator 不 override）**：`FKST_CODEX_PERMIT_SLOTS`=**20**（全局 codex 进程许可池上限）、`FKST_MAX_IN_FLIGHT_PER_DEPT`=**16**（每 department 并发 durable child 上限）、`FKST_DURABLE_ADMISSION_BURST_PER_DEPT`=**1**（每 dispatch pass 每 dept 只准入 1 个新 child——缓启，#512 thundering-herd 后特意设的稳态保护）。**实测同时在跑的 codex 数（常 3-5）远低于 20 cap，是「当下需求 + burst=1 缓启」而非被限流到顶**——别把低 codex 数误读成 admission 卡死或 cap 太小（纠错 2026-06-19，user-as-oracle：此前误判 cap≈3，实为 20）。想让排队的工作铺得更快可调高 `burst`，但 burst=1 是特意的 herd 保护，改前权衡（herd 风险 vs 铺开速度）。
 
 ## 信任契约,别在包层重造框架已保证的东西（「下游不稳定」是错误前提,是意外复杂的根）
 
@@ -410,7 +410,7 @@ SIGKILL 不向下传播，所以这四层里**只有第一层没了**：departme
 
 - **唯一真标尺是 AVM（Autonomous Valid Merge），不是 merged**：`merged && 零人工介入 && evidence manifest 存在 && 必需 tests/conformance 过 && post-merge probe 绿 && N 天内无 revert/reopen/fix-forward && cost ≤ budget && 无 duplicate worker / lease conflict`。按**任务等级**（L0 docs → L1 局部 bugfix → L2 跨模块 → L3 engine/scheduler/recovery/conformance → L4 cross-repo/API/security）分别报 AVM-rate / cost-per-AVM / revert-rate / median-rounds / false-consensus-rate，**绝不报一个总成功率**（L0/L1 高而 L3/L4 低 = 「自动 junior maintainer」，不是「自治软件公司」）。
 - **审证据不审叙事（evidence-gated, not narrative-gated）**：reviewer 判「证据是否足够支持 merge」，不判「这段话听起来对不对」。每个 PR 带 evidence manifest（claimed intent / risk-tier / tests-changed / conformance-results / post-merge-probe-plan / no-test-reason）；code 改无测试必须有显式 no-test-reason；engine/scheduler/recovery/conformance 改动必须过 replay/conformance gate。reviewer **角色分化**（invariants / test-adequacy / blast-radius / cost / security-&-prompt-injection）对抗 correlated consensus failure；统计 `false_consensus_rate`（consensus 通过但事后 revert/reopen）。**默认 bot 会被 prompt-injected**：issue/PR 文本是 attacker-controllable 输入，PR body 里的指令不得覆盖 system policy，CI 脚本 / dependency / workflow / auth / scheduler 改动进 high-risk tier。
-- **held-out challenge suite（像 ML 的 train/test split）**：dogfood-only 会**过拟合当前系统**（像只在训练集上评估模型）。须有一组固定的 L0-L4 fixture issue、每个带机械 oracle、每晚从 clean checkout 跑、不许据失败人工改题——这是 held-out 测试集。**challenge score（受控 benchmark 能力）+ dogfood AVM（真实生存能力），两者缺一不可**（只 dogfood 过拟合当前系统，只 benchmark 失真实复杂度）。
+- **held-out challenge suite（像 ML 的 train/test split）**：live-operation-only 会**过拟合当前系统**（像只在训练集上评估模型）。须有一组固定的 L0-L4 fixture issue、每个带机械 oracle、每晚从 clean checkout 跑、不许据失败人工改题——这是 held-out 测试集。**challenge score（受控 benchmark 能力）+ live-operation AVM（真实生存能力），两者缺一不可**（只 live-operation 过拟合当前系统，只 benchmark 失真实复杂度）。
 
 **诚实纪律**：liveness/safety 已被反复生产验证；competence **尚未机械度量**——当前真相是「operator 仍是 evaluator 与 task-decomposer，系统只把 implementation 外包给了 bot」。**别把『高可用地合并 plausible patch』自称为 competent autonomy。** 在 competence 被机械度量之前，任何「加更多 repo / 更大并发 / 更聪明 prompt」都是在扩大系统、而非验证能力。这是「让问题都在测试解决」的升维：从「safety/liveness 都在测试网里」扩到「**competence 也被测试机械度量**」——把 AVM ledger / evidence manifest / challenge suite 做成框架一等公民，而非靠 operator 每轮人肉判断。
 
@@ -424,7 +424,7 @@ SIGKILL 不向下传播，所以这四层里**只有第一层没了**：departme
 - **每个非终止态必有不可击败的硬预算 + 预算耗尽必有枚举内的确定去向**：任何 bounded loop（convergence / fix / redrive / retry / 任意重试或收敛）必须有 round / attempt / wall-clock 预算；预算耗尽**必然**走到一个枚举内的确定去向并带可读 WHY。**该去向是 redrive，不是强制终态（owner 裁定 #2725，2026-07-23：「超时不应该到 drop，只有明确不能进行下去才能进终态」）**——超时是**瞬态**信号（工作可能还活着、在推进、甚至已完成），把它当终态会产出 false-terminal 丢弃真实成果（实证 trureturing#414：implement 已提交完整产出仍被 `state-output-obligation-timeout` drop）。故 `libraries/devloop/liveness/timeout.lua` **永不产出 `escalate` 决定**：超预算的非终态**无限 redrive**，其有界性不来自 attempt 计数，而来自先于它运行的两道**真实**门——receiver **可证在执行**时 `defer`（`liveness_contract.real_execution`，如 `fkst.codex_runs` 探真实进程，非 marker 年龄这种代理），预算内 `wait`。行上保留 `on_escalate` 仅为让冻结的 parity corpus 逐字节不变（保守扩展），运行期不走那些终态边。**终态仍然可达，但只经「明确不能进行下去」的专用边**：consensus decline、operator block、收敛 true-stall 的 `reconcile action: drop`。此条 supersede 早期「预算耗尽必然终止到终态」的表述（#413/#762 时期），据 #2725 更新为当前态。预算必须**鲁棒、不可被击败**——不得被 key 漂移（如按 `(base_version, source_ref_digest)` 过滤导致计数 reset）、文本变化（如每轮变化的 `narrowed_question` 击败「N 轮不变」式 stall 检测）、或 filter 失配绕过。round/attempt 计数要从**稳定事实流**派生（稳定 producer key / 可见 marker 流），绝不从会漂移的派生键计数。活样本 #586：convergence round 33+ livelock——cap=8 因 `(base_version,sr_digest)` 漂移拖到 33 才偶发触发、true-stall 被变化的问题文本击败、reconcile 又因 graphql 耗尽写不进 `blocked`，三重失效叠加成无界 livelock。
 - **终止必然可达**：终止动作（`reconcile → blocked` 等）必须对暂态失败鲁棒（可靠投递 + 重试，绝不因一次读失败 fail-closed 就永久搁浅）；终止是「终将发生的好事」，受活性契约约束（#413：每个非终止态 budget + on_timeout 终止兜底）。
 - **可审计**：每次转移落结构化、可 grep 的事实——entry / CAS 决策 + 原因 / 预算与 round / apply / 终止 WHY，带 `proposal_id`；只看日志即可重建整条 saga 轨迹与终止理由。这些程序态只由程序产生，永不手改（见「纪律」与永不手改程序状态）。
-- **harness 化（机械不变式，非逐 dept 手写）**：saga 契约由 conformance 不变式**机械强制覆盖整类**，不是每个 loop/dept 手写一遍——每个非终止态在 `restart_transition_table` 必有 budget + on_timeout 终止行（缺一即 conformance 失败）；每个 bounded loop 的预算计数必须从稳定键派生（机械检查禁止从漂移键计数、禁止把可被表面变化击败的 stall 检测当唯一终止条件）。这是「先找 harness」「让问题都在测试解决」的落地：新增任何状态 / loop 若缺鲁棒预算或保证终止行，**CI 直接拦下**，而不是等 dogfood 发现 livelock。
+- **harness 化（机械不变式，非逐 dept 手写）**：saga 契约由 conformance 不变式**机械强制覆盖整类**，不是每个 loop/dept 手写一遍——每个非终止态在 `restart_transition_table` 必有 budget + on_timeout 终止行（缺一即 conformance 失败）；每个 bounded loop 的预算计数必须从稳定键派生（机械检查禁止从漂移键计数、禁止把可被表面变化击败的 stall 检测当唯一终止条件）。这是「先找 harness」「让问题都在测试解决」的落地：新增任何状态 / loop 若缺鲁棒预算或保证终止行，**CI 直接拦下**，而不是等 live operation 发现 livelock。
 
 saga-mandatory umbrella = #375；budget-exhaustion liveness class = #558 / #568 / #535 / #586；one-state-one-liveness-class（deferred 时间锚错时钟 → false-terminal）root = #887（dependency-release 秒杀健康 issue）/ #909（fix）。与「先止血再根因」一致：livelock 先止血（停掉烧资源的循环），再按本条根因（补鲁棒预算 + 保证终止 + 机械不变式）。
 
@@ -448,9 +448,9 @@ prior art:Erlang/OTP「let it crash」(不防御式 catch,交给懂恢复策略�
 
 参考案例：#550 / #558 / #556。
 
-## 先止血,再根因（dogfood 事故响应）
+## 先止血,再根因（live-operation 事故响应）
 
-dogfood 中发现**运行的系统在流血**（storm / 资源耗尽 / churn / 卡死 / 数据无界增长）时，响应分两步、顺序不可颠倒、也不可只做一半——这是 SRE 事故响应的成熟形态（先 mitigate / stop-the-bleeding 恢复 liveness，再 RCA 根治）：
+live operation 中发现**运行的系统在流血**（storm / 资源耗尽 / churn / 卡死 / 数据无界增长）时，响应分两步、顺序不可颠倒、也不可只做一半——这是 SRE 事故响应的成熟形态（先 mitigate / stop-the-bleeding 恢复 liveness，再 RCA 根治）：
 
 - **先止血（stabilize，分钟级，恢复活性优先）**：立刻止住正在发生的伤害——杀失控/泄漏进程、清掉已损坏的运行态（如 wipe 撑爆的 durable）、重启到已知良好态、节流/背压/退避。止血只求**让系统重新流动**、争来做根因的时间，可以是一次性手动运维操作；但它**不是修复、不是终点**，且仍守「永不手改程序状态」——止血是运维面动作（杀进程 / 清运行态 / 重启 / 节流），**绝不**手写 marker 或业务状态。
 - **再根因（root-cause fix，经正规管线）**：止血后冷静诊断真根（harness-first 锚定成熟实践），经 sshx → PR → review → merge 做**根因修复**，让同类伤害不再发生；修复要讲清：止血掩盖了什么、真根是什么、为何这次改动根治它。
@@ -473,9 +473,9 @@ dogfood 中发现**运行的系统在流血**（storm / 资源耗尽 / churn / �
 
 ## 工欲善其事，必先利其器：先磨器，再做事（sharpen-the-tools·统一 harness/工具家族·非新增第 N 条）
 
-**「工欲善其事，必先利其器」（论语·卫灵公）——这条不是新加的第 N 条纪律，是本文件整个 harness / 工具家族的古典名字，也正是用户反复申明的理想的结晶：把「器」磨利，「事」才最简。** 「器」= 让工作又快又对又可重复的**工具与约束**：framework 的稳定公共层、harness / conformance ratchet、`dogfood.sh` 多用途 operator 工具、board / doctor / observe 诊断面、`check_repo*` 机械门、sshx / nyxid oracle 推理通道、整个测试系统。「事」= 真正的业务：驱 issue、修缺陷、写功能、写 Lua 行为层。用户的理想「Lua 脚本用最简单无重复的代码表达业务、框架把公共部分做好做稳定」一句话就是**利其器 → 善其事**：器越利（框架/harness 越稳越通用），事越简（业务 Lua 越薄越显然）。所以「先找 harness 再执行」「Harness 的本质：唯一写法」「信任契约·框架做稳定公共部分」「持续完善测试系统 / harness」「通用原语 > 枚举」全是这条的不同面——本节只给它们一个统一的名字与**行动姿态**。
+**「工欲善其事，必先利其器」（论语·卫灵公）——这条不是新加的第 N 条纪律，是本文件整个 harness / 工具家族的古典名字，也正是用户反复申明的理想的结晶：把「器」磨利，「事」才最简。** 「器」= 让工作又快又对又可重复的**工具与约束**：framework 的稳定公共层、harness / conformance ratchet、`deployment_operator.sh` 多用途 operator 工具、board / doctor / observe 诊断面、`check_repo*` 机械门、sshx / nyxid oracle 推理通道、整个测试系统。「事」= 真正的业务：驱 issue、修缺陷、写功能、写 Lua 行为层。用户的理想「Lua 脚本用最简单无重复的代码表达业务、框架把公共部分做好做稳定」一句话就是**利其器 → 善其事**：器越利（框架/harness 越稳越通用），事越简（业务 Lua 越薄越显然）。所以「先找 harness 再执行」「Harness 的本质：唯一写法」「信任契约·框架做稳定公共部分」「持续完善测试系统 / harness」「通用原语 > 枚举」全是这条的不同面——本节只给它们一个统一的名字与**行动姿态**。
 
-**行动姿态（这条独有、其余 harness 节没明说的那一半）：事做得钝、痛、重复、易错时，默认反应是「先停下磨这把器」，不是拿钝器硬磨。** 一个操作反复手写 ad-hoc bash、一个诊断每次靠记忆拼命令、一个失败形态肉眼 review 才抓得到、一个真相被工具静默丢掉——这些都是「器钝了」的信号，正解是**投资那把器**（把重复操作收进 `dogfood.sh` 的一个子命令、把诊断做成一次干净调用、把「只有对抗 review 抓得到的」升成 conformance / ratchet 机械门、把丢真相的渲染补成 expose-not-swallow），让**下一次以及第 N 次**都受益；而不是这一次咬牙用钝器磨过去、把痛苦留给下一次。实证（本会话 2026-07-14）：operator board 对未枚举状态静默 `return 1 + || continue`，把所有 `awaiting-pr` 行整行吞掉——一个**钝了的观察器**在一个 liveness-blind 状态之上又叠一层盲；正解不是「这次手工 `gh` 查一遍绕过」，是**磨利那把器**（board 显式渲染 awaiting-pr + 未知状态兜底为可见行），于是被它藏了 43h 的真缺陷（#2276 landed-gate）当场暴露、后续每次唤醒都自动可见。磨器一次，受益每次——这就是「必先利其器」在自驱运营里的落地。
+**行动姿态（这条独有、其余 harness 节没明说的那一半）：事做得钝、痛、重复、易错时，默认反应是「先停下磨这把器」，不是拿钝器硬磨。** 一个操作反复手写 ad-hoc bash、一个诊断每次靠记忆拼命令、一个失败形态肉眼 review 才抓得到、一个真相被工具静默丢掉——这些都是「器钝了」的信号，正解是**投资那把器**（把重复操作收进 `deployment_operator.sh` 的一个子命令、把诊断做成一次干净调用、把「只有对抗 review 抓得到的」升成 conformance / ratchet 机械门、把丢真相的渲染补成 expose-not-swallow），让**下一次以及第 N 次**都受益；而不是这一次咬牙用钝器磨过去、把痛苦留给下一次。实证（本会话 2026-07-14）：operator board 对未枚举状态静默 `return 1 + || continue`，把所有 `awaiting-pr` 行整行吞掉——一个**钝了的观察器**在一个 liveness-blind 状态之上又叠一层盲；正解不是「这次手工 `gh` 查一遍绕过」，是**磨利那把器**（board 显式渲染 awaiting-pr + 未知状态兜底为可见行），于是被它藏了 43h 的真缺陷（#2276 landed-gate）当场暴露、后续每次唤醒都自动可见。磨器一次，受益每次——这就是「必先利其器」在自驱运营里的落地。
 
 **边界（利其器 ≠ 镀金造器，与 WORTH GATE / 三次法则 / 模式服务当前问题一致）**：磨的是**当前的事真正需要、且钝已被证据坐实**的那把器（重复出现、痛点可指、收益可证——三次法则），不是为「以后可能」提前造投机工具、也不是把一次性小操作包装成华丽引擎。为没出现的重复造器 = gold-plating，和拿钝器硬磨同为病；器要**配得上事**（proportional-containment / 值不值）。且「磨器」本身照走全部纪律：operator 工具改动也在 worktree 里经 PR + CI 落地（不手改 pinned checkout），引擎级的器归 fkst-substrate，包级的器守包边界。⟦AI:FKST⟧
 
@@ -485,7 +485,7 @@ dogfood 中发现**运行的系统在流血**（storm / 资源耗尽 / churn / �
 
 ## 测试驱动开发：先建完整测试（集成 + 单元）再实现（TDD·test-first·red→green·非新增第 N 条）
 
-**开发任何非平凡行为前，先把该行为的完整测试写出来——重放真实多步流程的集成测试 + 单元测试——让测试先「红」（因未实现而失败），再写实现直到它「绿」；测试是可执行的规范，实现是让规范通过的最小代码。** 这不是新增第 N 条，是「让问题都在测试解决」「先找 harness 再执行」的**建设正向面**：调试面是 **repro-first**（先建复现集成测试再修——本仓 dogfood 铁律，实证本会话 #2441 label 振荡先建多-pass 复现测试再定「修/不修」）；建设面就是 **test-first**（先建行为测试再写功能）。测试先行把「我要实现什么」从散文意图变成**机械可判的验收**，实现从此有唯一的绿灯目标——避免「写完再补测试」把测试沦为对既有实现的事后描述（过拟合实现、漏掉没想到的序列、甚至 vacuous 恒真）。
+**开发任何非平凡行为前，先把该行为的完整测试写出来——重放真实多步流程的集成测试 + 单元测试——让测试先「红」（因未实现而失败），再写实现直到它「绿」；测试是可执行的规范，实现是让规范通过的最小代码。** 这不是新增第 N 条，是「让问题都在测试解决」「先找 harness 再执行」的**建设正向面**：调试面是 **repro-first**（先建复现集成测试再修——本仓 live-operation 铁律，实证本会话 #2441 label 振荡先建多-pass 复现测试再定「修/不修」）；建设面就是 **test-first**（先建行为测试再写功能）。测试先行把「我要实现什么」从散文意图变成**机械可判的验收**，实现从此有唯一的绿灯目标——避免「写完再补测试」把测试沦为对既有实现的事后描述（过拟合实现、漏掉没想到的序列、甚至 vacuous 恒真）。
 
 机械要点（与既有 doctrine 同构，逐条接，不重复）：
 - **「完整」= 集成 + 单元齐备，且集成测试必须重放真实多步序列**：按「静态分析抓不到状态机 bug」节——单元测试验单点 / 单步，但**只有跨多步状态转移才浮现的 bug**（liveness / CAS / 版本-血统 / 自愈）只有「驱动状态机走完那条纠缠序列、断言它自愈到终态」的集成测试（`fkst.test.run_department` / run-graph 多步重放、交付**生产形态**事件如命名空间队列名）才抓得到。所以「先建完整测试」的**完整**指**两者齐备**，绝不只写单测就开工，也绝不用只验「每步各自合法」冒充「序列自愈」。
@@ -543,13 +543,13 @@ dogfood 中发现**运行的系统在流血**（storm / 资源耗尽 / churn / �
 
 **自驱系统永远会有 bug——目标从来不是「零 bug」（不可能），而是两件事：① 有持续发现问题的机制；② 把每个发现的问题做成 harness，让它那一整类在机械上不可能复发。** 有问题不可怕、不必焦虑或藏掖；真正的失败是「**没有机制发现它**」（它静默地烂在生产里）或「**发现了却只点修一次**」（同类必复发）。这条不是新增第 N 条，是把已有的 harness / liveness / competence / 实事求是 doctrine **统一成一个 bug 生命周期的心法：discover → root-cause → harness-ify**。
 
-- **① 发现机制（多条独立、专攻静默盲区）**：最危险的 bug 不是「报错的」（safety 网抓得到），而是**静默成功地做错事**（liveness 盲区）、**测试绿但生产红**（harness 保真盲区）、**plausible-but-wrong**（competence 盲区）、**叙事建在未核实前提上**（实事求是盲区）。所以发现机制必须**多条独立、各攻一类盲区**：dogfood loop（真实运营暴露 dark/卡死）、对抗 review（sshx 独立席位 + 跨模型 GPT Pro + user-as-oracle，找单视角漏的）、`fire_raiser`（测真 producer→consumer 接线而非注入理想 payload）、board / dev-push CI 扫（monitoring 盲区）、回源核实（叙事 vs 真值）。一条机制漏的，另一条独立机制兜——**冗余且异构是特性，不是浪费**。
+- **① 发现机制（多条独立、专攻静默盲区）**：最危险的 bug 不是「报错的」（safety 网抓得到），而是**静默成功地做错事**（liveness 盲区）、**测试绿但生产红**（harness 保真盲区）、**plausible-but-wrong**（competence 盲区）、**叙事建在未核实前提上**（实事求是盲区）。所以发现机制必须**多条独立、各攻一类盲区**：live-operation loop（真实运营暴露 dark/卡死）、对抗 review（sshx 独立席位 + 跨模型 GPT Pro + user-as-oracle，找单视角漏的）、`fire_raiser`（测真 producer→consumer 接线而非注入理想 payload）、board / dev-push CI 扫（monitoring 盲区）、回源核实（叙事 vs 真值）。一条机制漏的，另一条独立机制兜——**冗余且异构是特性，不是浪费**。
 - **② harness 化（把每个发现做成机械 PREVENT，不是点修）**：发现一个 bug，先过「**这是一次性，还是一个类？**」一次性 → 修了走人、不建 harness；一个类（三次法则 / 明显可泛化）→ **把它做成 harness**，按强度梯度落到 ④capability / ③runtime-guard / ②schema-conformance / ①scan-ratchet（见「Harness 的本质」），让那一类**构造上不可表示**或 **CI 直接红**。point-fix 让同类复发（实证：#1361 修复**自己又复发** namespaced 同类，被对抗 review 抓）；harness 化让那一**类**绝迹。
-- **本会话三个活证（每个 bug 都走 discover→harness-ify）**：审计 #1361 dark（dogfood loop + `fire_raiser` **发现** → producer-liveness conformance **harness 化**）· 修复又复发 namespaced harness-fidelity（对抗 review **发现** → `fire_raiser` 发真 namespaced payload **harness 化**）· dev-push CI 红（board / `gh run` 扫 **发现** → hermetic golden-master 等价测试 **harness 化**）。**三个 bug 都不可怕——都被某条机制发现了、都在做成 harness。**
+- **本会话三个活证（每个 bug 都走 discover→harness-ify）**：审计 #1361 dark（live-operation loop + `fire_raiser` **发现** → producer-liveness conformance **harness 化**）· 修复又复发 namespaced harness-fidelity（对抗 review **发现** → `fire_raiser` 发真 namespaced payload **harness 化**）· dev-push CI 红（board / `gh run` 扫 **发现** → hermetic golden-master 等价测试 **harness 化**）。**三个 bug 都不可怕——都被某条机制发现了、都在做成 harness。**
 
 **心法落地**：不为「这次有 bug」自责或掩盖；为「**这个 bug 有没有被某条机制发现**」「**发现了有没有做成 harness、让它那一类绝迹**」负责。发现机制越多越独立、harness 化越机械，系统在「bug 不可避免」下越逼近「**同类 bug 不复发**」。这正是「让问题都在测试解决」「美 = 真理探测器」「competence 轴」「活性 ⟂ 安全」「实事求是」的**同一张脸**：不追求无 bug，追求**发现 + 永久 harness 化**。新代码 / 新 review / 事故响应据此自检：「我用了哪条发现机制？这个发现是一次性还是一类？一类的话，我把它做成了哪一档 harness？」⟦AI:FKST⟧
 
-**静态分析抓不到状态机 bug：复杂状态转移的 harness 必须是「重放真实多步流程」的行为/集成测试，不能只靠静态分析。** 上一条「harness 化」有个易犯的默认——以为所有 harness 都能落成静态检查（`check_repo.py` / conformance ratchet）。但**静态分析与孤立单测在结构上抓不到「只有跨多步状态转移才浮现」的 bug**：它们验单点结构或单步行为，看不见「A 态经 B 事件到 C 态、再叠加一个 D 迟到事件」这条真实序列里的 liveness / CAS / 版本-血统漏洞。这类 bug **只有让状态机真的跑过那条纠缠序列的集成测试**才抓得到——这正是为什么 dogfood 反复暴露真 bug 而 CI 的静态门全绿（实证 #762：8 轮 review 每轮 tests 绿却逐层逼出更深的 liveness bug；本会话 `review_result` 在 tangled re-review 态上静默丢弃了一个已 reached 的 review 决定——单测覆盖了「head 变了就 `skip-stale(head-advanced)`」这一步，却没覆盖「stale-drop 之后 PR 会不会冻住、有没有 fresh review 对当前 head 自愈并 apply」这条完整 liveness 链，于是复杂态下 re-review 无声失败）。**规则**：每个 dogfood 暴露的复杂状态 bug，harness 化时**优先落成一个「驱动状态机走完那条纠缠序列、断言它自愈到终态」的集成测试**（`fkst.test.run_department` / run-graph 多步重放），而不是只加一条断言「每一步各自合法」的单测或静态检查——**单步合法 ≠ 序列自愈**。分工固定、不可互替：静态门（check_repo / conformance）便宜且 scale-free，负责结构违例（裸名、旁路写法、缺 saga 行、god-state），但对**跨步状态语义结构性失明**；行为/集成测试贵但能跑真实序列，负责 liveness / 状态机 / 恢复语义。二者互补——**「用 dogfood 这样跑真实多步状态的方式检测问题，不要只靠静态分析」即此**。⟦AI:FKST⟧
+**静态分析抓不到状态机 bug：复杂状态转移的 harness 必须是「重放真实多步流程」的行为/集成测试，不能只靠静态分析。** 上一条「harness 化」有个易犯的默认——以为所有 harness 都能落成静态检查（`check_repo.py` / conformance ratchet）。但**静态分析与孤立单测在结构上抓不到「只有跨多步状态转移才浮现」的 bug**：它们验单点结构或单步行为，看不见「A 态经 B 事件到 C 态、再叠加一个 D 迟到事件」这条真实序列里的 liveness / CAS / 版本-血统漏洞。这类 bug **只有让状态机真的跑过那条纠缠序列的集成测试**才抓得到——这正是为什么 live operation 反复暴露真 bug 而 CI 的静态门全绿（实证 #762：8 轮 review 每轮 tests 绿却逐层逼出更深的 liveness bug；本会话 `review_result` 在 tangled re-review 态上静默丢弃了一个已 reached 的 review 决定——单测覆盖了「head 变了就 `skip-stale(head-advanced)`」这一步，却没覆盖「stale-drop 之后 PR 会不会冻住、有没有 fresh review 对当前 head 自愈并 apply」这条完整 liveness 链，于是复杂态下 re-review 无声失败）。**规则**：每个 live-operation 暴露的复杂状态 bug，harness 化时**优先落成一个「驱动状态机走完那条纠缠序列、断言它自愈到终态」的集成测试**（`fkst.test.run_department` / run-graph 多步重放），而不是只加一条断言「每一步各自合法」的单测或静态检查——**单步合法 ≠ 序列自愈**。分工固定、不可互替：静态门（check_repo / conformance）便宜且 scale-free，负责结构违例（裸名、旁路写法、缺 saga 行、god-state），但对**跨步状态语义结构性失明**；行为/集成测试贵但能跑真实序列，负责 liveness / 状态机 / 恢复语义。二者互补——**「用 live operation 这样跑真实多步状态的方式检测问题，不要只靠静态分析」即此**。⟦AI:FKST⟧
 
 ## 错误五花八门无法穷尽，但「是错误」一望可判：出错即建「兜底清理制度」+ 建 harness（检测廉·双管齐下·统一既有 doctrine）
 
@@ -598,7 +598,7 @@ burns cycles, invites churn, and buries the real signal under noise. The cure is
 - **Interim goal/loop firings are terse defers**, not fabricated work: name the wait
   and the event it watches, then yield. Do not invent motion to look productive.
 
-This is the operational face of «don't over-act» and the dogfood «if state is
+This is the operational face of «don't over-act» and the live-operation «if state is
 advancing, observe — don't intervene»: when the next step is gated on an event you do
 not control, arm the wait and let the event drive you, rather than manufacturing
 motion. A goal being unsatisfied is not a license to busy-spin; it is a reason to make
@@ -617,7 +617,7 @@ the one genuine increment available now, then wait correctly. ⟦AI:FKST⟧
 - **可删除性**：任何模式都要能被一个更直白的函数实现替换；如果删除模式后代码更短、更清楚、测试不变，优先删除模式。
 - **门控即管线**：自动化系统里的"门控/决策"用一个 codex 判断管线 + event 流转开关表达，**不是人逐 event 加 label 授权**。人只控制哪些判断管线在跑（event 流转拓扑），不逐条介入：`auto 关 = 把 event 丢死信/丢掉`（没管线处理→不流转），`auto 开 = 一个管线处理它`（codex 判断决定流转并写 forge-guarded marker）。需要"可否/该不该自动处理"的判断时，新增一个保守的 codex 判断 dept（如 issue intake 判断哪些 issue 可自动开发），而不是留一个人工 label gate。可逆/危险运行姿态用 host 环境事实表达（如 `FKST_GITHUB_WRITE` 的 dry-run vs real），不在代码里留模式分叉。FKST 本就是全自动系统：默认就是 codex 判断 + 管线流转，不为"人来把关"保留人工授权门控。
 
-## 构建 / 测试 / dogfood
+## 构建 / 测试 / live operation
 
 本仓是 Bash + Python standard-library-only 项目，无第三方 runtime dependency、无编译步骤。完整测试命令：
 
@@ -633,7 +633,7 @@ python3 scan/zero_target_names.py --name fkst-packages --name fkst-substrate --n
 
 本次实跑：完整测试命令通过；zero-target-name gate exit 0。另一次 `python3 -m unittest discover -s tests -p '*test.py'` 收集 0 tests 并 exit 5，不是本仓测试命令，不得把它当绿灯。
 
-行为验收以 `acceptance/fkst-ops-compare` 的隔离 deterministic fixture matrix 为准；五 action 的每个 required cell 都必须存在并通过。N+1 acceptance 要证明只在独立 deployment fixture 增加 declaration/lock 即可调用五 action，且 fkst-ops tree hash 不变。`doctor` 走独立 deterministic closed acceptance，不拿五 action 等价测试代替。真实 deployment dogfood/cutover 必须经 pinned bootstrap、preflight、candidate acceptance、atomic pointer switch 与 post-switch smoke；不得用全局 unpinned entry 或 live-network fixture 冒充验收。
+行为验收以 `acceptance/fkst-ops-compare` 的隔离 deterministic fixture matrix 为准；五 action 的每个 required cell 都必须存在并通过。N+1 acceptance 要证明只在独立 deployment fixture 增加 declaration/lock 即可调用五 action，且 fkst-ops tree hash 不变。`doctor` 走独立 deterministic closed acceptance，不拿五 action 等价测试代替。真实 deployment operation/cutover 必须经 pinned bootstrap、preflight、candidate acceptance、atomic pointer switch 与 post-switch smoke；不得用全局 unpinned entry 或 live-network fixture 冒充验收。
 
 ## Git 提交/分支规范
 

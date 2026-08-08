@@ -30,7 +30,7 @@ class BootstrapTest(unittest.TestCase):
         (self.source / "schema").mkdir()
         shutil.copy2(ROOT / "bin" / "fkst-ops", self.source / "bin" / "fkst-ops")
         shutil.copy2(SOURCE / "canonical_tree.py", self.source / "bootstrap" / "canonical_tree.py")
-        runner = self.source / "ops" / "dogfood.sh"
+        runner = self.source / "ops" / "deployment_operator.sh"
         runner.write_text(
             "#!/usr/bin/env bash\n"
             "printf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n"
@@ -105,14 +105,14 @@ class BootstrapTest(unittest.TestCase):
         run("git", "checkout", "-q", revision, cwd=destination)
 
     def install_nul_argv_recorder(self):
-        runner = self.source / "ops" / "dogfood.sh"
+        runner = self.source / "ops" / "deployment_operator.sh"
         runner.write_text(
             "#!/usr/bin/env bash\n"
             "printf '%s\\0' \"$@\" > \"$CALL_LOG\"\n",
             encoding="utf-8",
         )
-        run("git", "add", "ops/dogfood.sh", cwd=self.source)
-        run("git", "commit", "-qm", "record exact dogfood argv", cwd=self.source)
+        run("git", "add", "ops/deployment_operator.sh", cwd=self.source)
+        run("git", "commit", "-qm", "record exact deployment operator argv", cwd=self.source)
         revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
         tree = run(
             "python3", str(SOURCE / "canonical_tree.py"), str(self.source), revision, cwd=self.root
