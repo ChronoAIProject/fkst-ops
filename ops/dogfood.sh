@@ -17,7 +17,7 @@
 #   ./dogfood.sh start   [name|all]            launch via host-run contract
 #   ./dogfood.sh stop    [name|all]            SIGKILL (releases the redb lock)
 #   ./dogfood.sh restart [name|all]            sync run checkouts to origin/<integration> + relaunch (unconditional)
-#   ./dogfood.sh sync    [name|all]            auto-deploy: ff pinned operator checkouts to dev, rebuild BIN,
+#   ./dogfood.sh sync    [name|all]            auto-deploy: advance declared source checkouts, rebuild BIN,
 #                                              and restart ONLY supervises whose running code is a real
 #                                              package/engine change (skill/docs-only skew is left running)
 #   ./dogfood.sh logs    [name] [lines]        tail the latest log (default first declaration, 40 lines)
@@ -494,48 +494,22 @@ _proc_stale() {
   echo current
 }
 
-_sync_checkout() {
-  local co="$1" before after
-  { [ -n "$co" ] && git -C "$co" rev-parse --git-dir >/dev/null 2>&1; } || { echo "  ${co:-?}: not a git checkout (skip)"; return; }
-  git -C "$co" fetch origin "$UPSTREAM_BRANCH" -q 2>/dev/null
-  before=$(git -C "$co" rev-parse --short HEAD 2>/dev/null)
-  if [ -n "$(git -C "$co" status --porcelain 2>/dev/null)" ]; then
-    echo "  $co: DIRTY — not synced (a pinned checkout must be clean; make changes in a worktree)"; return
-  fi
-  if ! git -C "$co" merge-base --is-ancestor HEAD "origin/$UPSTREAM_BRANCH" 2>/dev/null; then
-    echo "  $co: $before not an ancestor of origin/$UPSTREAM_BRANCH — skip (feature branch / diverged; not a pinned dev mirror)"; return
-  fi
-  # Verify the end state. A failed reset leaves HEAD unmoved, which otherwise looks
-  # identical to an already-current checkout when only before and after are compared.
-  local reset_err reset_rc target
-  reset_err=$(git -C "$co" reset -q --hard "origin/$UPSTREAM_BRANCH" 2>&1); reset_rc=$?
-  after=$(git -C "$co" rev-parse --short HEAD 2>/dev/null)
-  target=$(git -C "$co" rev-parse --short "origin/$UPSTREAM_BRANCH" 2>/dev/null)
-  if [ "$reset_rc" -ne 0 ] || [ "$after" != "$target" ]; then
-    echo "  $co: SYNC FAILED -- still at $after, origin/$UPSTREAM_BRANCH is $target (rc=$reset_rc)${reset_err:+ -- $reset_err}"
-    echo "  $co: the pinned checkout is STALE; skill/tooling loaded from it may be out of date"
-    return 1
-  fi
-  [ "$before" = "$after" ] && echo "  $co: current ($after)" || echo "  $co: $before -> $after"
-}
-
-# cmd_sync: keep everything current in one call. Fast-forward the pinned operator checkouts (the one
-# this skill+dogfood.sh load from, and the substrate BIN source) to origin/dev, rebuild the BIN if
-# the engine moved, then AUTO-RESTART only the supervises whose RUNNING code is a real package or
+# cmd_sync: keep deployment-owned sources current in one call. The mechanism checkout is immutable:
+# its version is the deployment lock pin. Advance target/platform run branches, update and rebuild
+# each declared engine through its provider, then AUTO-RESTART only supervises whose RUNNING code is a real package or
 # engine change (pkg-stale/engine-stale). Skill/docs-only skew and already-current processes are
 # left running — a restart would only churn in-flight codex for no code change.
 cmd_sync() {
-  echo "operator checkouts -> origin/$UPSTREAM_BRANCH:"
-  local co_failed=0
-  _sync_checkout "$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null)" || co_failed=1  # repo this skill lives in
-  echo "engine BIN:"; bin_ensure_fresh | sed 's/^/  /'
-  echo "supervises (auto-restart only on real code change):"
   local n st failed=0
   for n in $(expand "${1:-all}"); do
-    cfg "$n" || continue
+    cfg "$n" || { failed=1; continue; }
+    echo "[$n] deployment source checkouts -> origin/$INTEGRATION_BRANCH:"
     derive_devloop_pkgs_from_workspace "$n" || { echo "  $n: config-error"; failed=1; continue; }
     ensure_integration_caught_up "$PKGSRC"                              # keep run branch (integration) >= dev so operator fixes deploy
     [ "$HOST" != "$PKGSRC" ] && ensure_integration_caught_up "$HOST"
+    echo "[$n] engine BIN:"
+    bin_ensure_fresh | sed 's/^/  /' || { failed=1; continue; }
+    echo "[$n] supervise:"
     st=$(_proc_stale "$n")
     case "$st" in
       pkg-stale|engine-stale) echo "  $n: $st -> auto-restart"; restart_one "$n" | sed 's/^/    /' || failed=1 ;;
@@ -543,7 +517,6 @@ cmd_sync() {
       *)                      echo "  $n: $st (no restart needed)" ;;
     esac
   done
-  [ "$co_failed" -eq 0 ] || failed=1
   return "$failed"
 }
 

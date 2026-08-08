@@ -17,6 +17,34 @@ MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
 class OperatorLiftTest(unittest.TestCase):
+    def test_sync_never_touches_hydrated_mechanism_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pinned = Path(directory) / ".fkst" / "run" / "fkst-ops" / "checkouts" / ("a" * 40)
+            (pinned / "ops").mkdir(parents=True)
+            head = pinned / "HEAD"
+            head.write_text("a" * 40, encoding="ascii")
+            command = f'''set -uo pipefail
+eval "$(sed -n '/^cmd_sync()/,/^}}/p' "{OPERATOR}")"
+expand() {{ printf 'deployment-a\\n'; }}
+cfg() {{
+  UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
+  HOST=/target; PKGSRC=/platform; SUBSTRATE_SRC=/engine; BIN=/engine/bin
+  ENGINE_PROVIDER=/provider; ENGINE_CONTRACT=contract; ENGINE_PROVIDER_CONFIGURATION='{{}}'
+}}
+derive_devloop_pkgs_from_workspace() {{ :; }}
+ensure_integration_caught_up() {{ :; }}
+bin_ensure_fresh() {{ echo built; }}
+_proc_stale() {{ echo current; }}
+restart_one() {{ :; }}
+cmd_sync all
+'''
+            result = subprocess.run(
+                ["bash", "-c", command], text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual("a" * 40, head.read_text(encoding="ascii"))
+            self.assertNotIn("operator checkouts", result.stdout)
+
     def test_engine_provider_succeeds_through_dogfood_caller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

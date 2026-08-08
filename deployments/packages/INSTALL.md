@@ -22,7 +22,10 @@ Before first use, the owner must:
 5. Run the pinned validator before any operator action:
 
    ```sh
-   <fkst-ops-checkout>/bin/fkst-ops --deployment-dir <deployment-repository> --declaration <deployment-repository>/deployment.toml --machine-profile <deployment-repository>/.fkst/machine-profile.toml --lock <deployment-repository>/fkst.lock status
+   <fkst-ops-checkout>/bin/fkst-ops --declaration <deployment-repository>/deployment.toml --machine-profile <deployment-repository>/.fkst/machine-profile.toml status
    ```
 
-Invoke the deployment with the exact configuration-only owner form above. The entry verifies whether its physical checkout matches the mechanism pin and otherwise hydrates and re-executes the pinned `fkst-ops` with the original arguments.
+Invoke the deployment with the exact configuration-only owner form above. The entry finds the
+deployment root by walking upward from the declaration to the deployment lockfile, verifies whether its physical
+checkout matches the mechanism pin, and otherwise hydrates and re-executes the pinned `fkst-ops`
+with the original arguments.

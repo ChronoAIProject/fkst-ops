@@ -167,6 +167,39 @@ class BootstrapTest(unittest.TestCase):
         self.assertFalse(self.cache.exists())
         self.assertEqual(["status"], self.log.read_text(encoding="utf-8").splitlines())
 
+    def test_omitted_deployment_dir_finds_nearest_lock_root(self):
+        declaration = self.deployment / "deployments" / "packages.toml"
+        declaration.parent.mkdir()
+        declaration.write_text("", encoding="utf-8")
+        cache = self.deployment / ".fkst" / "run" / "fkst-ops"
+        env = os.environ.copy()
+        env.update(CALL_LOG=str(self.log))
+
+        result = run(
+            "bash", str(ROOT / "bin" / "fkst-ops"), "--declaration", str(declaration),
+            "--machine-config", "machine.toml", "status", cwd=self.root, check=False, env=env,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue((cache / "current").is_symlink())
+        self.assertFalse((declaration.parent / ".fkst").exists())
+
+    def test_omitted_deployment_dir_without_ancestor_lock_fails_closed(self):
+        outside = self.root / "outside" / "deployments" / "packages.toml"
+        outside.parent.mkdir(parents=True)
+        outside.write_text("", encoding="utf-8")
+        env = os.environ.copy()
+        env.update(CALL_LOG=str(self.log))
+
+        result = run(
+            "bash", str(ROOT / "bin" / "fkst-ops"), "--declaration", str(outside),
+            "--machine-config", "machine.toml", "status", cwd=self.root, check=False, env=env,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("no deployment root containing fkst.lock found", result.stderr)
+        self.assertFalse((outside.parent / ".fkst").exists())
+
     def test_stale_current_hydrates_and_reexecutes_new_lock_pin(self):
         self.assertEqual(0, self.invoke().returncode)
         old_target = (self.cache / "current").resolve()

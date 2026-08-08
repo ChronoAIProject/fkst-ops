@@ -22,7 +22,20 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$declaration" ] && [ -n "$machine" ] || { usage; exit 2; }
-[ -n "$deployment_root" ] || deployment_root="$(dirname "$declaration")"
+if [ -z "$deployment_root" ]; then
+  deployment_root="$(cd "$(dirname "$declaration")" 2>/dev/null && pwd)" || {
+    echo "error: cannot locate declaration directory for $declaration" >&2
+    exit 1
+  }
+  while [ ! -f "$deployment_root/fkst.lock" ]; do
+    parent="$(dirname "$deployment_root")"
+    if [ "$parent" = "$deployment_root" ]; then
+      echo "error: no deployment root containing fkst.lock found above declaration $declaration" >&2
+      exit 1
+    fi
+    deployment_root="$parent"
+  done
+fi
 deployment_root="$(cd "$deployment_root" && pwd)"
 [ -n "$lock" ] || lock="${FKST_OPS_LOCK_FILE:-$deployment_root/fkst.lock}"
 
