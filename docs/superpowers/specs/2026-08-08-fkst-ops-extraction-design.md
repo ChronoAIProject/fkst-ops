@@ -175,7 +175,8 @@ launch arguments, not additional operator inputs.
 | `BIN` | discovered/derived | Resolved from a declared logical binary through the machine profile |
 | `FKST_GITHUB_REPO` | declared parameter | `deployment.target_identity` |
 | `FKST_GITHUB_WRITE` | host fact | Per-run reversible operator posture; validated as `0` or `1` |
-| `GH_TOKEN` | discovered host fact | Read only after the authenticated `gh` session reports exactly one active account whose login matches the declared bot and whose credential source is `GH_TOKEN`; injected but never persisted or logged. GitHub App installation tokens cannot be identified through `/user`, and `/app` requires an app JWT. |
+| `FKST_GITHUB_CREDENTIAL_HELPER` | discovered host fact | Absolute executable path, supplied to the cadence service environment. Each invocation prints exactly one JSON object containing `login` and a newly issued `token`. The helper path is not a secret; its output is. The output is held in memory only and is never placed in a declaration, artifact, log, status field, or process argument. |
+| `GH_TOKEN` | ephemeral per-call fact | Set only in the real `gh` child's environment after the helper's returned login equals the declared bot. It is never inherited by supervise and is replaced on every GitHub call. |
 | `FKST_GITHUB_WRITER_LOGIN` | discovered/derived | Login fact parsed from the authenticated CLI session's active-account report together with its credential source; recorded without the credential in the supervise startup log and reported by `status` |
 | `FKST_GITHUB_CLAIM_MODE` | declared parameter | `deployment.claim_posture.mode` |
 | `FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE` | declared parameter | Boolean `deployment.claim_posture.label_exclusive`, encoded as `0` or `1` |
