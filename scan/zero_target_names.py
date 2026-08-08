@@ -13,6 +13,7 @@ from pathlib import Path
 # nothing. Executable source is never excluded on that ground.
 EXCLUDED_PATHS = frozenset({
     "CLAUDE.md",
+    "README.md",
     "docs/superpowers/specs/2026-08-08-fkst-ops-extraction-design.md",
     "tests/schema/fixtures/fkst.lock",
     "tests/schema/fixtures/machine-profile.toml",
@@ -32,13 +33,29 @@ EXCLUDED_PATHS = frozenset({
 
 
 def tracked_paths(root: Path) -> list[str]:
-    output = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    ).stdout
-    return [value.decode("utf-8", "surrogateescape") for value in output.split(b"\0") if value]
+    # The input set is everything the next commit would carry: files already tracked, plus files
+    # staged for addition. Scanning only tracked files makes a pre-commit run structurally
+    # misleading — a newly written file is invisible until it is staged, so the gate reports green
+    # and then turns red on the very commit that was just checked. Incident of record: a repository
+    # guidance document and later a README each passed this scan before `git add` and failed it
+    # after.
+    paths: list[str] = []
+    seen: set[str] = set()
+    for args in (["ls-files", "-z"], ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"]):
+        output = subprocess.run(
+            ["git", "-C", str(root), *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+        for value in output.split(b"\0"):
+            if not value:
+                continue
+            decoded = value.decode("utf-8", "surrogateescape")
+            if decoded not in seen:
+                seen.add(decoded)
+                paths.append(decoded)
+    return paths
 
 
 def scan(root: Path, names: list[str], requested_exclusions: set[str]) -> list[str]:
