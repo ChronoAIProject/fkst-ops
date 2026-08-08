@@ -44,6 +44,7 @@ wait_supervise_ready() {{
   while [ ! -f "$CAPTURE" ] && [ "$attempts" -lt 50 ]; do sleep 0.1; attempts=$((attempts + 1)); done
   [ -f "$CAPTURE" ]
 }}
+authorize_github_writer() {{ GITHUB_TOKEN_DISCOVERED=fixture-secret-token; GITHUB_WRITER_LOGIN="$BOT"; }}
 clean_stale_runtime_worktrees() {{ :; }}
 engine_panic_count() {{ echo 0; }}
 REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
@@ -174,7 +175,8 @@ bin_ensure_fresh
         self.assertNotIn("  doctor)", source)
         self.assertGreaterEqual(source.count("require_engine_binary || return 1"), 3)
         self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    python3 "$_repo_root/board/board.py"', source)
-        self.assertIn('require_engine_binary || return 1\n  BIN="$BIN" FKST_GITHUB_REPO=', source)
+        self.assertIn('require_engine_binary || return 1\n  printf \'FKST_GITHUB_WRITE=', source)
+        self.assertIn('BIN="$BIN" GH_TOKEN="$GITHUB_TOKEN_DISCOVERED" FKST_GITHUB_REPO=', source)
 
     def test_write_posture_is_a_host_fact_and_defaults_to_non_writing(self) -> None:
         command = f'''eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
@@ -215,11 +217,87 @@ github_write_posture
         self.assertEqual(captured["FKST_GITHUB_CLAIM_MODE"], "label")
         self.assertEqual(captured["FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE"], "0")
 
+    def test_launch_fails_closed_when_token_identity_differs_from_declared_bot(self) -> None:
+        command = f'''eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
+discover_github_writer() {{ GITHUB_TOKEN_DISCOVERED=fixture-secret-token; GITHUB_WRITER_LOGIN=human-writer; }}
+BOT=declared-bot
+authorize_github_writer
+'''
+        result = subprocess.run(["bash", "-c", command], text=True, capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("human-writer", result.stderr)
+        self.assertIn("declared-bot", result.stderr)
+        self.assertIn("refusing to launch", result.stderr)
+        self.assertNotIn("fixture-secret-token", result.stdout + result.stderr)
+
+    def test_gate_admits_matching_app_token_identity(self) -> None:
+        command = f'''eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
+discover_github_writer() {{ GITHUB_TOKEN_DISCOVERED=fixture-secret-token; GITHUB_WRITER_LOGIN='fkst-loning-s-macbook-m5[bot]'; GITHUB_WRITER_SOURCE=GH_TOKEN; }}
+BOT='fkst-loning-s-macbook-m5[bot]'
+authorize_github_writer
+'''
+        result = subprocess.run(["bash", "-c", command], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_active_account_resolution_fails_closed_for_ambiguous_report(self) -> None:
+        command = f'''eval "$(sed -n '/^resolve_github_writer()/,/^}}/p' "{OPERATOR}")"
+gh() {{ cat <<'EOF'
+github.com
+  ✓ Logged in to github.com account first[bot] (GH_TOKEN)
+  - Active account: true
+  ✓ Logged in to github.com account second[bot] (GH_TOKEN)
+  - Active account: true
+EOF
+}}
+resolve_github_writer
+'''
+        result = subprocess.run(["bash", "-c", command], text=True, capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ambiguous or not parseable", result.stderr)
+
+    def test_gate_refuses_keyring_credential_source(self) -> None:
+        command = f'''eval "$(sed -n '/^discover_github_writer()/,/^}}/p' "{OPERATOR}")"
+resolve_github_writer() {{ GITHUB_WRITER_LOGIN=declared-bot; GITHUB_WRITER_SOURCE=keyring; }}
+discover_github_writer
+'''
+        result = subprocess.run(["bash", "-c", command], text=True, capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("keyring", result.stderr)
+        self.assertIn("GH_TOKEN", result.stderr)
+
+    def test_discovered_token_is_not_logged_reported_or_written_to_artifacts(self) -> None:
+        self._capture_launch_environment("1")
+        token = "fixture-secret-token"
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "supervise.log"
+            log.write_text(
+                "FKST_GITHUB_WRITE=1 FKST_GITHUB_WRITER_LOGIN=resolved-bot "
+                "FKST_GITHUB_CLAIM_MODE=label FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=0\n",
+                encoding="ascii",
+            )
+            command = f'''eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
+cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
+pidof_df() {{ echo 123; }}; latest_log() {{ echo "$LOG"; }}
+fmt_uptime() {{ echo 1m00s; }}; engine_panic_count() {{ echo 0; }}
+ps() {{ echo 00:01:00; }}; git() {{ echo abcdef123456; }}
+status_one fixture
+'''
+            result = subprocess.run(
+                ["bash", "-c", command], env={**os.environ, "LOG": str(log), "GH_TOKEN": token},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(token, result.stdout + result.stderr)
+            self.assertNotIn(token, log.read_text(encoding="ascii"))
+            for artifact in Path(directory).rglob("*"):
+                if artifact.is_file():
+                    self.assertNotIn(token, artifact.read_text(encoding="utf-8"))
+
     def test_status_reports_the_running_launch_write_posture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "supervise.log"
             log.write_text(
-                "FKST_GITHUB_WRITE=1 FKST_GITHUB_CLAIM_MODE=label "
+                "FKST_GITHUB_WRITE=1 FKST_GITHUB_WRITER_LOGIN=resolved-bot FKST_GITHUB_CLAIM_MODE=label "
                 "FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=0\nlast event\n",
                 encoding="ascii",
             )
@@ -239,6 +317,7 @@ status_one fixture
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("write=1", result.stdout)
+            self.assertIn("writer=resolved-bot", result.stdout)
             self.assertIn("claim=label", result.stdout)
             self.assertIn("label-exclusive=0", result.stdout)
 

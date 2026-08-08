@@ -16,10 +16,11 @@ committed launchd template and writes the generated LaunchAgent. There is no ope
 plist literal.
 
 The same command generates `.fkst/machine-profile.toml`. Logical root and binary names map under
-the conventional `$HOME/.fkst/machine` base, the bot login comes from `gh api user`, managed bot
-sets come from each declaration's `managed_bot_logins`, and integration branches remain explicit
-declaration parameters. It invokes the unchanged real validator for every declaration before it
-writes the LaunchAgent.
+the conventional `$HOME/.fkst/machine` base, the bot login comes from exactly one active GitHub CLI
+account backed by `GH_TOKEN`, managed bot sets come from each declaration's `managed_bot_logins`,
+and integration branches remain explicit declaration parameters. It invokes the unchanged real
+validator for every declaration before it writes the LaunchAgent. User and app API endpoints are
+not identity sources: an installation token is not a user, while `/app` requires an app JWT.
 
 The deployment repository path is the only genuinely required input: discovery cannot know which
 of potentially many deployment repositories the operator intends to regenerate. The derived files

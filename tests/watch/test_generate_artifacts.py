@@ -51,7 +51,13 @@ def test_regenerates_valid_profile_and_declared_plist_interval(tmp_path: Path) -
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     gh = fake_bin / "gh"
-    gh.write_text("#!/bin/sh\nprintf '%s\\n' fixture-bot\n", encoding="ascii")
+    gh.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'github.com' "
+        "'  + Logged in to github.com account fixture-bot (GH_TOKEN)' "
+        "'  - Active account: true'\n",
+        encoding="ascii",
+    )
     gh.chmod(0o755)
     environment = {**os.environ, "HOME": str(home), "PATH": f"{fake_bin}:{os.environ['PATH']}"}
 

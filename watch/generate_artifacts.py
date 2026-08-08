@@ -8,6 +8,7 @@ from html import escape
 import os
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import sys
 import tomllib
@@ -42,15 +43,30 @@ def _load_declarations(repository: Path) -> list[tuple[Path, dict[str, Any]]]:
 
 def _github_login() -> str:
     result = subprocess.run(
-        ["gh", "api", "user", "--jq", ".login"],
+        ["gh", "auth", "status", "--active", "--hostname", "github.com"],
         text=True,
         capture_output=True,
         check=False,
     )
-    login = result.stdout.strip()
-    if result.returncode or not login or "\n" in login:
-        detail = result.stderr.strip() or "authenticated session returned no login"
-        raise ValueError(f"cannot discover GitHub CLI identity: {detail}")
+    report = result.stdout + result.stderr
+    accounts = []
+    for line in report.splitlines():
+        match = re.match(
+            r"^\s*\S Logged in to github[.]com account (.+) \(([^()]*)\)\s*$", line
+        )
+        if match:
+            accounts.append(match.groups())
+    active = [
+        line for line in report.splitlines()
+        if re.match(r"^\s*- Active account: true\s*$", line)
+    ]
+    if result.returncode or len(accounts) != 1 or len(active) != 1:
+        raise ValueError("cannot resolve exactly one active GitHub CLI identity")
+    login, source = accounts[0]
+    if not login or not source or source != "GH_TOKEN":
+        raise ValueError(
+            f"active GitHub CLI credential source is {source or '<empty>'}, expected GH_TOKEN"
+        )
     return login
 
 

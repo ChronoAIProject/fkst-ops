@@ -141,6 +141,70 @@ github_write_posture() {
   esac
 }
 
+resolve_github_writer() {
+  local auth_report resolved
+  auth_report="$(gh auth status --active --hostname github.com 2>&1)" || {
+    echo "error: cannot determine the active GitHub CLI account" >&2
+    return 1
+  }
+  resolved="$(printf '%s\n' "$auth_report" | python3 -c '
+import re, sys
+lines = sys.stdin.read().splitlines()
+accounts = []
+for line in lines:
+    match = re.match(r"^\s*[✓X] Logged in to github[.]com account (.+) \(([^()]*)\)\s*$", line)
+    if match:
+        accounts.append(match.groups())
+active = [line for line in lines if re.match(r"^\s*- Active account: true\s*$", line)]
+if len(accounts) != 1 or len(active) != 1:
+    raise SystemExit(1)
+login, source = accounts[0]
+if not login or not source or "\t" in login or "\t" in source:
+    raise SystemExit(1)
+print(login + "\t" + source)
+')" || {
+    echo "error: active GitHub CLI account report is ambiguous or not parseable" >&2
+    return 1
+  }
+  IFS="$(printf '\t')" read -r GITHUB_WRITER_LOGIN GITHUB_WRITER_SOURCE <<EOF
+$resolved
+EOF
+  [ -n "$GITHUB_WRITER_LOGIN" ] && [ -n "$GITHUB_WRITER_SOURCE" ] || {
+    echo "error: active GitHub CLI account report did not resolve an identity and credential source" >&2
+    return 1
+  }
+}
+
+discover_github_writer() {
+  resolve_github_writer || return 1
+  # An installation token represents an app installation, not a user. /user
+  # rejects it, while /app requires an app JWT; neither endpoint can name the
+  # writing identity. The CLI's active-account report supplies login and source.
+  if [ "$GITHUB_WRITER_SOURCE" != GH_TOKEN ]; then
+    echo "error: GitHub writer credential source is '$GITHUB_WRITER_SOURCE', expected 'GH_TOKEN'; refusing to launch" >&2
+    return 1
+  fi
+  # Credentials are host facts. Disable xtrace before acquisition so even a caller
+  # that enabled it cannot turn the command-substitution result into a diagnostic.
+  set +x
+  GITHUB_TOKEN_DISCOVERED="$(gh auth token 2>/dev/null)" || {
+    echo "error: cannot discover a GitHub token from the authenticated gh session" >&2
+    return 1
+  }
+  [ -n "$GITHUB_TOKEN_DISCOVERED" ] || {
+    echo "error: authenticated gh session returned an empty GitHub token" >&2
+    return 1
+  }
+}
+
+authorize_github_writer() {
+  discover_github_writer || return 1
+  if [ -z "$BOT" ] || [ "$GITHUB_WRITER_LOGIN" != "$BOT" ]; then
+    echo "error: GitHub writer identity mismatch: token authenticates as '$GITHUB_WRITER_LOGIN', declared bot login is '${BOT:-<empty>}'; refusing to launch" >&2
+    return 1
+  fi
+}
+
 # Sync a dogfood RUN checkout (behavior PKGSRC + target HOST) to the machine's
 # INTEGRATION_BRANCH — the dogfood runs its own pre-rollup code (feature ->
 # integration-<device> -> rollup -> dev), so it is the live integration test of
@@ -347,6 +411,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   [ -n "$LOCAL_PKGS" ] && args+=(--host-packages "$LOCAL_PKGS")
   [ "$restart" = "1" ] && args+=(--restart)
   write_posture=$(github_write_posture) || return 1
+  authorize_github_writer || return 1
   managed_bot_logins=$(printf '%s' "$MANAGED_BOT_LOGINS" | python3 -c \
     'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
 
@@ -363,14 +428,16 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   # below stays the REAL supervise pid and the env-prefix stays scoped to the launch; a failed setsid
   # raises OSError → nonzero exit → the readiness wait reports the launch failure loud (self-verifying).
   require_engine_binary || return 1
-  BIN="$BIN" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
+  printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s\n' \
+    "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
+  BIN="$BIN" GH_TOKEN="$GITHUB_TOKEN_DISCOVERED" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
     FKST_GITHUB_CLAIM_MODE="$CLAIM_MODE" FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE="$CLAIM_LABEL_EXCLUSIVE" \
     FKST_RATE_POOL_ROOT="$RATE_POOL" FKST_GITHUB_BOT_LOGIN="$BOT" \
     FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins" \
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
     FKST_WORKTREE_GC_REMOVE=1 \
-    nohup python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "${args[@]}" > "$log" 2>&1 &
+    nohup python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "${args[@]}" >> "$log" 2>&1 &
   local pid=$!
   ln -sf "$log" "$LOGDIR/${name}-sv.log"
   wait_supervise_ready "$pid" "$log"
@@ -473,7 +540,7 @@ status_one() {
   cfg "$1" || return 1
   local p log; p=$(pidof_df); log=$(latest_log "$1")
   if [ -z "$p" ]; then echo "[$1] STOPPED   (target $REPO)"; return 0; fi
-  local et panic last hv pv posture claim_mode claim_exclusive
+  local et panic last hv pv posture writer claim_mode claim_exclusive
   et=$(fmt_uptime "$(ps -o etime= -p $p 2>/dev/null | tr -d ' ')")
   panic=$(engine_panic_count "$log")
   last=$(tail -1 "$log" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-44)
@@ -481,11 +548,13 @@ status_one() {
   pv=$(git -C "$PKGSRC" rev-parse HEAD 2>/dev/null | cut -c1-8)
   posture=$(grep -aoE 'FKST_GITHUB_WRITE=(0|1)' "$log" 2>/dev/null | head -1 | cut -d= -f2)
   [ -n "$posture" ] || posture="unknown"
+  writer=$(grep -aoE 'FKST_GITHUB_WRITER_LOGIN=[A-Za-z0-9-]+' "$log" 2>/dev/null | head -1 | cut -d= -f2)
+  [ -n "$writer" ] || writer="unknown"
   claim_mode=$(grep -aoE 'FKST_GITHUB_CLAIM_MODE=(assignee|label)' "$log" 2>/dev/null | head -1 | cut -d= -f2)
   claim_exclusive=$(grep -aoE 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=(0|1)' "$log" 2>/dev/null | head -1 | cut -d= -f2)
   [ -n "$claim_mode" ] || claim_mode="unknown"
   [ -n "$claim_exclusive" ] || claim_exclusive="unknown"
-  printf '[%s] RUNNING pid %s up %s panic=%s write=%s claim=%s label-exclusive=%s | host@%s pkgs@%s | %s\n' "$1" "$p" "$et" "$panic" "$posture" "$claim_mode" "$claim_exclusive" "$hv" "$pv" "$last"
+  printf '[%s] RUNNING pid %s up %s panic=%s write=%s writer=%s claim=%s label-exclusive=%s | host@%s pkgs@%s | %s\n' "$1" "$p" "$et" "$panic" "$posture" "$writer" "$claim_mode" "$claim_exclusive" "$hv" "$pv" "$last"
 }
 
 # _proc_stale <name> -> freshness verdict of the RUNNING process vs origin/dev. Authoritative =
