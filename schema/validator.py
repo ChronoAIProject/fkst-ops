@@ -286,9 +286,18 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     for index, raw in enumerate(deployments):
         path = f"declaration.deployment[{index}]"
         dep = _table(raw, path)
-        _closed(dep, {"id", "target_identity", "managed_bot_logins", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
+        _closed(dep, {"id", "target_identity", "claim_posture", "managed_bot_logins", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
+        claim_path = path + ".claim_posture"
+        claim = _table(dep.get("claim_posture"), claim_path)
+        _closed(claim, {"mode", "label_exclusive"}, claim_path)
+        claim_mode = _string(claim, "mode", claim_path)
+        if claim_mode not in {"assignee", "label"}:
+            _fail(claim_path + ".mode", "must be assignee or label")
+        claim_label_exclusive = claim.get("label_exclusive")
+        if not isinstance(claim_label_exclusive, bool):
+            _fail(claim_path + ".label_exclusive", "must be a boolean")
         managed_bot_logins: list[str] = []
         if "managed_bot_logins" in dep:
             managed_bot_logins = _string_list(
@@ -354,7 +363,11 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                 _fail(path + ".providers." + field, f"binding kind must be {required_kind}")
             resolved_bindings[field] = copy.deepcopy(provider)
 
-        resolved: dict[str, Any] = {"id": identity, "target_identity": target}
+        resolved: dict[str, Any] = {
+            "id": identity,
+            "target_identity": target,
+            "claim_posture": {"mode": claim_mode, "label_exclusive": claim_label_exclusive},
+        }
         profile_block = dep.get("github_devloop_profile")
         if profile_block is not None:
             profile_path = path + ".github_devloop_profile"

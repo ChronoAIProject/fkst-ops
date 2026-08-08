@@ -27,7 +27,7 @@ class OperatorLiftTest(unittest.TestCase):
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json, os, time\n"
-                "keys = ['FKST_GITHUB_WRITE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS']\n"
+                "keys = ['FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS']\n"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps({key: os.environ.get(key) for key in keys}))\n"
                 "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
                 "print('MSG=event runtime running', flush=True)\n"
@@ -50,6 +50,7 @@ REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
 DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
 RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","peer-bot"]'
 UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
+CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
 LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'
 mkdir -p "$HOST" "$DUR" "$RUNTIME_ROOT" "$LOGDIR"
 launch_one fixture 0
@@ -209,10 +210,19 @@ github_write_posture
         self.assertEqual(captured["FKST_GITHUB_BOT_LOGIN"], "resolved-bot")
         self.assertEqual(captured["FKST_DEVLOOP_MANAGED_BOT_LOGINS"], "resolved-bot,peer-bot")
 
+    def test_declared_claim_posture_reaches_launched_process(self) -> None:
+        captured = self._capture_launch_environment(None)
+        self.assertEqual(captured["FKST_GITHUB_CLAIM_MODE"], "label")
+        self.assertEqual(captured["FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE"], "0")
+
     def test_status_reports_the_running_launch_write_posture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "supervise.log"
-            log.write_text("FKST_GITHUB_WRITE=1\nlast event\n", encoding="ascii")
+            log.write_text(
+                "FKST_GITHUB_WRITE=1 FKST_GITHUB_CLAIM_MODE=label "
+                "FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=0\nlast event\n",
+                encoding="ascii",
+            )
             command = f'''eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
 cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
 pidof_df() {{ echo 123; }}
@@ -229,6 +239,8 @@ status_one fixture
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("write=1", result.stdout)
+            self.assertIn("claim=label", result.stdout)
+            self.assertIn("label-exclusive=0", result.stdout)
 
     def test_platform_source_role_is_an_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

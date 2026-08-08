@@ -70,6 +70,10 @@ schema = "fkst.ops.deployment.v1"
 id = "<repository-local stable id>"
 target_identity = "<provider-specific opaque identity>"
 
+[deployment.claim_posture]
+mode = "<assignee|label>"
+label_exclusive = <true|false>
+
 [deployment.github_devloop_profile]
 version = "<required profile data version>"
 id = "<required deployment-selected profile id>"
@@ -122,6 +126,7 @@ configuration = { build_command = ["<executable>", "<argument>"] } # engine; boa
 | `schema` | Required closed schema identifier | New validation contract |
 | `deployment.id` | Required unique local identifier | Names log/runtime instances and selects entries at `dogfood.sh:108-109,368-369,822-833` |
 | `target_identity` | Required opaque provider identity | `REPO` drives launch and board queries at `dogfood.sh:396` and `dogfood_board.sh:69-100,173-197` |
+| `claim_posture` | Required closed deployment policy: `mode` is `assignee` or `label`; `label_exclusive` is boolean. Omission is invalid, so the process cannot inherit platform defaults | Exported at supervise launch and reported by `status` from the running process log |
 | `github_devloop_profile` | Optional profile block; when present, `version`, `id`, and `producer_binding` are required. `producer_binding` is the deployment's existing pinned `board.github-control` binding. The declaration supplies `version`, `id`, and deployment-owned values/references in opaque `data`; that binding supplies its contract-versioned producer-owned semantic data and owns interpretation | Owned outside `fkst-ops`; current defaults and exports are at `dogfood.sh:53-61,396-401` |
 | `sources.*.lock_ref` | Required repository-level content-pin reference; entries can be shared | New declaration contract; the working repository-level pin shape is `fkst-website/fkst.lock:1-10` |
 | `sources.*.git` | Resolved Git URL copied from the referenced repository-level lock entry; not declared separately | Restores corrupt run checkouts as implemented by `ensure_run_checkout` at `dogfood.sh:173` and invoked at `:466-467`; the lock URL shape is `fkst-website/fkst.lock:1-3` |
@@ -147,7 +152,43 @@ configuration = { build_command = ["<executable>", "<argument>"] } # engine; boa
 
 Each referenced lock entry contains a Git URL, `resolved.rev`, and `tree_sha256`; the website lock has this shape at `fkst-website/fkst.lock:1-10`. Library export hashes are optional (`fkst-website/fkst.lock:12-15`) and do not replace source-tree verification.
 
-### 4.1 Provider port contracts
+Write posture and claim posture intentionally have different owners. Write posture answers whether
+this host may mutate GitHub for this run; it is a reversible operational stance, so
+`FKST_GITHUB_WRITE` remains a host fact an operator may flip between launches. Claim posture answers
+how this deployment coordinates ownership with peer deployments. It must remain stable for the
+deployment lifetime and peers must agree, so it is required deployment policy and cannot fall back
+to an inherited environment default.
+
+### 4.1 Launch environment classification
+
+This table audits every environment variable that `ops/dogfood.sh` reads to resolve a launch or
+sets on the supervise command. Variables subsequently constructed inside the pinned host-run
+contract (for example `FKST_PROJECT_ROOT`, `FKST_RUNTIME_ROOT`, and `FKST_DURABLE_ROOT`) are derived
+launch arguments, not additional operator inputs.
+
+| Variable | Classification | Source |
+|---|---|---|
+| `FKST_OPS_DECLARATION` | host fact | Host-selected path to the declaration artifact |
+| `FKST_OPS_MACHINE_PROFILE` | host fact | Host-selected path to machine placement and credentials |
+| `FKST_OPS_LOCK` | host fact | Host-selected path to the deployment lock artifact |
+| `PYTHONPATH` | discovered/derived | Prepends the physical mechanism checkout for validator loading |
+| `BIN` | discovered/derived | Resolved from a declared logical binary through the machine profile |
+| `FKST_GITHUB_REPO` | declared parameter | `deployment.target_identity` |
+| `FKST_GITHUB_WRITE` | host fact | Per-run reversible operator posture; validated as `0` or `1` |
+| `FKST_GITHUB_CLAIM_MODE` | declared parameter | `deployment.claim_posture.mode` |
+| `FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE` | declared parameter | Boolean `deployment.claim_posture.label_exclusive`, encoded as `0` or `1` |
+| `FKST_RATE_POOL_ROOT` | host fact | Machine-profile resolution of `deployment.machine.rate_pool` |
+| `FKST_GITHUB_BOT_LOGIN` | host fact | Machine-profile credential resolution of `deployment.machine.bot_login` |
+| `FKST_DEVLOOP_MANAGED_BOT_LOGINS` | declared parameter | Deployment membership, checked against the resolved machine set |
+| `FKST_DEVLOOP_UPSTREAM_BRANCH` | declared parameter | `deployment.integration.upstream_branch` |
+| `FKST_DEVLOOP_INTEGRATION_BRANCH` | declared parameter | Declared branch, optionally resolved through a named machine default |
+| `FKST_DEVLOOP_ROLLUP_MERGE` | declared parameter | `deployment.integration.rollup_merge` |
+| `FKST_OPS_GITHUB_DEVLOOP_PROFILE` | declared parameter | Resolved `deployment.github_devloop_profile` |
+| `FKST_WORKTREE_GC_REMOVE` | discovered/derived | Mechanism-owned fixed launch behavior (`1`) |
+
+No variable in this launch boundary is unclassified after the claim-posture addition.
+
+### 4.2 Provider port contracts
 
 These are direct executable ports, not a plugin framework. A declaration binds exactly one provider of each kind; the single board front-end invokes both board bindings and rejects missing, duplicate, or version-mismatched bindings before execution.
 

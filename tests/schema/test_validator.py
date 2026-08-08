@@ -81,6 +81,21 @@ class ValidatorTests(unittest.TestCase):
         del self.declaration["cadence_interval_seconds"]
         self.reject("cadence_interval_seconds.*positive integer")
 
+    def test_claim_posture_is_required_and_closed(self) -> None:
+        del self.declaration["deployment"][0]["claim_posture"]
+        self.reject("claim_posture.*must be a table")
+
+    def test_claim_posture_resolves_exactly(self) -> None:
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(
+            result["deployment"][0]["claim_posture"],
+            {"mode": "label", "label_exclusive": False},
+        )
+
+    def test_claim_posture_rejects_implicit_or_invalid_values(self) -> None:
+        del self.declaration["deployment"][0]["claim_posture"]["label_exclusive"]
+        self.reject("claim_posture.label_exclusive.*boolean")
+
     def test_managed_bots_are_deployment_policy(self) -> None:
         self.declaration["deployment"][0]["managed_bot_logins"] = ["another-bot"]
         self.reject("resolved set must equal deployment.managed_bot_logins")

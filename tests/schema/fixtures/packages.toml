@@ -6,6 +6,10 @@ id = "packages"
 target_identity = "ChronoAIProject/fkst-packages"
 managed_bot_logins = ["fkst-bot", "fkst-review-bot"]
 
+[deployment.claim_posture]
+mode = "label"
+label_exclusive = false
+
 [deployment.github_devloop_profile]
 version = "1"
 id = "github-devloop-default"

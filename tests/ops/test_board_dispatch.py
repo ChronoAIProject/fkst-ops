@@ -39,6 +39,9 @@ cadence_interval_seconds=300
 id="fixture"
 target_identity="owner/target"
 managed_bot_logins=["bot"]
+[deployment.claim_posture]
+mode="assignee"
+label_exclusive=false
 [deployment.sources.target]
 lock_ref="source"
 [deployment.sources.platform]

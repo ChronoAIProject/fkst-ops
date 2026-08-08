@@ -5,6 +5,10 @@ cadence_interval_seconds = 300
 id = "substrate"
 target_identity = "ChronoAIProject/fkst-substrate"
 managed_bot_logins = ["fkst-bot", "fkst-review-bot"]
+
+[deployment.claim_posture]
+mode = "label"
+label_exclusive = false
 [deployment.sources.target]
 lock_ref = "target-source"
 [deployment.sources.platform]
