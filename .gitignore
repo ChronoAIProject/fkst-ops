@@ -1,5 +1,25 @@
-__pycache__/
-*.pyc
+# Machine-local operational state. NEVER tracked: a real machine profile carries absolute
+# paths and credentials. Tracked exceptions are the placeholder template and test fixtures,
+# which contain no real value.
+machine-profile.toml
+*.machine-profile.toml
+.fkst/machine-profile.toml
+!*.example.toml
+!tests/**/machine-profile.toml
+.env
+
+# Runtime hydration targets. The bootstrap clones the pinned mechanism here; nothing under
+# these paths is source.
+checkouts/
 .fkst/run/
 build/
+
+# Python bytecode and test caches
+__pycache__/
+*.pyc
 .pytest_cache/
+
+# Local-only Claude Code harness state (machine-specific, never tracked)
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+.sshx-results/
