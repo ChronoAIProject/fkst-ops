@@ -6,7 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Every exclusion is enumerated by exact path. Categories, directories, globs and implicit
+# exclusions are forbidden: an unenumerated exclusion is a scan failure.
+# Documents are excluded only when naming the origin repository is what makes their evidence
+# verifiable — a doctrine or design anchor that cannot be traced back to its incident is worth
+# nothing. Executable source is never excluded on that ground.
 EXCLUDED_PATHS = frozenset({
+    "CLAUDE.md",
     "docs/superpowers/specs/2026-08-08-fkst-ops-extraction-design.md",
     "tests/schema/fixtures/fkst.lock",
     "tests/schema/fixtures/machine-profile.toml",
