@@ -630,6 +630,12 @@ host_run_restart_prior() {
   esac
 }
 
+host_run_require_engine_binary() {
+  [ -f "$BIN" ] && [ -x "$BIN" ] && return 0
+  printf 'ENGINE_BINARY_UNAVAILABLE: declared build path: %s\n' "$BIN" >&2
+  return 1
+}
+
 host_run_claim_supervise_slot() {
   local pid_file pid wrote=0
   pid_file="$(host_run_pid_file)"
@@ -689,6 +695,7 @@ host_run_supervise_contract() {
   fi
 
   host_run_validate_local_iteration_test_command || return $?
+  host_run_require_engine_binary || return $?
   host_run_restart_prior || return $?
   export FKST_RUNTIME_ROOT="$HOST_RUN_RUNTIME_ROOT"
   export FKST_DURABLE_ROOT="$HOST_RUN_DURABLE_ROOT"
@@ -717,6 +724,7 @@ host_run_supervise_contract() {
   host_run_print_package_roots | sed 's/^/  /'
   echo "This starts the real supervise event loop in the foreground. Press Ctrl-C to stop."
   echo "exec: ${args[*]}"
+  host_run_require_engine_binary || return $?
   host_run_claim_supervise_slot || return $?
   exec "${args[@]}"
 }

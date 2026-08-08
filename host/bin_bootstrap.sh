@@ -3,12 +3,21 @@
 
 FKST_OPS_HOST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+resolve_bin_validate_candidate() {
+  local candidate="$1"
+  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+    return 0
+  fi
+  RESOLVE_BIN_ERROR="ENGINE_BINARY_UNAVAILABLE: declared build path: $candidate"
+  return 1
+}
+
 resolve_bin_contract() {
   local repo_root="$1" mode="${2:-bootstrap}" candidate="" response
   RESOLVED_BIN=""
   RESOLVE_BIN_ERROR=""
   if [ -n "${BIN:-}" ]; then
-    [ -x "$BIN" ] || { RESOLVE_BIN_ERROR="explicit BIN is not executable: $BIN"; return 1; }
+    resolve_bin_validate_candidate "$BIN" || return $?
     RESOLVED_BIN="$BIN"; return 0
   fi
   if [ -f "$repo_root/.fkst/env" ]; then
@@ -16,12 +25,14 @@ resolve_bin_contract() {
     candidate="${candidate%%[[:space:]]#*}"
     candidate="${candidate%\"}"; candidate="${candidate#\"}"; candidate="${candidate%\'}"; candidate="${candidate#\'}"
     if [ -n "$candidate" ]; then
-      [ -x "$candidate" ] || { RESOLVE_BIN_ERROR=".fkst/env BIN is not executable: $candidate"; return 1; }
+      resolve_bin_validate_candidate "$candidate" || return $?
       RESOLVED_BIN="$candidate"; return 0
     fi
   fi
   if command -v fkst-framework >/dev/null 2>&1; then
-    RESOLVED_BIN="$(command -v fkst-framework)"; return 0
+    candidate="$(command -v fkst-framework)"
+    resolve_bin_validate_candidate "$candidate" || return $?
+    RESOLVED_BIN="$candidate"; return 0
   fi
   if [ "$mode" = readonly ] || [ -n "${FKST_NO_AUTOBUILD:-}" ]; then
     RESOLVE_BIN_ERROR="set BIN to an executable engine binary or configure the declared engine provider"
@@ -29,7 +40,7 @@ resolve_bin_contract() {
   fi
   response="$(bootstrap_bin_on_total_miss)" || return $?
   RESOLVED_BIN="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["binary"])')"
-  [ -x "$RESOLVED_BIN" ] || { RESOLVE_BIN_ERROR="engine provider returned a non-executable binary"; return 1; }
+  resolve_bin_validate_candidate "$RESOLVED_BIN" || return $?
 }
 
 bootstrap_bin_on_total_miss() {

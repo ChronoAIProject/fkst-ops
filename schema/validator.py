@@ -183,7 +183,6 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
         for role in ("target", "platform", "engine")
     }
     _require_directory(machine["durable"], path + ".machine.durable")
-    _require_executable(machine["engine_binary"], path + ".machine.engine_binary")
 
     for package in resolved["packages"]["platform"]:
         _require_directory(str(checkouts["platform"] / "packages" / package), path + f".packages.platform[{package}]")

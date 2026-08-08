@@ -222,11 +222,22 @@ class ValidatorTests(unittest.TestCase):
         self.declaration["deployment"][0]["packages"]["platform"].append("missing-package")
         self.reject("resolved root does not exist")
 
-    def test_rejects_non_executable_engine_binary(self) -> None:
+    def test_accepts_absent_absolute_engine_build_path(self) -> None:
+        binary = Path(self.temp.name) / "not-built-yet"
+        self.machine["binaries"]["engine"] = str(binary)
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(result["deployment"][0]["machine"]["engine_binary"], str(binary))
+
+    def test_accepts_non_executable_engine_build_path(self) -> None:
         binary = Path(self.temp.name) / "not-executable"
         binary.write_text("no", encoding="ascii")
         self.machine["binaries"]["engine"] = str(binary)
-        self.reject("not executable")
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(result["deployment"][0]["machine"]["engine_binary"], str(binary))
+
+    def test_rejects_relative_engine_build_path(self) -> None:
+        self.machine["binaries"]["engine"] = "relative/engine"
+        self.reject("must be an absolute path")
 
     def test_rejects_non_executable_provider_entry(self) -> None:
         engine_root = Path(self.machine["roots"]["engine-source"])

@@ -232,6 +232,12 @@ engine_build_result() {
     | invoke_provider "$ENGINE_PROVIDER" "$ENGINE_CONTRACT" || return $?
 }
 
+require_engine_binary() {
+  [ -f "$BIN" ] && [ -x "$BIN" ] && return 0
+  printf 'ENGINE_BINARY_UNAVAILABLE: declared build path: %s\n' "$BIN" >&2
+  return 1
+}
+
 bin_ensure_fresh() {
   local response
   response=$(engine_build_result) || return $?
@@ -242,10 +248,12 @@ cmd_board() {
   local target="${1:-all}" n failed=0 tmp github_input engine_input
   for n in $(expand "$target"); do
     cfg "$n" || { failed=1; continue; }
+    require_engine_binary || { failed=1; continue; }
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/fkst-ops-board.XXXXXX") || return 1
     github_input="$tmp/github.json"; engine_input="$tmp/engine.json"
     python3 -c 'import json,sys; p=json.loads(sys.argv[3]); p["stale_hours"]=int(sys.argv[6] or 6); json.dump({"target_identity":sys.argv[1],"platform_checkout":sys.argv[2],"profile":p,"bot_login":sys.argv[4],"managed_bot_set":json.loads(sys.argv[5])},open(sys.argv[7],"w"))' "$REPO" "$PKGSRC" "$GITHUB_DEVLOOP_PROFILE" "$BOT" "$MANAGED_BOT_LOGINS" "${2:-}" "$github_input"
     python3 -c 'import json,sys; json.dump({"engine_binary":sys.argv[1],"durable_root":sys.argv[2],"cache":sys.argv[3],"refresh":False,"ttl_seconds":300,"stall_seconds":900},open(sys.argv[4],"w"))' "$BIN" "$DUR" "$tmp/cache.json" "$engine_input"
+    require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }
     python3 "$_repo_root/board/board.py" --github-provider "$GITHUB_BOARD_PROVIDER" --engine-provider "$ENGINE_BOARD_PROVIDER" --github-input "$github_input" --engine-input "$engine_input" || failed=1
     rm -rf "$tmp"
   done
@@ -313,6 +321,7 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
 
 launch_one() { # $1 name, $2 restart flag (0|1)
   local name="$1" restart="${2:-0}" ts log rt args=()
+  require_engine_binary || return 1
   ts=$(date +%s); log="$LOGDIR/${name}-sv-${ts}.log"; rt="$RUNTIME_ROOT/${name}.${ts}"
   derive_devloop_pkgs_from_workspace "$name" || return 1
   [ -n "$DEVLOOP_PKGS" ] || { echo "[$name] no platform packages declared in fkst.workspace.toml"; return 1; }
@@ -341,6 +350,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   # under the automation env's LC_ALL=C.UTF-8 locale). `os.setsid()`+`os.execvp` is IN-PLACE, so $!
   # below stays the REAL supervise pid and the env-prefix stays scoped to the launch; a failed setsid
   # raises OSError → nonzero exit → the readiness wait reports the launch failure loud (self-verifying).
+  require_engine_binary || return 1
   BIN="$BIN" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE=1 \
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
@@ -410,6 +420,7 @@ stop_one() {
 
 restart_one() {
   cfg "$1" || return 1
+  require_engine_binary || return 1
   echo "[$1] sync to origin/$INTEGRATION_BRANCH (run branch; rollup target stays $UPSTREAM_BRANCH):"
   ensure_run_checkout "$PKGSRC" "$PLATFORM_GIT_URL" || return 1
   if [ "$HOST" != "$PKGSRC" ]; then

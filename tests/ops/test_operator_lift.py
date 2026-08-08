@@ -24,6 +24,7 @@ class OperatorLiftTest(unittest.TestCase):
             checkout.mkdir()
             (checkout / ".git").mkdir()
             binary = root / "engine"
+            self.assertFalse(binary.exists())
             tools = root / "tools"
             tools.mkdir()
             git = tools / "git"
@@ -51,6 +52,8 @@ engine_build_result
             response = json.loads(result.stdout)
             self.assertTrue(response["ok"])
             self.assertEqual(response["result"]["binary"], str(binary))
+            self.assertTrue(binary.is_file())
+            self.assertTrue(os.access(binary, os.X_OK))
 
     def test_shell_is_valid_and_uses_schema_validator(self) -> None:
         subprocess.run(["bash", "-n", str(OPERATOR)], check=True)
@@ -60,6 +63,9 @@ engine_build_result
         self.assertNotIn("GH_ORG=", source)
         self.assertNotIn("GITHUB_PROXY_POLL_LABEL_PREFIX=", source)
         self.assertNotIn("  doctor)", source)
+        self.assertGreaterEqual(source.count("require_engine_binary || return 1"), 3)
+        self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    python3 "$_repo_root/board/board.py"', source)
+        self.assertIn('require_engine_binary || return 1\n  BIN="$BIN" FKST_GITHUB_REPO=', source)
 
     def test_platform_source_role_is_an_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

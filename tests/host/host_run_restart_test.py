@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 
 from host_run_fixture import (
     HostRunHarness,
@@ -17,6 +20,50 @@ from host_run_fixture import (
 
 
 class HostRunRestartTest(unittest.TestCase):
+    def test_missing_binary_fails_before_restart_or_claim(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "side-effect"
+            missing = root / "missing-engine"
+            result = subprocess.run(
+                ["/bin/bash", "-c",
+                textwrap.dedent(
+                    f"""\
+                    set -euo pipefail
+                    source host/host_run.sh
+                    BIN={shell_quote(missing)}
+                    host_run_parse_supervise_args() {{ return 0; }}
+                    host_run_validate_shape() {{ return 0; }}
+                    host_run_build_package_roots() {{ return 0; }}
+                    host_run_validate_local_iteration_test_command() {{ return 0; }}
+                    host_run_restart_prior() {{ printf restart > {shell_quote(marker)}; }}
+                    host_run_claim_supervise_slot() {{ printf claim > {shell_quote(marker)}; }}
+                    host_run_supervise_contract
+                    """
+                )],
+                cwd=repo_root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(marker.exists())
+            self.assertIn(
+                f"ENGINE_BINARY_UNAVAILABLE: declared build path: {missing}",
+                result.stderr,
+            )
+            source = (repo_root / "host" / "host_run.sh").read_text(encoding="utf-8")
+            function = source[source.index("host_run_supervise_contract() {") :]
+            self.assertLess(
+                function.index("host_run_require_engine_binary"),
+                function.index("host_run_restart_prior"),
+            )
+            self.assertLess(
+                function.rindex("host_run_require_engine_binary"),
+                function.index("host_run_claim_supervise_slot"),
+            )
     def test_restart_kills_pid_file_process_without_command_text_matching(self) -> None:
         h = HostRunHarness()
         pid = start_orphan_sleep()

@@ -20,6 +20,7 @@ run_self_test_with_optional_lua_coverage() {
   local coverage_dir="$FKST_RUNTIME_ROOT/lua-coverage" coverage_json out rc
   rm -rf "$coverage_dir"
   mkdir -p "$coverage_dir"
+  host_run_require_engine_binary || return $?
   set +e
   out="$(cd "$ROOT" && "$BIN" --self-test --coverage "$coverage_dir" 2>&1)"
   rc=$?
@@ -35,6 +36,7 @@ run_self_test_with_optional_lua_coverage() {
   fi
   if printf '%s\n' "$out" | grep -Eq "(unknown|unrecognized).*--coverage"; then
     echo "warning: fkst-framework does not expose --self-test --coverage; skipping Lua coverage ratchet artifact collection" >&2
+    host_run_require_engine_binary || return $?
     "$BIN" --self-test
     return $?
   fi
@@ -300,6 +302,7 @@ host_entry_run_engine_conformance() {
   if [ "${#engine_args[@]}" -gt 0 ]; then
     cmd+=("${engine_args[@]}")
   fi
+  host_run_require_engine_binary || return $?
   set +e
   if [ -n "${verbose:-}${FKST_TEST_VERBOSE:-}" ]; then
     "${cmd[@]}" >"$output_file" 2>&1
@@ -537,6 +540,7 @@ host_entry_cmd_test() {
           ;;
         1)
           conf_cmd=("$BIN" conformance --project-root "$project_root" --package-root "$pkg")
+          host_run_require_engine_binary || { fail=$((fail + 1)); continue; }
           if ! run_quiet_pass "${conf_cmd[@]}"; then
             fail=$((fail + 1))
             continue
@@ -575,6 +579,7 @@ host_entry_cmd_test() {
       if [ "$run_normal" -eq 1 ]; then
         test_cmd=("$BIN" test --project-root "$normal_project_root" --package-root "$normal_pkg")
         test_cmd+=(--report-json "$report_file")
+        host_run_require_engine_binary || { fail=$((fail + 1)); continue; }
         if ! run_quiet_keep '^FAIL |passed, [0-9]+ failed|panic' "${test_cmd[@]}"; then
           fail=$((fail + 1))
           continue
@@ -595,6 +600,7 @@ host_entry_cmd_test() {
           graph_args+=(--package-root "$graph_root")
         done
         test_cmd=("$BIN" test --project-root "$graph_work" "${graph_args[@]}" --report-json "$report_dir/$name.graph.json")
+        host_run_require_engine_binary || { fail=$((fail + 1)); continue; }
         if ! run_quiet_keep '^FAIL |passed, [0-9]+ failed|panic' "${test_cmd[@]}"; then
           fail=$((fail + 1))
         fi

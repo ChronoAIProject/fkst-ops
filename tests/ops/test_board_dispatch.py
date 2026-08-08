@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -21,7 +22,9 @@ def test_dispatcher_runs_operator_board_action(tmp_path):
     subprocess.run(["git", "init", "-q", str(engine)], check=True)
     binary = engine / "engine-bin"; executable(binary, "#!/bin/sh\nexit 0\n")
     provider = '''#!/usr/bin/env python3
-import json,sys
+import json,os,sys
+if os.environ.get("PROVIDER_CALL_MARKER"):
+    open(os.environ["PROVIDER_CALL_MARKER"], "a").close()
 r=json.load(sys.stdin); view="engine-durable" if "engine-durable" in r["contract"] else "github-control"
 result={"view":view,"rows":[{"key":view,"classification":"fixture","fields":{"text":view+" through operator"}}]}
 if view=="engine-durable": result["health"]={"status":"healthy","anomalies":[]}
@@ -113,3 +116,18 @@ tree_sha256="{tree}"
     assert result.returncode == 0, result.stderr
     assert "github-control through operator" in result.stdout
     assert "engine-durable through operator" in result.stdout
+
+    binary.unlink()
+    marker = tmp_path / "provider-called"
+    env = os.environ.copy()
+    env["PROVIDER_CALL_MARKER"] = str(marker)
+    unavailable = subprocess.run(
+        [str(ROOT / "bin" / "fkst-ops"), "--declaration", str(declaration),
+         "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],
+        text=True, capture_output=True, env=env,
+    )
+    assert unavailable.returncode != 0
+    assert "ENGINE_BINARY_UNAVAILABLE" in unavailable.stderr
+    assert f"declared build path: {binary}" in unavailable.stderr
+    assert "deployment preflight failed" not in unavailable.stderr
+    assert not marker.exists()
