@@ -17,6 +17,56 @@ MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
 class OperatorLiftTest(unittest.TestCase):
+    def _capture_launch_environment(self, write: str | None) -> dict[str, str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            platform = root / "platform"
+            run_script = platform / "scripts" / "run.sh"
+            run_script.parent.mkdir(parents=True)
+            capture = root / "capture.json"
+            run_script.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, time\n"
+                "keys = ['FKST_GITHUB_WRITE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS']\n"
+                "open(os.environ['CAPTURE'], 'w').write(json.dumps({key: os.environ.get(key) for key in keys}))\n"
+                "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
+                "print('MSG=event runtime running', flush=True)\n"
+                "time.sleep(4)\n",
+                encoding="ascii",
+            )
+            run_script.chmod(0o755)
+            command = f'''eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^launch_one()/,/^}}/p' "{OPERATOR}")"
+require_engine_binary() {{ :; }}
+derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=pkg; }}
+wait_supervise_ready() {{
+  local attempts=0
+  while [ ! -f "$CAPTURE" ] && [ "$attempts" -lt 50 ]; do sleep 0.1; attempts=$((attempts + 1)); done
+  [ -f "$CAPTURE" ]
+}}
+clean_stale_runtime_worktrees() {{ :; }}
+engine_panic_count() {{ echo 0; }}
+REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
+DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
+RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","peer-bot"]'
+UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
+LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'
+mkdir -p "$HOST" "$DUR" "$RUNTIME_ROOT" "$LOGDIR"
+launch_one fixture 0
+'''
+            env = os.environ.copy()
+            env["CAPTURE"] = str(capture)
+            if write is None:
+                env.pop("FKST_GITHUB_WRITE", None)
+            else:
+                env["FKST_GITHUB_WRITE"] = write
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(root)],
+                env=env, text=True, capture_output=True, check=False, timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            return json.loads(capture.read_text(encoding="utf-8"))
+
     def test_sync_never_touches_hydrated_mechanism_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             pinned = Path(directory) / ".fkst" / "run" / "fkst-ops" / "checkouts" / ("a" * 40)
@@ -124,6 +174,61 @@ bin_ensure_fresh
         self.assertGreaterEqual(source.count("require_engine_binary || return 1"), 3)
         self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    python3 "$_repo_root/board/board.py"', source)
         self.assertIn('require_engine_binary || return 1\n  BIN="$BIN" FKST_GITHUB_REPO=', source)
+
+    def test_write_posture_is_a_host_fact_and_defaults_to_non_writing(self) -> None:
+        command = f'''eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
+github_write_posture
+'''
+        absent = os.environ.copy()
+        absent.pop("FKST_GITHUB_WRITE", None)
+        disabled = subprocess.run(["bash", "-c", command], env=absent, text=True, capture_output=True, check=False)
+        enabled = subprocess.run(
+            ["bash", "-c", command], env={**absent, "FKST_GITHUB_WRITE": "1"},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual((disabled.returncode, disabled.stdout), (0, "0\n"))
+        self.assertEqual((enabled.returncode, enabled.stdout), (0, "1\n"))
+
+        self.assertEqual(self._capture_launch_environment(None)["FKST_GITHUB_WRITE"], "0")
+        self.assertEqual(self._capture_launch_environment("1")["FKST_GITHUB_WRITE"], "1")
+
+    def test_launch_exports_every_resolved_profile_machine_value(self) -> None:
+        source = OPERATOR.read_text(encoding="utf-8")
+        launch = source[source.index("launch_one() {") : source.index("launch_with_lock_retry() {")]
+        expected = {
+            'FKST_RATE_POOL_ROOT="$RATE_POOL"': "rate_pool",
+            'FKST_GITHUB_BOT_LOGIN="$BOT"': "bot_login",
+            'FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins"': "managed_bot_set",
+        }
+        for export, machine_value in expected.items():
+            with self.subTest(machine_value=machine_value):
+                self.assertIn(export, launch)
+        self.assertNotIn("FKST_OPS_PROFILE_MACHINE=", launch)
+        captured = self._capture_launch_environment(None)
+        self.assertTrue(captured["FKST_RATE_POOL_ROOT"].endswith("/rates"))
+        self.assertEqual(captured["FKST_GITHUB_BOT_LOGIN"], "resolved-bot")
+        self.assertEqual(captured["FKST_DEVLOOP_MANAGED_BOT_LOGINS"], "resolved-bot,peer-bot")
+
+    def test_status_reports_the_running_launch_write_posture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "supervise.log"
+            log.write_text("FKST_GITHUB_WRITE=1\nlast event\n", encoding="ascii")
+            command = f'''eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
+cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
+pidof_df() {{ echo 123; }}
+latest_log() {{ echo "$LOG"; }}
+fmt_uptime() {{ echo 1m00s; }}
+engine_panic_count() {{ echo 0; }}
+ps() {{ echo 00:01:00; }}
+git() {{ echo abcdef123456; }}
+status_one fixture
+'''
+            result = subprocess.run(
+                ["bash", "-c", command], env={**os.environ, "LOG": str(log)},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("write=1", result.stdout)
 
     def test_platform_source_role_is_an_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

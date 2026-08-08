@@ -50,7 +50,7 @@
       "FKST_GITHUB_BOT_LOGIN": "test-bot",
       "FKST_GITHUB_PROXY_POLL_LABEL_PREFIX": "fkst-dev:",
       "FKST_GITHUB_REPO": "ExampleOrg/fkst-packages",
-      "FKST_GITHUB_WRITE": "1",
+      "FKST_GITHUB_WRITE": "0",
       "FKST_RATE_POOL_ROOT": "$ROOT/dogfood/rate-pools",
       "FKST_RUNTIME_ROOT": "$ROOT/dogfood/dogfood-rt-packages.1760000000"
     }
@@ -106,7 +106,7 @@
       "FKST_GITHUB_BOT_LOGIN": "test-bot",
       "FKST_GITHUB_PROXY_POLL_LABEL_PREFIX": "fkst-dev:",
       "FKST_GITHUB_REPO": "ExampleOrg/fkst-substrate",
-      "FKST_GITHUB_WRITE": "1",
+      "FKST_GITHUB_WRITE": "0",
       "FKST_RATE_POOL_ROOT": "$ROOT/dogfood/rate-pools",
       "FKST_RUNTIME_ROOT": "$ROOT/dogfood/dogfood-rt-substrate.1760000000"
     }
@@ -156,7 +156,7 @@
       "FKST_GITHUB_BOT_LOGIN": "test-bot",
       "FKST_GITHUB_PROXY_POLL_LABEL_PREFIX": "fkst-dev:",
       "FKST_GITHUB_REPO": "ExampleOrg/fkst-website",
-      "FKST_GITHUB_WRITE": "1",
+      "FKST_GITHUB_WRITE": "0",
       "FKST_RATE_POOL_ROOT": "$ROOT/dogfood/rate-pools",
       "FKST_RUNTIME_ROOT": "$ROOT/dogfood/dogfood-rt-website.1760000000"
     }

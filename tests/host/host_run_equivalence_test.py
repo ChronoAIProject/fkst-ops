@@ -345,7 +345,6 @@ class DogfoodLayout:
             "LOGDIR": str(self.dogfood_root),
             "CAPTURE_FILE": str(self.capture),
             "FKST_NO_AUTOBUILD": "1",
-            "FKST_GITHUB_WRITE": "0",
             "FKST_DEVLOOP_LOCAL_TEST_COMMAND": "true",
             "DUR_PACKAGES": str(self.dogfood_root / "stable-durable-packages"),
             "DUR_SUBSTRATE": str(self.dogfood_root / "stable-durable-substrate"),
@@ -477,7 +476,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
                     new_record = normalize(new_layout.launch(target), new_layout.root)
                     self.assertEqual(new_record, golden[target])
                     env = new_record["env"]  # type: ignore[index]
-                    self.assertEqual(env["FKST_GITHUB_WRITE"], "1")  # type: ignore[index]
+                    self.assertEqual(env["FKST_GITHUB_WRITE"], "0")  # type: ignore[index]
                     self.assertEqual(env["FKST_DEVLOOP_LOCAL_TEST_COMMAND"], "true")  # type: ignore[index]
                     self.assertEqual(
                         env["FKST_RUNTIME_ROOT"],  # type: ignore[index]

@@ -2,7 +2,8 @@
 # dogfood.sh — single operator multi-tool for dogfooding github-devloop on this device.
 #
 # Each deployment drives one target's issue-to-change loop with declared target,
-# platform, and engine sources and real write posture (FKST_GITHUB_WRITE=1).
+# platform, and engine sources. GitHub write posture is a host environment fact:
+# FKST_GITHUB_WRITE=1 enables writes; when absent it defaults to 0 (non-writing).
 #
 # Package layout: `.fkst/` is RUNTIME/build only (gitignored: runtime, durable,
 # substrate-src, board cache) except host repos that intentionally commit their own
@@ -131,6 +132,13 @@ wait_supervise_ready() { # $1 pid, $2 log
 expand() { [ "${1:-all}" = all ] && echo "$DOGFOOD_REPOS" || echo "$1"; }
 
 invoke_provider() { python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }
+
+github_write_posture() {
+  case "${FKST_GITHUB_WRITE:-0}" in
+    0|1) printf '%s\n' "${FKST_GITHUB_WRITE:-0}" ;;
+    *) echo "error: FKST_GITHUB_WRITE must be 0 or 1" >&2; return 1 ;;
+  esac
+}
 
 # Sync a dogfood RUN checkout (behavior PKGSRC + target HOST) to the machine's
 # INTEGRATION_BRANCH — the dogfood runs its own pre-rollup code (feature ->
@@ -320,7 +328,7 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
 }
 
 launch_one() { # $1 name, $2 restart flag (0|1)
-  local name="$1" restart="${2:-0}" ts log rt args=()
+  local name="$1" restart="${2:-0}" ts log rt write_posture managed_bot_logins args=()
   require_engine_binary || return 1
   ts=$(date +%s); log="$LOGDIR/${name}-sv-${ts}.log"; rt="$RUNTIME_ROOT/${name}.${ts}"
   derive_devloop_pkgs_from_workspace "$name" || return 1
@@ -337,6 +345,9 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   )
   [ -n "$LOCAL_PKGS" ] && args+=(--host-packages "$LOCAL_PKGS")
   [ "$restart" = "1" ] && args+=(--restart)
+  write_posture=$(github_write_posture) || return 1
+  managed_bot_logins=$(printf '%s' "$MANAGED_BOT_LOGINS" | python3 -c \
+    'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
 
   # Own-session launch: make the supervise its OWN session/process-group leader. CONFIRMED (ps): the
   # plain `nohup "${args[@]}" &` launch left the supervise in the LAUNCHER's process group (PGID = the
@@ -351,12 +362,11 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   # below stays the REAL supervise pid and the env-prefix stays scoped to the launch; a failed setsid
   # raises OSError → nonzero exit → the readiness wait reports the launch failure loud (self-verifying).
   require_engine_binary || return 1
-  BIN="$BIN" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE=1 \
+  BIN="$BIN" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
+    FKST_RATE_POOL_ROOT="$RATE_POOL" FKST_GITHUB_BOT_LOGIN="$BOT" \
+    FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins" \
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
-    FKST_OPS_PROFILE_MACHINE="$(printf '{\"rate_pool\":%s,\"bot_login\":%s,\"managed_bot_set\":%s}' \
-      "$(printf '%s' "$RATE_POOL" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
-      "$(printf '%s' "$BOT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$MANAGED_BOT_LOGINS")" \
     FKST_WORKTREE_GC_REMOVE=1 \
     nohup python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "${args[@]}" > "$log" 2>&1 &
   local pid=$!
@@ -461,13 +471,15 @@ status_one() {
   cfg "$1" || return 1
   local p log; p=$(pidof_df); log=$(latest_log "$1")
   if [ -z "$p" ]; then echo "[$1] STOPPED   (target $REPO)"; return 0; fi
-  local et panic last hv pv
+  local et panic last hv pv posture
   et=$(fmt_uptime "$(ps -o etime= -p $p 2>/dev/null | tr -d ' ')")
   panic=$(engine_panic_count "$log")
   last=$(tail -1 "$log" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-44)
   hv=$(git -C "$HOST" rev-parse HEAD 2>/dev/null | cut -c1-8)
   pv=$(git -C "$PKGSRC" rev-parse HEAD 2>/dev/null | cut -c1-8)
-  printf '[%s] RUNNING pid %s up %s panic=%s | host@%s pkgs@%s | %s\n' "$1" "$p" "$et" "$panic" "$hv" "$pv" "$last"
+  posture=$(grep -aoE 'FKST_GITHUB_WRITE=(0|1)' "$log" 2>/dev/null | head -1 | cut -d= -f2)
+  [ -n "$posture" ] || posture="unknown"
+  printf '[%s] RUNNING pid %s up %s panic=%s write=%s | host@%s pkgs@%s | %s\n' "$1" "$p" "$et" "$panic" "$posture" "$hv" "$pv" "$last"
 }
 
 # _proc_stale <name> -> freshness verdict of the RUNNING process vs origin/dev. Authoritative =
