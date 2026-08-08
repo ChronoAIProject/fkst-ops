@@ -228,7 +228,7 @@ ensure_integration_caught_up() { # $1 checkout dir
 
 engine_build_result() {
   # engine-provider-configuration: forward committed binding configuration as typed input.
-  python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' "$SUBSTRATE_SRC" "$BIN" "$UPSTREAM_BRANCH" "$ENGINE_PROVIDER_CONFIGURATION" \
+  python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' "$SUBSTRATE_SRC" "$BIN" "$INTEGRATION_BRANCH" "$ENGINE_PROVIDER_CONFIGURATION" \
     | invoke_provider "$ENGINE_PROVIDER" "$ENGINE_CONTRACT" || return $?
 }
 

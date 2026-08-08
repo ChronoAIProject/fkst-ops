@@ -45,7 +45,7 @@ cmd_sync all
             self.assertEqual("a" * 40, head.read_text(encoding="ascii"))
             self.assertNotIn("operator checkouts", result.stdout)
 
-    def test_engine_provider_succeeds_through_dogfood_caller(self) -> None:
+    def test_engine_provider_uses_deployment_integration_branch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkout = root / "checkout"
@@ -64,7 +64,7 @@ cmd_sync all
             command = f'''_self_dir="{ROOT / 'ops'}"
 invoke_provider() {{ python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }}
 eval "$(sed -n '/^engine_build_result()/,/^}}/p' "{OPERATOR}")"
-SUBSTRATE_SRC="$1"; BIN="$2"; UPSTREAM_BRANCH=build
+SUBSTRATE_SRC="$1"; BIN="$2"; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=build
 ENGINE_PROVIDER="{ROOT / 'providers/engine.py'}"; ENGINE_CONTRACT=fkst.ops.engine.v1
 ENGINE_PROVIDER_CONFIGURATION="$3"
 engine_build_result
@@ -82,6 +82,36 @@ engine_build_result
             self.assertEqual(response["result"]["binary"], str(binary))
             self.assertTrue(binary.is_file())
             self.assertTrue(os.access(binary, os.X_OK))
+
+    def test_engine_provider_failure_is_visible_through_dogfood_caller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            provider = Path(directory) / "provider"
+            provider.write_text(
+                "#!/bin/sh\n"
+                "cat >/dev/null\n"
+                "printf '%s\\n' '{\"version\":\"fkst.ops.invocation.v1\",\"ok\":false,\"failure\":{\"code\":\"WRONG_BRANCH\",\"message\":\"expected branch integration, found dev\",\"details\":{}}}'\n"
+                "exit 1\n",
+                encoding="ascii",
+            )
+            provider.chmod(0o755)
+            command = f'''_self_dir="{ROOT / 'ops'}"
+invoke_provider() {{ python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }}
+eval "$(sed -n '/^engine_build_result()/,/^}}/p' "{OPERATOR}")"
+SUBSTRATE_SRC=/engine; BIN=/engine/bin; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
+ENGINE_PROVIDER="$1"; ENGINE_CONTRACT=fkst.ops.engine.v1
+ENGINE_PROVIDER_CONFIGURATION='{{"build_command":["true"]}}'
+bin_ensure_fresh() {{ local response; response=$(engine_build_result) || return $?; }}
+bin_ensure_fresh
+'''
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(provider)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("fkst.ops.engine.v1", result.stderr)
+            self.assertIn("WRONG_BRANCH", result.stderr)
+            self.assertIn("expected branch integration, found dev", result.stderr)
 
     def test_shell_is_valid_and_uses_schema_validator(self) -> None:
         subprocess.run(["bash", "-n", str(OPERATOR)], check=True)

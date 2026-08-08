@@ -132,6 +132,12 @@ def main() -> int:
     except ContractViolation as exc:
         print(f"invalid provider output: {exc}", file=sys.stderr)
         return 1
+    if not result["ok"]:
+        failure = result["failure"]
+        print(
+            f"provider failure [{sys.argv[2]}] {failure['code']}: {failure['message']}",
+            file=sys.stderr,
+        )
     json.dump(result, sys.stdout, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0 if result["ok"] else run.returncode
