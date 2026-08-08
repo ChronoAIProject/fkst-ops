@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import textwrap
 import unittest
 from pathlib import Path
@@ -17,7 +18,17 @@ from host_run_fixture import (
 )
 
 
-HOST_FIXTURE_ROOT = Path("/Users/auric/fkst-packages")
+HOST_FIXTURE_ROOT_ENV = "FKST_HOST_FIXTURE_ROOT"
+HOST_FIXTURE_ROOT = Path(value) if (value := os.environ.get(HOST_FIXTURE_ROOT_ENV)) else None
+REQUIRES_HOST_FIXTURE = unittest.skipUnless(
+    HOST_FIXTURE_ROOT is not None and HOST_FIXTURE_ROOT.is_dir(),
+    f"set {HOST_FIXTURE_ROOT_ENV} to the host fixture checkout",
+)
+
+
+def host_fixture_path(*parts: str) -> Path:
+    assert HOST_FIXTURE_ROOT is not None
+    return HOST_FIXTURE_ROOT.joinpath(*parts)
 
 
 class HostRunTest(unittest.TestCase):
@@ -514,6 +525,7 @@ class HostRunTest(unittest.TestCase):
                 finally:
                     h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_supervise_contract_uses_trusted_platform_root_for_launch_args(self) -> None:
         h = HostRunHarness()
         capture = h.root / "capture.json"
@@ -561,7 +573,7 @@ class HostRunTest(unittest.TestCase):
                     f"""\
                     set -euo pipefail
                     source host/host_run.sh
-                    source {shell_quote(HOST_FIXTURE_ROOT / "scripts" / "run_bin.sh")}
+                    source {shell_quote(host_fixture_path("scripts", "run_bin.sh"))}
                     BIN={shell_quote(fake_bin)}
                     export CI=1
                     ensure_fresh_bin
@@ -601,6 +613,7 @@ class HostRunTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_package_local_supervise_carries_traceable_framework_checkout(self) -> None:
         h = HostRunHarness()
         capture = h.root / "package-local-capture.json"
@@ -639,7 +652,7 @@ class HostRunTest(unittest.TestCase):
                 textwrap.dedent(
                     f"""\
                     set -euo pipefail
-                    source {shell_quote(HOST_FIXTURE_ROOT / "scripts" / "run.sh")}
+                    source {shell_quote(host_fixture_path("scripts", "run.sh"))}
                     ROOT={shell_quote(package_repo)}
                     FKST_DIR="$ROOT/.fkst"
                     SOURCE_PACKAGES_ROOT="$ROOT/packages"

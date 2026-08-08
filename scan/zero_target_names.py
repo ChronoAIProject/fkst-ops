@@ -20,12 +20,12 @@ EXCLUDED_PATHS = frozenset({
     "tests/schema/fixtures/substrate.toml",
     "tests/schema/fixtures/website.toml",
     "tests/scan/fixtures/concrete-name.txt",
+    "tests/scan/test_zero_target_names.py",
     "tests/host/bin_bootstrap_test.py",
     "tests/host/bin_cache_test.py",
     "tests/host/host_entry_test.py",
     "tests/host/host_run_equivalence_golden.json",
     "tests/host/host_run_equivalence_test.py",
-    "tests/host/host_run_local_iteration_test.py",
     "tests/host/host_run_source_identity_test.py",
     "tests/host/host_run_test.py",
 })

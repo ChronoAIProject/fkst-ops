@@ -20,8 +20,12 @@ from host_run_test_support import run_bounded
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOST_FIXTURE_ROOT = Path("/Users/auric/fkst-packages")
-DOGFOOD_FIXTURE_ROOT = HOST_FIXTURE_ROOT / ".claude" / "skills" / "dogfood-github-devloop"
+HOST_FIXTURE_ROOT_ENV = "FKST_HOST_FIXTURE_ROOT"
+HOST_FIXTURE_ROOT = Path(value) if (value := os.environ.get(HOST_FIXTURE_ROOT_ENV)) else None
+REQUIRES_HOST_FIXTURE = unittest.skipUnless(
+    HOST_FIXTURE_ROOT is not None and HOST_FIXTURE_ROOT.is_dir(),
+    f"set {HOST_FIXTURE_ROOT_ENV} to the host fixture checkout",
+)
 GOLDEN_PATH = REPO_ROOT / "tests" / "host" / "host_run_equivalence_golden.json"
 TARGETS = ("packages", "substrate", "website")
 WEBSITE_PLATFORM_PACKAGES = " ".join(
@@ -43,8 +47,13 @@ STALE_WEBSITE_PACKAGES = "github-devloop github-devloop-pr github-devloop-integr
 FIXED_TS = "1760000000"
 
 
+def host_fixture_path(*parts: str) -> Path:
+    assert HOST_FIXTURE_ROOT is not None
+    return HOST_FIXTURE_ROOT.joinpath(*parts)
+
+
 def self_workspace_platform_packages() -> str:
-    workspace = tomllib.loads((HOST_FIXTURE_ROOT / "fkst.workspace.toml").read_text(encoding="utf-8"))
+    workspace = tomllib.loads(host_fixture_path("fkst.workspace.toml").read_text(encoding="utf-8"))
     packages: list[str] = []
     for package in workspace.get("package", []):
         if isinstance(package, dict) and package.get("source", "workspace") == "workspace":
@@ -56,7 +65,7 @@ def self_workspace_platform_packages() -> str:
     return " ".join(packages)
 
 
-PLATFORM_PACKAGES = self_workspace_platform_packages()
+PLATFORM_PACKAGES = self_workspace_platform_packages() if HOST_FIXTURE_ROOT is not None else ""
 ALL_PLATFORM_PACKAGES = sorted(set(PLATFORM_PACKAGES.split()) | set(WEBSITE_PLATFORM_PACKAGES.split()))
 
 
@@ -211,19 +220,19 @@ class DogfoodLayout:
                     encoding="utf-8",
                 )
             (platform / "scripts").mkdir(parents=True, exist_ok=True)
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "run.sh", platform / "scripts" / "run.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "local_iteration_result.sh", platform / "scripts" / "local_iteration_result.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "run_bin.sh", platform / "scripts" / "run_bin.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "test_affected.sh", platform / "scripts" / "test_affected.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "test_parallel.sh", platform / "scripts" / "test_parallel.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "test_deadline.sh", platform / "scripts" / "test_deadline.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "run_department.sh", platform / "scripts" / "run_department.sh")
+            shutil.copy2(host_fixture_path("scripts", "run.sh"), platform / "scripts" / "run.sh")
+            shutil.copy2(host_fixture_path("scripts", "local_iteration_result.sh"), platform / "scripts" / "local_iteration_result.sh")
+            shutil.copy2(host_fixture_path("scripts", "run_bin.sh"), platform / "scripts" / "run_bin.sh")
+            shutil.copy2(host_fixture_path("scripts", "test_affected.sh"), platform / "scripts" / "test_affected.sh")
+            shutil.copy2(host_fixture_path("scripts", "test_parallel.sh"), platform / "scripts" / "test_parallel.sh")
+            shutil.copy2(host_fixture_path("scripts", "test_deadline.sh"), platform / "scripts" / "test_deadline.sh")
+            shutil.copy2(host_fixture_path("scripts", "run_department.sh"), platform / "scripts" / "run_department.sh")
             shutil.copy2(REPO_ROOT / "host" / "host_entry.sh", platform / "scripts" / "host_entry.sh")
             shutil.copy2(REPO_ROOT / "host" / "host_run.sh", platform / "scripts" / "host_run.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "composed_manifest.sh", platform / "scripts" / "composed_manifest.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "composed_conformance.sh", platform / "scripts" / "composed_conformance.sh")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "check_repo_intake_routing.py", platform / "scripts" / "check_repo_intake_routing.py")
-            shutil.copy2(HOST_FIXTURE_ROOT / "scripts" / "intake_policy_slots.json", platform / "scripts" / "intake_policy_slots.json")
+            shutil.copy2(host_fixture_path("scripts", "composed_manifest.sh"), platform / "scripts" / "composed_manifest.sh")
+            shutil.copy2(host_fixture_path("scripts", "composed_conformance.sh"), platform / "scripts" / "composed_conformance.sh")
+            shutil.copy2(host_fixture_path("scripts", "check_repo_intake_routing.py"), platform / "scripts" / "check_repo_intake_routing.py")
+            shutil.copy2(host_fixture_path("scripts", "intake_policy_slots.json"), platform / "scripts" / "intake_policy_slots.json")
             shutil.copy2(REPO_ROOT / "host" / "bin_bootstrap.sh", platform / "scripts" / "bin_bootstrap.sh")
             shutil.copy2(REPO_ROOT / "host" / "bin_cache.py", platform / "scripts" / "bin_cache.py")
             self.platform_revs[platform] = self._make_platform_git_repo(platform)
@@ -449,10 +458,11 @@ class HostRunEquivalenceTest(unittest.TestCase):
                         except ProcessLookupError:
                             pass
 
+    @REQUIRES_HOST_FIXTURE
     def test_delegated_dogfood_launch_matches_committed_golden_for_all_targets(self) -> None:
         golden = load_golden_launches()
         self.assertEqual(set(golden), set(TARGETS))
-        new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
+        new_script = host_fixture_path(".claude", "skills", "dogfood-github-devloop", "dogfood.sh").read_text(
             encoding="utf-8"
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -490,6 +500,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
                     if target in hydrated_roots:
                         self.assertFalse(hydrated_roots[target].exists())
 
+    @REQUIRES_HOST_FIXTURE
     def test_website_start_uses_manifest_without_rewriting_it(self) -> None:
         new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
             encoding="utf-8"
@@ -517,6 +528,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             self.assertNotIn("github-devloop-intake", argv)
             self.assertNotIn("github-ratchet-migration-slicer", argv)
 
+    @REQUIRES_HOST_FIXTURE
     def test_non_self_host_without_platform_source_fails_before_launch(self) -> None:
         new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
             encoding="utf-8"
@@ -538,6 +550,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             )
             self.assertFalse(layout.capture.exists())
 
+    @REQUIRES_HOST_FIXTURE
     def test_dogfood_start_fails_when_supervise_exits_before_readiness(self) -> None:
         new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
             encoding="utf-8"
@@ -568,6 +581,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             self.assertIn("FAILED to start", result.stdout)
             self.assertIn("startup error: schema validation failed", result.stdout)
 
+    @REQUIRES_HOST_FIXTURE
     def test_dogfood_sync_fails_when_selective_auto_restart_exits_before_readiness(self) -> None:
         new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
             encoding="utf-8"
@@ -642,6 +656,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             self.assertIn("FAILED to start", result.stdout)
             self.assertIn("startup error: schema validation failed", result.stdout)
 
+    @REQUIRES_HOST_FIXTURE
     def test_manifest_based_launch_keeps_workspace_byte_stable(self) -> None:
         new_script = (DOGFOOD_FIXTURE_ROOT / "dogfood.sh").read_text(
             encoding="utf-8"
@@ -672,6 +687,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertEqual(workspace.read_text(encoding="utf-8"), committed_style)
 
+    @REQUIRES_HOST_FIXTURE
     def test_sync_restores_generated_workspace_scratch_before_forward_merge(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -701,6 +717,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
             self.assertEqual(integration_head, dev_head)
             self.assertEqual(git_stdout(["status", "--porcelain"], cwd=host, env=env), "")
 
+    @REQUIRES_HOST_FIXTURE
     def test_sync_conflict_remains_for_real_workspace_edit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

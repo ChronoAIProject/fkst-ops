@@ -13,7 +13,17 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOST_FIXTURE_ROOT = Path("/Users/auric/fkst-packages")
+HOST_FIXTURE_ROOT_ENV = "FKST_HOST_FIXTURE_ROOT"
+HOST_FIXTURE_ROOT = Path(value) if (value := os.environ.get(HOST_FIXTURE_ROOT_ENV)) else None
+REQUIRES_HOST_FIXTURE = unittest.skipUnless(
+    HOST_FIXTURE_ROOT is not None and HOST_FIXTURE_ROOT.is_dir(),
+    f"set {HOST_FIXTURE_ROOT_ENV} to the host fixture checkout",
+)
+
+
+def host_fixture_path(*parts: str) -> Path:
+    assert HOST_FIXTURE_ROOT is not None
+    return HOST_FIXTURE_ROOT.joinpath(*parts)
 
 
 def shell_quote(value: str | Path) -> str:
@@ -99,8 +109,9 @@ class HostRunLocalIterationTest(unittest.TestCase):
         self.assertIn(validation, source)
         self.assertLess(source.index(validation), source.index(restart))
 
+    @REQUIRES_HOST_FIXTURE
     def test_package_local_activation_validates_before_creating_runtime_roots(self) -> None:
-        source = (HOST_FIXTURE_ROOT / "scripts" / "run.sh").read_text(encoding="utf-8")
+        source = host_fixture_path("scripts", "run.sh").read_text(encoding="utf-8")
         validation = 'host_run_validate_local_iteration_test_command_for "$ROOT" "$pkg"'
         runtime_setup = 'mkdir -p "$rt" "$durable"'
 
@@ -137,11 +148,12 @@ class HostRunLocalIterationTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_scaffolded_command_is_inherited_by_child_validator(self) -> None:
         h = LocalIterationCommandHarness()
         try:
             h.write_executable("tools/preflight")
-            scaffold = (HOST_FIXTURE_ROOT / "docs" / "user" / "host-profile.env.example").read_text(encoding="utf-8")
+            scaffold = host_fixture_path("docs", "user", "host-profile.env.example").read_text(encoding="utf-8")
             profile_line = next(
                 line.removeprefix("# ")
                 for line in scaffold.splitlines()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,7 +14,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 COMPARATOR = ROOT / "acceptance" / "fkst-ops-compare"
 NEW_OPERATOR = ROOT / "ops" / "dogfood.sh"
-OLD_OPERATOR = Path("/Users/auric/fkst-" + "packages/.claude/skills/dogfood-github-devloop/dogfood.sh")
+OLD_OPERATOR_ENV = "FKST_OLD_OPERATOR"
+OLD_OPERATOR = Path(value) if (value := os.environ.get(OLD_OPERATOR_ENV)) else None
+REQUIRES_OLD_OPERATOR = unittest.skipUnless(
+    OLD_OPERATOR is not None and OLD_OPERATOR.is_file(),
+    f"set {OLD_OPERATOR_ENV} to the existing old-operator file",
+)
 MATRIX = {
     "board": ("both-healthy", "engine-durable-failed", "github-control-failed", "both-failed"),
     "status": ("stopped", "running"),
@@ -151,7 +157,9 @@ class FkstOpsCompareTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("unparseable status line", result.stderr)
 
+    @REQUIRES_OLD_OPERATOR
     def test_matrix_uses_real_old_and_new_operator_entries(self) -> None:
+        assert OLD_OPERATOR is not None
         self.assertTrue(OLD_OPERATOR.is_file())
         self.assertTrue(NEW_OPERATOR.is_file())
         cells = self.fixture.cells()

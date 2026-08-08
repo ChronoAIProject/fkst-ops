@@ -15,7 +15,9 @@ SCHEMA_FIXTURES = (
 )
 NAMES = (
     FIXTURE.read_text(encoding="utf-8").strip(),
-    *("fkst-" + Path(relative).stem for relative in SCHEMA_FIXTURES[-3:]),
+    "fkst-packages",
+    "fkst-substrate",
+    "fkst-website",
 )
 
 

@@ -14,7 +14,17 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOST_FIXTURE_ROOT = Path("/Users/auric/fkst-packages")
+HOST_FIXTURE_ROOT_ENV = "FKST_HOST_FIXTURE_ROOT"
+HOST_FIXTURE_ROOT = Path(value) if (value := os.environ.get(HOST_FIXTURE_ROOT_ENV)) else None
+REQUIRES_HOST_FIXTURE = unittest.skipUnless(
+    HOST_FIXTURE_ROOT is not None and HOST_FIXTURE_ROOT.is_dir(),
+    f"set {HOST_FIXTURE_ROOT_ENV} to the host fixture checkout",
+)
+
+
+def host_fixture_path(*parts: str) -> Path:
+    assert HOST_FIXTURE_ROOT is not None
+    return HOST_FIXTURE_ROOT.joinpath(*parts)
 
 
 def shell_quote(value: str | Path) -> str:
@@ -73,7 +83,7 @@ class HostEntryHarness:
         )
 
     def run_helper(self, body: str) -> subprocess.CompletedProcess[str]:
-        body = f'source {shell_quote(HOST_FIXTURE_ROOT / "scripts" / "composed_manifest.sh")}\n' + body
+        body = f'source {shell_quote(host_fixture_path("scripts", "composed_manifest.sh"))}\n' + body
         return subprocess.run(
             ["/bin/bash", "-c", body],
             cwd=REPO_ROOT,
@@ -91,7 +101,7 @@ class HostEntryHarness:
             ROOT="$PWD"
             source host/bin_bootstrap.sh
             source host/host_run.sh
-            source {shell_quote(HOST_FIXTURE_ROOT / "scripts" / "composed_manifest.sh")}
+            source {shell_quote(host_fixture_path("scripts", "composed_manifest.sh"))}
             source host/host_entry.sh
             host_entry_parse --host-root {shell_quote(self.host)} --platform-root {shell_quote(self.platform)} -- check
             host_entry_build_package_roots
@@ -133,6 +143,7 @@ class HostEntryTest(unittest.TestCase):
                         f"(it overrides the armed disarm trap and would leak a stale timer): {body!r}",
                     )
 
+    @REQUIRES_HOST_FIXTURE
     def test_configured_package_roots_split_platform_and_host_names(self) -> None:
         h = HostEntryHarness()
         try:
@@ -169,6 +180,7 @@ class HostEntryTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_missing_config_discovers_host_local_packages(self) -> None:
         h = HostEntryHarness()
         try:
@@ -194,6 +206,7 @@ class HostEntryTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_supervise_delegates_to_existing_host_run_contract(self) -> None:
         h = HostEntryHarness()
         durable = h.root / "durable"
@@ -243,6 +256,7 @@ class HostEntryTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_check_success_runs_source_ratchets_and_engine_conformance(self) -> None:
         h = HostEntryHarness()
         fake_bin = h.root / "fake-framework"
@@ -330,6 +344,7 @@ class HostEntryTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_check_fails_when_engine_conformance_reports_json_false(self) -> None:
         h = HostEntryHarness()
         fake_bin = h.root / "fake-framework"
@@ -366,6 +381,7 @@ class HostEntryTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_host_test_runs_full_graph_conformance_but_only_host_owned_unit_tests(self) -> None:
         h = HostEntryHarness()
         fake_bin = h.root / "fake-framework"
@@ -472,6 +488,7 @@ class HostEntryTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_host_test_runs_host_run_graph_tests_with_configured_platform_roots(self) -> None:
         h = HostEntryHarness()
         fake_bin = h.root / "fake-framework"
@@ -601,6 +618,7 @@ class HostEntryTest(unittest.TestCase):
         finally:
             h.close()
 
+    @REQUIRES_HOST_FIXTURE
     def test_host_test_runs_platform_unit_tests_when_host_is_platform(self) -> None:
         h = HostEntryHarness()
         fake_bin = h.root / "fake-framework"

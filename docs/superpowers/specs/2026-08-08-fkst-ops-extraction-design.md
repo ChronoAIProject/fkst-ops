@@ -36,7 +36,7 @@ Constraint: `fkst-ops` source contains **ZERO concrete repository names** and **
 
 The deployment repository owns versioned source bindings and content pins for target/platform/engine, package composition, integration policy, target identity, logical durable/runtime/log identities, and provider bindings. It also owns its bootstrap and lock. The bootstrap is schema-agnostic: it never parses, validates, or understands the deployment schema or a provider contract.
 
-The deployment repository can be the host repository. The website already owns a 123-line bootstrap that delegates shared orchestration (`fkst-website/scripts/run.sh:1-6,81-123`) and five tracked local-package files under `.fkst/local-packages/site-board` (command: `cd /Users/auric/fkst-website && git ls-files .fkst/local-packages/site-board`). A satellite repository such as `trureturing-fkst` is used when a target repository must remain free of FKST content.
+The deployment repository can be the host repository. The website already owns a 123-line bootstrap that delegates shared orchestration (`fkst-website/scripts/run.sh:1-6,81-123`) and five tracked local-package files under `.fkst/local-packages/site-board` (command: `cd fkst-website && git ls-files .fkst/local-packages/site-board`). A satellite repository such as `trureturing-fkst` is used when a target repository must remain free of FKST content.
 
 Multiple declarations in one deployment repository reference one repository-level lock entry rather than repeating a SHA.
 
@@ -170,7 +170,7 @@ The extraction is cut by semantic responsibility, not filename.
 
 Generic lifecycle execution and observation reachable from the five actions move to `fkst-ops`. The existing `doctor` command moves as a separately invocable operator entry with unchanged behaviour, fail-visible accounting, sourced-shell/helper closure, and separate tests; it is not called by a five-action implementation, and its invocation timing remains externally owned.
 
-Engine build is owned by the engine repository and invoked by `fkst-ops` through the declared `engine` provider. The provider receives the resolved concrete engine checkout and binary. `fkst-packages`' `cmd_build` is deleted, not moved: it locates an fkst-substrate checkout, hardcodes `/Users/auric/fkst-substrate` as a fallback, rejects a branch other than `dev`, pulls, and builds `fkst-framework` at `scripts/run.sh:792-815`.
+Engine build is owned by the engine repository and invoked by `fkst-ops` through the declared `engine` provider. The provider receives the resolved concrete engine checkout and binary. `fkst-packages`' `cmd_build` is deleted, not moved: it locates an fkst-substrate checkout, hardcodes `fkst-substrate` as a fallback, rejects a branch other than `dev`, pulls, and builds `fkst-framework` at `scripts/run.sh:792-815`.
 
 ### 5.3 Resolved closure inventory
 
@@ -214,7 +214,7 @@ Generation 1 reuses the working `fkst-website/scripts/run.sh` shape, changing on
 
 The ordered handover is one total fail-closed preflight spanning the bootstrap and pinned `fkst-ops`. The bootstrap verifies only the pin and tree in duty 2 and never parses, validates, or understands the declaration schema or any provider contract. After duty 3, pinned `fkst-ops` resolves machine references and exclusively validates the resolved schema, provider contracts, checkout roots, package roots, and executable entry points. Nothing in deployment operational state mutates until pinned `fkst-ops` completes all validation successfully.
 
-The current lock records both at `fkst-website/fkst.lock:8-10`, but the bootstrap parses only `resolved.rev` at `fkst-website/scripts/run.sh:32-47` and checks it out at `:64-78`. It does **not** verify `tree_sha256` or `exports_sha256` (command: `cd /Users/auric/fkst-website && rg -n 'tree_sha256|exports_sha256|resolved.*rev' scripts/run.sh`). Generation 1 closes the tree-hash gap.
+The current lock records both at `fkst-website/fkst.lock:8-10`, but the bootstrap parses only `resolved.rev` at `fkst-website/scripts/run.sh:32-47` and checks it out at `:64-78`. It does **not** verify `tree_sha256` or `exports_sha256` (command: `cd fkst-website && rg -n 'tree_sha256|exports_sha256|resolved.*rev' scripts/run.sh`). Generation 1 closes the tree-hash gap.
 
 Canonical `tree_sha256` is `"sha256-" + lowercase_hex(SHA-256(stream))`, where `stream` is the concatenation, in raw-byte path order, of every tracked blob at `resolved.rev`, each framed as unsigned 64-bit big-endian length plus bytes for path, Git mode, and SHA-256(blob bytes). `git ls-tree -r -z --full-tree resolved.rev` supplies path and mode; `.git` and untracked files are absent by construction. This framing follows the repository's existing canonical tracked-tree practice at `scripts/intent_bounded_replay/semantic_tree.py:69-94,143-167` and is a new lock contract.
 
@@ -294,7 +294,7 @@ The current `host`, `run`, and `supervise` dispatch entries are at `scripts/run.
 
 `fkst-hostctl` contributes no code, architecture, or capability. It remains untouched as sunk prior art.
 
-Its tracked repository contains 60,058 lines total. On the tracked-file basis, `lib` is 16,622, `tests` 25,681, `docs` 10,046, and `tools` 6,863; these directories total 59,212, while all tracked files total 60,058 (commands: `cd /Users/auric/fkst-hostctl && git ls-files -z | xargs -0 wc -l | tail -1`; `git ls-files -z lib tests docs tools | xargs -0 wc -l`; untracked files excluded).
+Its tracked repository contains 60,058 lines total. On the tracked-file basis, `lib` is 16,622, `tests` 25,681, `docs` 10,046, and `tools` 6,863; these directories total 59,212, while all tracked files total 60,058 (commands: `cd fkst-hostctl && git ls-files -z | xargs -0 wc -l | tail -1`; `git ls-files -z lib tests docs tools | xargs -0 wc -l`; untracked files excluded).
 
 launchd autostart, scheduled maintenance, adoption records, and WAL-transactional pin advance are separate purposes outside success criteria. If an observed failure later requires one, record the requirement and a behavioural test from that failure, then implement the smallest generic capability at its natural layer. Prior code can be read as research and is never adopted.
 
