@@ -4,22 +4,184 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from html import escape
+import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
+import subprocess
 import sys
+import tempfile
 import tomllib
 from typing import Any
+from urllib.parse import urlsplit
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from schema.validator import SCHEMA_ID, ValidationError, load_and_resolve
+from bootstrap.canonical_tree import canonical_tree_sha256
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "watch" / "com.fkst.cadence.plist.template"
+
+
+def _run_git(root: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *arguments], text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    ).stdout.strip()
+
+
+def _verified_checkout(root: Path, revision: str, tree: str) -> bool:
+    try:
+        if _run_git(root, "rev-parse", "HEAD") != revision:
+            return False
+        if canonical_tree_sha256(root, revision) != tree:
+            return False
+        # The canonical hasher proves the commit; this proves the materialised
+        # tracked files still represent it. Build outputs are intentionally ignored.
+        return not _run_git(root, "status", "--porcelain", "--untracked-files=no")
+    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError):
+        return False
+
+
+def _source_candidates(home: Path, source_url: str) -> list[Path]:
+    name = Path(source_url.removesuffix("/")).name.removesuffix(".git")
+    return [home / name, home / ".cache" / "fkst" / name]
+
+
+def _materialise_checkout(
+    destination: Path, source_url: str, revision: str, tree: str, home: Path
+) -> None:
+    parsed = urlsplit(source_url)
+    if parsed.scheme in {"http", "https"} and (
+        parsed.username is not None or parsed.password is not None
+    ):
+        raise ValueError(f"checkout {destination.name} has a credential-bearing source URL")
+    if _verified_checkout(destination, revision, tree):
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
+    try:
+        reusable = next(
+            (candidate for candidate in _source_candidates(home, source_url)
+             if candidate.resolve() != destination.resolve()
+             and _verified_checkout(candidate, revision, tree)),
+            None,
+        )
+        clone_source = reusable if reusable is not None else source_url
+        subprocess.run(
+            ["git", "clone", "--quiet", "--no-checkout", str(clone_source), str(temporary)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(temporary), "checkout", "--quiet", "--detach", revision],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        if not _verified_checkout(temporary, revision, tree):
+            raise ValueError(
+                f"checkout {destination.name} does not match pin {revision} / {tree}"
+            )
+        if destination.exists() or destination.is_symlink():
+            shutil.rmtree(destination) if destination.is_dir() and not destination.is_symlink() else destination.unlink()
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
+def _engine_product(checkout: Path, command: list[str]) -> Path:
+    if command and Path(command[0]).name == "cargo" and "-p" in command:
+        index = command.index("-p")
+        if index + 1 < len(command):
+            return checkout / "target" / "debug" / command[index + 1]
+    raise ValueError(
+        "engine build output is not reproducible from build_command; "
+        "cargo builds must declare -p <binary-package>"
+    )
+
+
+def _materialise_engine(
+    checkout: Path, binary: Path, command: list[str], revision: str, tree: str, state: Path
+) -> None:
+    fingerprint = hashlib.sha256(json.dumps(
+        {"revision": revision, "tree_sha256": tree, "build_command": command},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("ascii")).hexdigest()
+    marker = state / "engine-build.json"
+    try:
+        settled = json.loads(marker.read_text(encoding="ascii")).get("fingerprint") == fingerprint
+    except (OSError, json.JSONDecodeError, AttributeError):
+        settled = False
+    if settled and binary.is_file() and os.access(binary, os.X_OK):
+        return
+    result = subprocess.run(command, cwd=checkout, check=False)
+    if result.returncode != 0:
+        raise ValueError(f"engine build failed with exit code {result.returncode}: {command[0]}")
+    product = _engine_product(checkout, command)
+    if not product.is_file() or not os.access(product, os.X_OK):
+        raise ValueError(f"engine build did not produce executable: {product}")
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    pointer = binary.with_name(f".{binary.name}.{os.getpid()}.tmp")
+    pointer.unlink(missing_ok=True)
+    pointer.symlink_to(product)
+    os.replace(pointer, binary)
+    state.mkdir(parents=True, exist_ok=True)
+    temporary = marker.with_name(f".{marker.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps({"fingerprint": fingerprint}, sort_keys=True) + "\n", encoding="ascii")
+    os.replace(temporary, marker)
+
+
+def _hydrate(
+    declarations: list[tuple[Path, dict[str, Any]]], lock_path: Path, home: Path
+) -> None:
+    lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+    pins = {entry["id"]: entry for entry in lock.get("external_source", [])}
+    base = home / ".fkst" / "machine"
+    checkout_specs: dict[str, tuple[str, str, str]] = {}
+    engine_specs: dict[str, tuple[str, list[str]]] = {}
+    preserved_roots: set[str] = set()
+    for declaration_path, declaration in declarations:
+        providers = {provider["id"]: provider for provider in declaration["provider"]}
+        for index, deployment in enumerate(declaration["deployment"]):
+            machine = deployment["machine"]
+            for role in ("target", "platform", "engine"):
+                logical = machine[f"{role}_checkout"]
+                source_id = deployment["sources"][role]["lock_ref"]
+                try:
+                    pin = pins[source_id]
+                    spec = (pin["git"], pin["resolved"]["rev"], pin["resolved"]["tree_sha256"])
+                except (KeyError, TypeError) as exc:
+                    raise ValueError(f"{declaration_path} deployment[{index}] source {source_id} has no complete pin") from exc
+                if logical in checkout_specs and checkout_specs[logical] != spec:
+                    raise ValueError(f"checkout root {logical} is assigned conflicting pins")
+                checkout_specs[logical] = spec
+            for field in ("durable", "runtime", "logs", "rate_pool"):
+                preserved_roots.add(machine[field])
+            engine_provider = providers[deployment["providers"]["engine"]]
+            engine_spec = (
+                machine["engine_checkout"], engine_provider["configuration"]["build_command"]
+            )
+            binary_name = machine["engine_binary"]
+            if binary_name in engine_specs and engine_specs[binary_name] != engine_spec:
+                raise ValueError(f"engine binary {binary_name} is assigned conflicting build inputs")
+            engine_specs[binary_name] = engine_spec
+    for logical, (url, revision, tree) in checkout_specs.items():
+        _materialise_checkout(base / "roots" / logical, url, revision, tree, home)
+    # These roots contain accumulated or runtime state. Generation creates them,
+    # but never removes or replaces their contents.
+    for logical in preserved_roots:
+        (base / "roots" / logical).mkdir(parents=True, exist_ok=True)
+    for binary_name, (checkout_name, command) in engine_specs.items():
+        _, revision, tree = checkout_specs[checkout_name]
+        _materialise_engine(
+            base / "roots" / checkout_name, base / "bin" / binary_name,
+            command, revision, tree, base / "state",
+        )
 
 
 def _load_declarations(repository: Path) -> list[tuple[Path, dict[str, Any]]]:
@@ -137,6 +299,7 @@ def generate(repository: Path, home: Path) -> tuple[Path, Path]:
     profile.write_text(_profile_text(declarations, home), encoding="ascii")
 
     lock = repository / "fkst.lock"
+    _hydrate(declarations, lock, home)
     for declaration_path, _ in declarations:
         load_and_resolve(declaration_path, profile, lock)
 
