@@ -41,6 +41,29 @@ def credential() -> tuple[str, str] | None:
     if not expected or login != expected:
         fail("refreshed-credential-identity-mismatch")
         return None
+    if document.get("target") != os.environ.get("FKST_GITHUB_REPO", ""):
+        fail("refreshed-credential-target-mismatch")
+        return None
+    if document.get("identity_proof") != "target-access-only;bot-login-not-mechanically-proven":
+        fail("refreshed-credential-proof-missing")
+        return None
+    real_gh = os.environ.get("FKST_GITHUB_REAL_GH", "")
+    if not real_gh or not os.path.isfile(real_gh) or not os.access(real_gh, os.X_OK):
+        fail("real-gh-unavailable")
+        return None
+    verification_environment = os.environ.copy()
+    verification_environment["GH_TOKEN"] = token
+    verification_environment.pop("GITHUB_TOKEN", None)
+    try:
+        verified = subprocess.run(
+            [real_gh, "api", "rate_limit"], env=verification_environment,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        verified = None
+    if verified is None or verified.returncode != 0:
+        fail("refreshed-credential-unusable")
+        return None
     return token, login
 
 

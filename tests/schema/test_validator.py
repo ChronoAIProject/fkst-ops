@@ -49,6 +49,8 @@ class ValidatorTests(unittest.TestCase):
             entries = {"target-source": target, "platform-source": platform, "engine-source": engine}
             for provider in declaration["provider"]:
                 lock_ref, relative = provider["implementation"].split(":", 1)
+                if lock_ref == "fkst-ops":
+                    continue
                 executable = entries[lock_ref] / relative
                 executable.parent.mkdir(parents=True, exist_ok=True)
                 executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
@@ -76,6 +78,10 @@ class ValidatorTests(unittest.TestCase):
     def test_machine_default_reference_resolves(self) -> None:
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
         self.assertEqual(result["deployment"][0]["integration"]["integration_branch"], "integration")
+
+    def test_github_credential_source_is_required_without_a_default(self) -> None:
+        del self.declaration["deployment"][0]["providers"]["github_credential"]
+        self.reject("providers.github_credential.*non-empty string")
 
     def test_cadence_interval_is_required_and_positive(self) -> None:
         del self.declaration["cadence_interval_seconds"]

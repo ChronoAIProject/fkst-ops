@@ -27,7 +27,7 @@ class OperatorLiftTest(unittest.TestCase):
             capture = root / "capture.json"
             helper = root / "credential-helper"
             helper.write_text(
-                '#!/bin/sh\nprintf \'%s\\n\' \'{"login":"resolved-bot","token":"fixture-secret-token"}\'\n',
+                '#!/bin/sh\nprintf \'%s\\n\' \'{"login":"resolved-bot","token":"fixture-secret-token","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}\'\n',
                 encoding="ascii",
             )
             helper.chmod(0o755)
@@ -60,13 +60,14 @@ DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
 RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","peer-bot"]'
 UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
 CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
-LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'
+LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
 mkdir -p "$HOST" "$DUR" "$RUNTIME_ROOT" "$LOGDIR"
 launch_one fixture 0
 '''
             env = os.environ.copy()
             env["CAPTURE"] = str(capture)
-            env["FKST_GITHUB_CREDENTIAL_HELPER"] = str(helper)
+            env["GITHUB_CREDENTIAL_PROVIDER"] = str(helper)
+            env["FKST_GITHUB_REAL_GH"] = "/usr/bin/true"
             if write is None:
                 env.pop("FKST_GITHUB_WRITE", None)
             else:
@@ -186,7 +187,7 @@ bin_ensure_fresh
         self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    python3 "$_repo_root/board/board.py"', source)
         self.assertIn('require_engine_binary || return 1\n  printf \'FKST_GITHUB_WRITE=', source)
         self.assertNotIn('GH_TOKEN="$GITHUB_TOKEN_DISCOVERED"', source)
-        self.assertIn('FKST_GITHUB_REAL_GH="$real_gh"', source)
+        self.assertIn('FKST_GITHUB_REAL_GH="$REAL_GH"', source)
 
     def test_write_posture_is_a_host_fact_and_defaults_to_non_writing(self) -> None:
         command = f'''eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
@@ -230,14 +231,14 @@ github_write_posture
     def test_launch_fails_closed_when_token_identity_differs_from_declared_bot(self) -> None:
         command = f'''eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
 _self_dir="{ROOT / 'ops'}"
-BOT=declared-bot
+BOT=declared-bot; REPO=example/repo; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
 authorize_github_writer
 '''
         with tempfile.TemporaryDirectory() as directory:
             helper = Path(directory) / "helper"
-            helper.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"login":"human-writer","token":"fixture-secret-token"}\'\n', encoding="ascii")
+            helper.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"login":"human-writer","token":"fixture-secret-token","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}\'\n', encoding="ascii")
             helper.chmod(0o755)
-            result = subprocess.run(["bash", "-c", command], env={**os.environ, "FKST_GITHUB_CREDENTIAL_HELPER": str(helper)}, text=True, capture_output=True, check=False)
+            result = subprocess.run(["bash", "-c", command], env={**os.environ, "GITHUB_CREDENTIAL_PROVIDER": str(helper), "FKST_GITHUB_REAL_GH": "/usr/bin/true", "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true"}, text=True, capture_output=True, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("identity-mismatch", result.stderr)
         self.assertIn("HEALTH=UNHEALTHY", result.stderr)
@@ -246,14 +247,14 @@ authorize_github_writer
     def test_gate_admits_matching_app_token_identity(self) -> None:
         command = f'''eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
 _self_dir="{ROOT / 'ops'}"
-BOT='fkst-loning-s-macbook-m5[bot]'
+BOT='fkst-loning-s-macbook-m5[bot]'; REPO=example/repo; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
 authorize_github_writer
 '''
         with tempfile.TemporaryDirectory() as directory:
             helper = Path(directory) / "helper"
-            helper.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"login":"fkst-loning-s-macbook-m5[bot]","token":"fixture-secret-token"}\'\n', encoding="ascii")
+            helper.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"login":"fkst-loning-s-macbook-m5[bot]","token":"fixture-secret-token","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}\'\n', encoding="ascii")
             helper.chmod(0o755)
-            result = subprocess.run(["bash", "-c", command], env={**os.environ, "FKST_GITHUB_CREDENTIAL_HELPER": str(helper)}, text=True, capture_output=True, check=False)
+            result = subprocess.run(["bash", "-c", command], env={**os.environ, "GITHUB_CREDENTIAL_PROVIDER": str(helper), "FKST_GITHUB_REAL_GH": "/usr/bin/true", "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true"}, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_active_account_resolution_fails_closed_for_ambiguous_report(self) -> None:
@@ -319,7 +320,7 @@ status_one fixture
                 f'''#!/bin/sh
 n=0; [ ! -f "{counter}" ] || n=$(cat "{counter}"); n=$((n+1)); printf '%s' "$n" > "{counter}"
 [ "$n" -eq 1 ] && token=expired || token=fresh
-printf '{{"login":"declared-bot","token":"%s"}}\\n' "$token"
+printf '{{"login":"declared-bot","token":"%s","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}}\\n' "$token"
 ''', encoding="ascii",
             )
             helper.chmod(0o755)
@@ -334,6 +335,7 @@ printf '{{"login":"declared-bot","token":"%s"}}\\n' "$token"
                 "FKST_GITHUB_CREDENTIAL_HELPER": str(helper),
                 "FKST_GITHUB_BOT_LOGIN": "declared-bot",
                 "FKST_GITHUB_REAL_GH": str(real_gh),
+                "FKST_GITHUB_REPO": "example/repo",
             }
             first = subprocess.run(
                 [sys.executable, str(ROOT / "ops/github_credential_gh.py"), "api", "/installation"],
@@ -383,7 +385,7 @@ printf '%s\\n' '{{"login":"wrong-bot","token":"{token}"}}'
             token = "process-argument-secret"
             helper = root / "helper"
             helper.write_text(
-                f'#!/bin/sh\nprintf \'%s\\n\' \'{{"login":"declared-bot","token":"{token}"}}\'\n',
+                f'#!/bin/sh\nprintf \'%s\\n\' \'{{"login":"declared-bot","token":"{token}","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}}\'\n',
                 encoding="ascii",
             )
             helper.chmod(0o755)
@@ -394,7 +396,8 @@ printf '%s\\n' '{{"login":"wrong-bot","token":"{token}"}}'
             )
             real_gh.chmod(0o755)
             env = {**os.environ, "FKST_GITHUB_CREDENTIAL_HELPER": str(helper),
-                   "FKST_GITHUB_BOT_LOGIN": "declared-bot", "FKST_GITHUB_REAL_GH": str(real_gh)}
+                   "FKST_GITHUB_BOT_LOGIN": "declared-bot", "FKST_GITHUB_REAL_GH": str(real_gh),
+                   "FKST_GITHUB_REPO": "example/repo"}
             result = subprocess.run(
                 [sys.executable, str(ROOT / "ops/github_credential_gh.py"), "api", "/repo"],
                 env=env, text=True, capture_output=True, check=False,

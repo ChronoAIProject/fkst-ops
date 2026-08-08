@@ -70,10 +70,10 @@ def provider(field):
     binding=dep["providers"][field]
     return [binding["executable"],binding["contract"],json.dumps(binding["configuration"],separators=(",",":"))]
 claim=dep["claim_posture"]
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
@@ -176,11 +176,27 @@ EOF
 }
 
 authorize_github_writer() {
-  [ -n "${FKST_GITHUB_CREDENTIAL_HELPER:-}" ] && [ -x "$FKST_GITHUB_CREDENTIAL_HELPER" ] || {
+  [ -n "${GITHUB_CREDENTIAL_PROVIDER:-}" ] && [ -x "$GITHUB_CREDENTIAL_PROVIDER" ] || {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-helper-unavailable" >&2
     return 1
   }
-  FKST_GITHUB_BOT_LOGIN="$BOT" python3 "$_self_dir/github_credential_gh.py" --fkst-auth-check || return 1
+  local credential_source
+  credential_source=$(printf '%s' "$GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"])') || return 1
+  [ "$credential_source" = github-app ] || {
+    echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-source-not-github-app" >&2
+    return 1
+  }
+  REAL_GH="${FKST_GITHUB_REAL_GH:-}"
+  [ -n "$REAL_GH" ] || REAL_GH=$(type -P gh) || { echo "error: real gh executable not found" >&2; return 1; }
+  GITHUB_CREDENTIAL_RESOLVER="${FKST_GITHUB_CREDENTIAL_RESOLVER:-}"
+  [ -n "$GITHUB_CREDENTIAL_RESOLVER" ] || GITHUB_CREDENTIAL_RESOLVER=$(type -P gh-app) || {
+    echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=github-app-resolver-unavailable" >&2
+    return 1
+  }
+  env -u GH_TOKEN -u GITHUB_TOKEN FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
+    FKST_GITHUB_CREDENTIAL_SOURCE="$credential_source" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
+    FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_BOT_LOGIN="$BOT" \
+    python3 "$_self_dir/github_credential_gh.py" --fkst-auth-check || return 1
   GITHUB_WRITER_LOGIN="$BOT"
 }
 
@@ -409,8 +425,9 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   require_engine_binary || return 1
   printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s\n' \
     "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
-  local real_gh; real_gh=$(command -v gh) || { echo "error: gh executable not found" >&2; return 1; }
-  BIN="$BIN" FKST_GITHUB_REAL_GH="$real_gh" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
+  env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
+    FKST_GITHUB_CREDENTIAL_SOURCE="github-app" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
+    FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
     FKST_GITHUB_CLAIM_MODE="$CLAIM_MODE" FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE="$CLAIM_LABEL_EXCLUSIVE" \
     FKST_RATE_POOL_ROOT="$RATE_POOL" FKST_GITHUB_BOT_LOGIN="$BOT" \
     FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins" \

@@ -42,6 +42,8 @@ def test_regenerates_valid_profile_and_declared_plist_interval(tmp_path: Path) -
         (platform / "packages" / package).mkdir(parents=True, exist_ok=True)
     for provider in declaration["provider"]:
         lock_ref, relative = provider["implementation"].split(":", 1)
+        if lock_ref == "fkst-ops":
+            continue
         source = {"target-source": target, "engine-source": engine}[lock_ref]
         executable = source / relative
         executable.parent.mkdir(parents=True, exist_ok=True)

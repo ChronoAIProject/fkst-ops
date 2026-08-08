@@ -95,6 +95,12 @@ managed-bots = ["fkst-bot", "fkst-review-bot"]
 integration-branch = "integration"
 ''', encoding="utf-8")
             lock.write_text(f'''[[external_source]]
+id = "fkst-ops"
+git = "{mechanism}"
+[external_source.resolved]
+rev = "0000000000000000000000000000000000000000"
+tree_sha256 = "sha256-{'0' * 64}"
+[[external_source]]
 id = "target-source"
 git = "{target}"
 [external_source.resolved]

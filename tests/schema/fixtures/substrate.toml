@@ -33,6 +33,7 @@ rate_pool = "shared-rate-pool"
 bot_login = "github-bot"
 managed_bot_set = "managed-bots"
 [deployment.providers]
+github_credential = "github-credential"
 engine = "engine"
 board_engine_durable = "engine-board"
 board_github_control = "github-board"
@@ -55,3 +56,9 @@ kind = "board.github-control"
 implementation = "platform-source:providers/github-board"
 contract = "fkst.ops.board.github-control.v1"
 configuration = {}
+[[provider]]
+id = "github-credential"
+kind = "credential.github"
+implementation = "fkst-ops:providers/github_credential_gh.py"
+contract = "fkst.ops.credential.github.v1"
+configuration = { source = "github-app" }

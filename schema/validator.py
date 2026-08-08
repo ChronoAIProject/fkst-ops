@@ -21,11 +21,13 @@ from schema.provider_surface import MECHANISM_SOURCE_ID, PUBLISHED_PROVIDER_ENTR
 SCHEMA_ID = "fkst.ops.deployment.v1"
 MACHINE_SCHEMA_ID = "fkst.ops.machine-profile.v1"
 CONTRACTS = {
+    "credential.github": "fkst.ops.credential.github.v1",
     "engine": "fkst.ops.engine.v1",
     "board.engine-durable": "fkst.ops.board.engine-durable.v1",
     "board.github-control": "fkst.ops.board.github-control.v1",
 }
 PROVIDER_FIELDS = {
+    "github_credential": "credential.github",
     "engine": "engine",
     "board_engine_durable": "board.engine-durable",
     "board_github_control": "board.github-control",
@@ -264,6 +266,12 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                     _string_list(configuration, "build_command", path + ".configuration", nonempty=True)
                 )
             }
+        elif kind == "credential.github":
+            _closed(configuration, {"source"}, path + ".configuration")
+            source = _string(configuration, "source", path + ".configuration")
+            if source != "github-app":
+                _fail(path + ".configuration.source", "must be github-app")
+            resolved_configuration = {"source": source}
         else:
             _closed(configuration, set(), path + ".configuration")
             resolved_configuration = {}

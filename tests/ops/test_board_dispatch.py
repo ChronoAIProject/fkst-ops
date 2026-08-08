@@ -64,9 +64,16 @@ durable="durable"
 runtime="runtime"
 logs="logs"
 [deployment.providers]
+github_credential="github-credential"
 engine="engine"
 board_engine_durable="engine-board"
 board_github_control="github-board"
+[[provider]]
+id="github-credential"
+kind="credential.github"
+implementation="fkst-ops:providers/github_credential_gh.py"
+contract="fkst.ops.credential.github.v1"
+configuration={source="github-app"}
 [[provider]]
 id="engine"
 kind="engine"
