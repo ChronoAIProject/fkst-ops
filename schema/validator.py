@@ -83,6 +83,13 @@ def _string_list(table: dict[str, Any], field: str, path: str, *, nonempty: bool
     return value
 
 
+def _positive_integer(table: dict[str, Any], field: str, path: str) -> int:
+    value = table.get(field)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        _fail(f"{path}.{field}", "must be a positive integer")
+    return value
+
+
 def _logical(value: str, path: str) -> None:
     if os.path.isabs(value) or PurePosixPath(value).is_absolute():
         _fail(path, "absolute machine value is forbidden; use a logical name")
@@ -221,9 +228,12 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
 def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str, Any], lock: dict[str, Any]) -> dict[str, Any]:
     """Validate all inputs and return a newly allocated resolved declaration."""
     declaration = _table(declaration, "declaration")
-    _closed(declaration, {"schema", "deployment", "provider"}, "declaration")
+    _closed(declaration, {"schema", "cadence_interval_seconds", "deployment", "provider"}, "declaration")
     if _string(declaration, "schema", "declaration") != SCHEMA_ID:
         _fail("declaration.schema", f"must be {SCHEMA_ID}")
+    cadence_interval_seconds = _positive_integer(
+        declaration, "cadence_interval_seconds", "declaration"
+    )
     pins = _validate_lock(_table(lock, "lock"))
     machine_values = _validate_machine_profile(_table(machine_profile, "machine_profile"))
 
@@ -276,9 +286,17 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     for index, raw in enumerate(deployments):
         path = f"declaration.deployment[{index}]"
         dep = _table(raw, path)
-        _closed(dep, {"id", "target_identity", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
+        _closed(dep, {"id", "target_identity", "managed_bot_logins", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
+        managed_bot_logins: list[str] = []
+        if "managed_bot_logins" in dep:
+            managed_bot_logins = _string_list(
+                dep, "managed_bot_logins", path, nonempty=True
+            )
+            _require_unique(managed_bot_logins, path + ".managed_bot_logins")
+        elif "github_devloop_profile" in dep:
+            _fail(path + ".managed_bot_logins", "must be a non-empty string list")
         if identity in seen_ids:
             _fail(path + ".id", f"duplicate deployment identity: {identity}")
         if target in seen_targets:
@@ -355,9 +373,18 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                          "machine": _resolve_machine(_table(dep.get("machine"), path + ".machine"), machine_values,
                                                      path + ".machine", profile_present=profile_block is not None),
                          "providers": resolved_bindings})
+        if "managed_bot_set" in resolved["machine"] and resolved["machine"]["managed_bot_set"] != managed_bot_logins:
+            _fail(
+                path + ".machine.managed_bot_set",
+                "resolved set must equal deployment.managed_bot_logins",
+            )
         _validate_resolved_paths(resolved, path, pins)
         resolved_deployments.append(resolved)
-    return {"schema": SCHEMA_ID, "deployment": resolved_deployments}
+    return {
+        "schema": SCHEMA_ID,
+        "cadence_interval_seconds": cadence_interval_seconds,
+        "deployment": resolved_deployments,
+    }
 
 
 def load_and_resolve(declaration_path: str | Path, machine_profile_path: str | Path, lock_path: str | Path) -> dict[str, Any]:

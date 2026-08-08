@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.fkst.cadence</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON3__</string>
+    <string>__FKST_OPS_CHECKOUT__/watch/cadence_round.py</string>
+    <string>--deployment-repository</string>
+    <string>__DEPLOYMENT_REPOSITORY__</string>
+    <string>--machine-profile</string>
+    <string>__MACHINE_PROFILE__</string>
+    <string>--ledger</string>
+    <string>__LEDGER__</string>
+    <string>--operator-entry</string>
+    <string>__FKST_OPS_CHECKOUT__/bin/fkst-ops</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>__INTERVAL_SECONDS__</integer>
+  <key>StandardOutPath</key>
+  <string>__STANDARD_OUT_LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__STANDARD_ERROR_LOG__</string>
+</dict>
+</plist>

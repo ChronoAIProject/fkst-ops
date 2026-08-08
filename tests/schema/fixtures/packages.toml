@@ -1,8 +1,10 @@
 schema = "fkst.ops.deployment.v1"
+cadence_interval_seconds = 300
 
 [[deployment]]
 id = "packages"
 target_identity = "ChronoAIProject/fkst-packages"
+managed_bot_logins = ["fkst-bot", "fkst-review-bot"]
 
 [deployment.github_devloop_profile]
 version = "1"
@@ -22,7 +24,7 @@ platform = ["github-devloop", "github-devloop-pr", "github-devloop-integration"]
 
 [deployment.integration]
 upstream_branch = "dev"
-integration_branch = "machine:integration-branch"
+integration_branch = "integration"
 rollup_merge = "enabled"
 
 [deployment.machine]

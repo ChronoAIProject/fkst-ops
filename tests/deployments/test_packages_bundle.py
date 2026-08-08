@@ -20,6 +20,8 @@ def test_installation_document_points_to_deployment_owned_inputs():
     text = (ROOT / "deployments" / "packages" / "INSTALL.md").read_text(encoding="utf-8")
     assert "no concrete deployment declaration" in text
     assert "deployment-owned lock" in text
+    assert "bin/fkst-regenerate" in text
+    assert "Do not author a machine profile" in text
 
 
 def test_every_install_document_repository_path_exists():

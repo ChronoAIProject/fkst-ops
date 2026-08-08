@@ -77,6 +77,14 @@ class ValidatorTests(unittest.TestCase):
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
         self.assertEqual(result["deployment"][0]["integration"]["integration_branch"], "integration")
 
+    def test_cadence_interval_is_required_and_positive(self) -> None:
+        del self.declaration["cadence_interval_seconds"]
+        self.reject("cadence_interval_seconds.*positive integer")
+
+    def test_managed_bots_are_deployment_policy(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = ["another-bot"]
+        self.reject("resolved set must equal deployment.managed_bot_logins")
+
     def test_source_git_url_resolves_from_lock(self) -> None:
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
         source = result["deployment"][0]["sources"]["platform"]

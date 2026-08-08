@@ -1,8 +1,10 @@
 schema = "fkst.ops.deployment.v1"
+cadence_interval_seconds = 300
 
 [[deployment]]
 id = "substrate"
 target_identity = "ChronoAIProject/fkst-substrate"
+managed_bot_logins = ["fkst-bot", "fkst-review-bot"]
 [deployment.sources.target]
 lock_ref = "target-source"
 [deployment.sources.platform]

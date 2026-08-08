@@ -42,7 +42,10 @@ Multiple declarations in one deployment repository reference one repository-leve
 
 ### 3.3 L-machine: one configuration per machine
 
-L-machine retains the existing `dogfood.config.sh` shape: absolute roots, bot login, managed bot set, credentials, and machine defaults. The current operator sources this file and resolves those values at `.claude/skills/dogfood-github-devloop/dogfood.sh:37-62`.
+L-machine is generated, never hand-authored. Absolute roots and binary locations are derived below
+the conventional home base, and the bot login is discovered from the authenticated GitHub CLI
+session. Managed bot membership, integration branches, and cadence are deployment parameters.
+The generated profile contains no authored machine defaults.
 
 Declarations reference machine values by **logical name only**. They never contain absolute paths, logins, or secrets.
 
