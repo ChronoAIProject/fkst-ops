@@ -25,7 +25,7 @@ engine = "/srv/bin/fkst-framework"
 github-bot = "fkst-bot"
 
 [sets]
-managed-bots = ["fkst-bot", "fkst-review-bot"]
+managed-bots = ["fkst-bot"]
 
 [defaults]
 integration-branch = "integration"

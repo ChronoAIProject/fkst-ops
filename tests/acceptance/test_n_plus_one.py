@@ -90,7 +90,7 @@ engine = "{engine / 'fkst-framework'}"
 [credentials]
 github-bot = "fixture-bot"
 [sets]
-managed-bots = ["fkst-bot", "fkst-review-bot"]
+    managed-bots = ["fkst-bot"]
 [defaults]
 integration-branch = "integration"
 ''', encoding="utf-8")

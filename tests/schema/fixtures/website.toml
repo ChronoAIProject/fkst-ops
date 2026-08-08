@@ -4,7 +4,7 @@ cadence_interval_seconds = 300
 [[deployment]]
 id = "website"
 target_identity = "ChronoAIProject/fkst-website"
-managed_bot_logins = ["fkst-bot", "fkst-review-bot"]
+managed_bot_logins = ["fkst-bot"]
 
 [deployment.claim_posture]
 mode = "label"

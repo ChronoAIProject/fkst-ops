@@ -50,34 +50,48 @@ def test_regenerates_valid_profile_and_declared_plist_interval(tmp_path: Path) -
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
         executable.chmod(0o755)
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    gh = fake_bin / "gh"
-    gh.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' 'github.com' "
-        "'  + Logged in to github.com account fixture-bot (GH_TOKEN)' "
-        "'  - Active account: true'\n",
-        encoding="ascii",
-    )
-    gh.chmod(0o755)
-    environment = {**os.environ, "HOME": str(home), "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    environment = {**os.environ, "HOME": str(home)}
+    environment.pop("GH_TOKEN", None)
 
     result = subprocess.run(
         [sys.executable, str(GENERATOR), str(repository)],
         env=environment, text=True, capture_output=True, check=False,
     )
     assert result.returncode == 0, result.stderr
-
     profile = repository / ".fkst" / "machine-profile.toml"
-    resolved = load_and_resolve(repository / "deployment.toml", profile, repository / "fkst.lock")
-    assert resolved["deployment"][0]["machine"]["bot_login"] == "fixture-bot"
-    assert resolved["deployment"][0]["machine"]["managed_bot_set"] == [
-        "fkst-bot", "fkst-review-bot"
-    ]
-
     plist_path = home / "Library" / "LaunchAgents" / "com.fkst.cadence.plist"
+    without_token = (profile.read_bytes(), plist_path.read_bytes())
+
+    with_token = {**environment, "GH_TOKEN": "must-not-affect-generated-artifacts"}
+    repeated = subprocess.run(
+        [sys.executable, str(GENERATOR), str(repository)],
+        env=with_token, text=True, capture_output=True, check=False,
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    assert without_token == (profile.read_bytes(), plist_path.read_bytes())
+
+    resolved = load_and_resolve(repository / "deployment.toml", profile, repository / "fkst.lock")
+    assert resolved["deployment"][0]["machine"]["bot_login"] == "fkst-bot"
+    assert resolved["deployment"][0]["machine"]["managed_bot_set"] == ["fkst-bot"]
+
     with plist_path.open("rb") as stream:
         plist = plistlib.load(stream)
     assert plist["StartInterval"] == 300
     assert plist["ProgramArguments"][5] == str(profile)
+
+
+def test_rejects_missing_or_ambiguous_declared_bot_login(tmp_path: Path) -> None:
+    declaration = tomllib.loads((FIXTURES / "packages.toml").read_text())
+    home = tmp_path / "home"
+    home.mkdir()
+    for value, expected in (([], "exactly one"), (["one", "two"], "exactly one")):
+        declaration["deployment"][0]["managed_bot_logins"] = value
+        try:
+            from watch.generate_artifacts import _profile_text
+
+            _profile_text([(tmp_path / "declaration.toml", declaration)], home)
+        except ValueError as exc:
+            assert "declaration" in str(exc)
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid bot login declaration was accepted")

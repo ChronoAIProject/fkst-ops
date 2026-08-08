@@ -8,8 +8,6 @@ from html import escape
 import os
 from pathlib import Path
 import plistlib
-import re
-import subprocess
 import sys
 import tomllib
 from typing import Any
@@ -41,52 +39,28 @@ def _load_declarations(repository: Path) -> list[tuple[Path, dict[str, Any]]]:
     return found
 
 
-def _github_login() -> str:
-    result = subprocess.run(
-        ["gh", "auth", "status", "--active", "--hostname", "github.com"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    report = result.stdout + result.stderr
-    accounts = []
-    for line in report.splitlines():
-        match = re.match(
-            r"^\s*\S Logged in to github[.]com account (.+) \(([^()]*)\)\s*$", line
-        )
-        if match:
-            accounts.append(match.groups())
-    active = [
-        line for line in report.splitlines()
-        if re.match(r"^\s*- Active account: true\s*$", line)
-    ]
-    if result.returncode or len(accounts) != 1 or len(active) != 1:
-        raise ValueError("cannot resolve exactly one active GitHub CLI identity")
-    login, source = accounts[0]
-    if not login or not source or source != "GH_TOKEN":
-        raise ValueError(
-            f"active GitHub CLI credential source is {source or '<empty>'}, expected GH_TOKEN"
-        )
-    return login
-
-
 def _quoted(value: str) -> str:
     import json
 
     return json.dumps(value, ensure_ascii=True)
 
 
-def _profile_text(
-    declarations: list[tuple[Path, dict[str, Any]]], home: Path, login: str
-) -> str:
+def _profile_text(declarations: list[tuple[Path, dict[str, Any]]], home: Path) -> str:
     base = home / ".fkst" / "machine"
     roots: dict[str, str] = {}
     binaries: dict[str, str] = {}
     credentials: dict[str, str] = {}
     sets: dict[str, list[str]] = {}
 
-    for _, declaration in declarations:
-        for deployment in declaration["deployment"]:
+    for declaration_path, declaration in declarations:
+        for index, deployment in enumerate(declaration["deployment"]):
+            logins = deployment.get("managed_bot_logins")
+            if not isinstance(logins, list) or len(logins) != 1 or not isinstance(logins[0], str) or not logins[0]:
+                raise ValueError(
+                    f"declaration {declaration_path} deployment[{index}].managed_bot_logins "
+                    "must declare exactly one bot login"
+                )
+            login = logins[0]
             machine = deployment["machine"]
             for field in (
                 "target_checkout", "platform_checkout", "engine_checkout",
@@ -98,7 +72,10 @@ def _profile_text(
             binaries.setdefault(
                 machine["engine_binary"], str(base / "bin" / machine["engine_binary"])
             )
-            credentials.setdefault(machine["bot_login"], login)
+            credential_name = machine["bot_login"]
+            if credential_name in credentials and credentials[credential_name] != login:
+                raise ValueError(f"conflicting declarations for bot login {credential_name}")
+            credentials[credential_name] = login
             set_name = machine["managed_bot_set"]
             value = deployment["managed_bot_logins"]
             if set_name in sets and sets[set_name] != value:
@@ -157,7 +134,7 @@ def generate(repository: Path, home: Path) -> tuple[Path, Path]:
     profile.parent.mkdir(parents=True, exist_ok=True)
     (home / ".fkst" / "watch").mkdir(parents=True, exist_ok=True)
     launch_agent.parent.mkdir(parents=True, exist_ok=True)
-    profile.write_text(_profile_text(declarations, home, _github_login()), encoding="ascii")
+    profile.write_text(_profile_text(declarations, home), encoding="ascii")
 
     lock = repository / "fkst.lock"
     for declaration_path, _ in declarations:

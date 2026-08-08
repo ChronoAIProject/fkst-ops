@@ -311,6 +311,8 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             managed_bot_logins = _string_list(
                 dep, "managed_bot_logins", path, nonempty=True
             )
+            if len(managed_bot_logins) != 1:
+                _fail(path + ".managed_bot_logins", "must contain exactly one bot login")
             _require_unique(managed_bot_logins, path + ".managed_bot_logins")
         elif "github_devloop_profile" in dep:
             _fail(path + ".managed_bot_logins", "must be a non-empty string list")
