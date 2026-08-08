@@ -82,6 +82,51 @@ class ValidatorTests(unittest.TestCase):
         source = result["deployment"][0]["sources"]["platform"]
         self.assertEqual(source["git"], "https://invalid.example/target.git")
 
+    def test_published_mechanism_provider_binds_and_resolves(self) -> None:
+        provider = self.declaration["provider"][1]
+        provider["implementation"] = "fkst-ops:providers/board_engine_durable.py"
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        binding = result["deployment"][0]["providers"]["board_engine_durable"]
+        self.assertEqual(Path(binding["executable"]), Path(__file__).parents[2] / "providers/board_engine_durable.py")
+
+    def test_published_engine_provider_binds_and_command_resolves(self) -> None:
+        self.declaration["provider"][0]["implementation"] = "fkst-ops:providers/engine.py"
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        deployment = result["deployment"][0]
+        self.assertEqual(
+            Path(deployment["providers"]["engine"]["executable"]),
+            Path(__file__).parents[2] / "providers/engine.py",
+        )
+        self.assertEqual(deployment["providers"]["engine"]["configuration"]["build_command"], ["make", "engine"])
+
+    def test_rejects_malformed_engine_build_command(self) -> None:
+        self.declaration["provider"][0]["configuration"]["build_command"] = "make engine"
+        self.reject("configuration.build_command.*non-empty string list")
+
+    def test_rejects_missing_engine_build_command(self) -> None:
+        del self.declaration["provider"][0]["configuration"]["build_command"]
+        self.reject("configuration.build_command.*non-empty string list")
+
+    def test_rejects_board_provider_configuration(self) -> None:
+        self.declaration["provider"][1]["configuration"]["unexpected"] = True
+        self.reject("configuration.*unknown field")
+
+    def test_rejects_non_published_mechanism_path(self) -> None:
+        self.declaration["provider"][1]["implementation"] = "fkst-ops:ops/invoke_provider.py"
+        self.reject("entry point is not published for this provider kind")
+
+    def test_rejects_absolute_provider_entry_point(self) -> None:
+        self.declaration["provider"][1]["implementation"] = "fkst-ops:/providers/board_engine_durable.py"
+        self.reject("entry point must be a safe relative path")
+
+    def test_rejects_traversing_provider_entry_point(self) -> None:
+        self.declaration["provider"][1]["implementation"] = "fkst-ops:providers/../providers/board_engine_durable.py"
+        self.reject("entry point must be a safe relative path")
+
+    def test_rejects_unknown_provider_kind(self) -> None:
+        self.declaration["provider"][0]["kind"] = "unknown"
+        self.reject("unknown provider kind")
+
     def test_profile_machine_references_are_optional_without_profile(self) -> None:
         del self.declaration["deployment"][0]["github_devloop_profile"]
         for field in ("rate_pool", "bot_login", "managed_bot_set"):
@@ -158,6 +203,7 @@ class ValidatorTests(unittest.TestCase):
     def test_rejects_binding_of_wrong_kind(self) -> None:
         self.declaration["provider"][0]["kind"] = "board.engine-durable"
         self.declaration["provider"][0]["contract"] = "fkst.ops.board.engine-durable.v1"
+        self.declaration["provider"][0]["configuration"] = {}
         self.reject("binding kind must be engine")
 
     def test_rejects_version_mismatched_provider(self) -> None:
@@ -201,6 +247,14 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(run.returncode, 2)
         self.assertEqual(run.stdout, "")
         self.assertIn("deployment preflight failed", run.stderr)
+
+    def test_cli_help_works_by_absolute_script_path_outside_checkout(self) -> None:
+        run = subprocess.run(
+            [sys.executable, str(Path(__file__).parents[2] / "schema" / "validator.py"), "--help"],
+            cwd=self.temp.name, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("usage:", run.stdout)
 
 
 if __name__ == "__main__":

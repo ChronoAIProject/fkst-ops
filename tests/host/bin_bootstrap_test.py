@@ -23,24 +23,26 @@ def test_explicit_binary_is_preserved(tmp_path):
 
 
 def test_total_miss_invokes_declared_engine_provider(tmp_path):
-    checkout = tmp_path / "checkout"; checkout.mkdir()
+    checkout = tmp_path / "checkout"; checkout.mkdir(); (checkout / ".git").mkdir()
     binary = tmp_path / "engine"
-    log = tmp_path / "request.json"
-    provider = executable(tmp_path / "provider", f'''#!/bin/sh
-cat > "{log}"
-printf '#!/bin/sh\\nexit 0\\n' > "{binary}"
-chmod +x "{binary}"
-printf '%s\\n' '{{"version":"fkst.ops.invocation.v1","ok":true,"result":{{"binary":"{binary}","source_rev":"0123456789012345678901234567890123456789"}}}}'
+    tools = tmp_path / "tools"; tools.mkdir()
+    executable(tools / "git", '''#!/bin/sh
+case "$1" in branch) echo build;; pull) :;; rev-parse) printf '%040d\n' 0;; *) exit 1;; esac
+''')
+    build = executable(tmp_path / "build", '''#!/bin/sh
+printf '#!/bin/sh\nexit 0\n' > "$1"
+chmod +x "$1"
 ''')
     env = os.environ.copy()
-    env.update(FKST_OPS_ENGINE_PROVIDER=str(provider), FKST_OPS_ENGINE_CHECKOUT=str(checkout),
-               FKST_OPS_ENGINE_BINARY=str(binary), FKST_OPS_ENGINE_BRANCH="dev")
+    env.update(PATH=f"{tools}{os.pathsep}{env['PATH']}", FKST_OPS_ENGINE_PROVIDER=str(ROOT / "providers/engine.py"),
+               FKST_OPS_ENGINE_CHECKOUT=str(checkout), FKST_OPS_ENGINE_BINARY=str(binary),
+               FKST_OPS_ENGINE_BRANCH="build", FKST_OPS_ENGINE_CONFIGURATION=json.dumps({"build_command": [str(build), str(binary)]}))
     command = f'. "{BOOTSTRAP}"; bootstrap_bin_on_total_miss'
     result = subprocess.run(["bash", "-c", command], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    request = json.loads(log.read_text(encoding="utf-8"))
-    assert request["contract"] == "fkst.ops.engine.v1"
-    assert request["input"]["engine_checkout"] == str(checkout)
+    response = json.loads(result.stdout)
+    assert response["ok"] is True
+    assert response["result"]["binary"] == str(binary)
 
 
 def test_readonly_miss_does_not_invoke_provider(tmp_path):

@@ -1,8 +1,12 @@
-# Board provider ports
+# Provider ports
 
-The executables in this directory implement the two direct board ports defined
+The executables in this directory implement the direct ports defined
 by `fkst.ops.invocation.v1`. They read one JSON document from standard input and
 write one JSON document to standard output.
+
+`engine.py` updates a declared Git checkout with `git pull --ff-only`, executes
+the resolved argv-only build command without a shell, and verifies the declared
+engine binary contract.
 
 `board_github_control.sh` retains the GitHub classifier and resolves its
 package-owned workflow and lifecycle fact tools through

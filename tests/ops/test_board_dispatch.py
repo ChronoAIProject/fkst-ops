@@ -64,16 +64,19 @@ id="engine"
 kind="engine"
 implementation="engine:providers/build"
 contract="fkst.ops.engine.v1"
+configuration={build_command=["true"]}
 [[provider]]
 id="engine-board"
 kind="board.engine-durable"
 implementation="source:providers/board"
 contract="fkst.ops.board.engine-durable.v1"
+configuration={}
 [[provider]]
 id="github-board"
 kind="board.github-control"
 implementation="source:providers/board"
 contract="fkst.ops.board.github-control.v1"
+configuration={}
 ''', encoding="utf-8")
     profile = tmp_path / "machine.toml"
     profile.write_text(f'''schema="fkst.ops.machine-profile.v1"

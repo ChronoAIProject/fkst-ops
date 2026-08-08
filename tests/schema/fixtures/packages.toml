@@ -47,13 +47,16 @@ id = "engine"
 kind = "engine"
 implementation = "engine-source:bin/build-provider"
 contract = "fkst.ops.engine.v1"
+configuration = { build_command = ["make", "engine"] }
 [[provider]]
 id = "engine-board"
 kind = "board.engine-durable"
 implementation = "target-source:providers/engine-board"
 contract = "fkst.ops.board.engine-durable.v1"
+configuration = {}
 [[provider]]
 id = "github-board"
 kind = "board.github-control"
 implementation = "target-source:providers/github-board"
 contract = "fkst.ops.board.github-control.v1"
+configuration = {}

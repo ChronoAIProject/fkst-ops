@@ -33,11 +33,13 @@ resolve_bin_contract() {
 }
 
 bootstrap_bin_on_total_miss() {
+  # engine-provider-configuration: forward committed binding configuration as typed input.
   : "${FKST_OPS_ENGINE_PROVIDER:?declared engine provider is required}"
   : "${FKST_OPS_ENGINE_CHECKOUT:?resolved engine checkout is required}"
   : "${FKST_OPS_ENGINE_BINARY:?resolved engine binary is required}"
   : "${FKST_OPS_ENGINE_BRANCH:?resolved engine branch is required}"
-  python3 -c 'import json,sys; print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build"}))' \
-    "$FKST_OPS_ENGINE_CHECKOUT" "$FKST_OPS_ENGINE_BINARY" "$FKST_OPS_ENGINE_BRANCH" \
+  : "${FKST_OPS_ENGINE_CONFIGURATION:?resolved engine provider configuration is required}"
+  python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' \
+    "$FKST_OPS_ENGINE_CHECKOUT" "$FKST_OPS_ENGINE_BINARY" "$FKST_OPS_ENGINE_BRANCH" "$FKST_OPS_ENGINE_CONFIGURATION" \
     | python3 "$FKST_OPS_HOST_ROOT/../ops/invoke_provider.py" "$FKST_OPS_ENGINE_PROVIDER" fkst.ops.engine.v1
 }

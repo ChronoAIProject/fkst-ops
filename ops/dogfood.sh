@@ -65,15 +65,13 @@ if dep is None:
 m=dep["machine"]
 profile=dep.get("github_devloop_profile", {})
 empty="__FKST_OPS_EMPTY__"
-roots={source["lock_ref"]:m[role+"_checkout"] for role,source in dep["sources"].items()}
 def provider(field):
     binding=dep["providers"][field]
-    source,relative=binding["implementation"].split(":",1)
-    return [roots[source]+"/"+relative,binding["contract"]]
+    return [binding["executable"],binding["contract"],json.dumps(binding["configuration"],separators=(",",":"))]
 fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"]," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["platform"]["lock_ref"],dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE PLATFORM_SOURCE_ID TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE PLATFORM_SOURCE_ID TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
@@ -229,7 +227,8 @@ ensure_integration_caught_up() { # $1 checkout dir
 }
 
 engine_build_result() {
-  python3 -c 'import json,sys; print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build"}))' "$SUBSTRATE_SRC" "$BIN" "$UPSTREAM_BRANCH" \
+  # engine-provider-configuration: forward committed binding configuration as typed input.
+  python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' "$SUBSTRATE_SRC" "$BIN" "$UPSTREAM_BRANCH" "$ENGINE_PROVIDER_CONFIGURATION" \
     | invoke_provider "$ENGINE_PROVIDER" "$ENGINE_CONTRACT" || return $?
 }
 

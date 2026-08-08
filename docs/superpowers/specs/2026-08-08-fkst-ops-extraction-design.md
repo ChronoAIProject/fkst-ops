@@ -111,6 +111,7 @@ id = "<repository-local binding id>"
 kind = "<engine|board.engine-durable|board.github-control>"
 implementation = "<source lock id>:<relative executable entry point>"
 contract = "<closed contract version>"
+configuration = { build_command = ["<executable>", "<argument>"] } # engine; board configurations are empty
 ```
 
 | Field | Type and rule | Current consumer anchor |
@@ -139,6 +140,7 @@ contract = "<closed contract version>"
 | `providers.*` | Exactly one binding of each required kind per deployment | New provider-binding contract; the two current board planes are evidenced at `scripts/board.py:43-50,528-542` and `dogfood_board.sh:9-16,67-116` |
 | `provider.implementation` | Required `<source lock id>:<relative executable entry point>`; absolute entry points are rejected | New provider-binding contract; current concrete producer lookup is at `dogfood_board.sh:57-102` |
 | `provider.contract` | Required closed contract version matching its kind | New provider-binding contract |
+| `provider.configuration` | Required closed table typed by provider kind; engine requires non-empty `build_command: [Arg]`, board configurations are empty | Validated at `schema/validator.py:provider-binding-configuration`; consumed at `ops/dogfood.sh:engine-provider-configuration` and `host/bin_bootstrap.sh:engine-provider-configuration` |
 
 Each referenced lock entry contains a Git URL, `resolved.rev`, and `tree_sha256`; the website lock has this shape at `fkst-website/fkst.lock:1-10`. Library export hashes are optional (`fkst-website/fkst.lock:12-15`) and do not replace source-tree verification.
 
@@ -146,17 +148,25 @@ Each referenced lock entry contains a Git URL, `resolved.rev`, and `tree_sha256`
 
 These are direct executable ports, not a plugin framework. A declaration binds exactly one provider of each kind; the single board front-end invokes both board bindings and rejects missing, duplicate, or version-mismatched bindings before execution.
 
+<a id="provider-source-resolution"></a>
+**Provider source resolution.** `provider.implementation` is `<pinned-source-id>:<safe-relative-entry>`. The pinned source ID must be bound either by that deployment's `target`, `platform`, or `engine` source, or by the pin-verified `fkst-ops` mechanism checkout that is executing preflight. The bootstrap's full revision and canonical tree verification establishes the mechanism root before handoff; preflight resolves only inside that verified checkout. Absolute paths, traversal, checkout escape, missing pins, and missing or non-executable entries fail closed.
+
+<a id="published-provider-surface"></a>
+**Published provider surface.** Mechanism-owned provider entry points are a public contract surface, explicitly declared by relative path and provider kind in `schema/provider_surface.py` at `provider-published-surface`. No other file in the mechanism checkout is bindable merely because it exists or is executable. Preflight enforces this allowlist at `provider-mechanism-source-root`; a path absent from it, or published for a different kind, fails closed. The published entries are `providers/engine.py` for `engine`, `providers/board_engine_durable.py` for `board.engine-durable`, and `providers/board_github_control.sh` for `board.github-control`.
+
 Every port uses one shared minimal envelope, `fkst.ops.invocation.v1`. Input is exactly one UTF-8 JSON document on stdin: `{"version":"fkst.ops.invocation.v1","contract":"<ContractId>","input":{}}`. Output is exactly one UTF-8 JSON document on stdout, either `{"version":"fkst.ops.invocation.v1","ok":true,"result":{}}` or the exact failure encoding `{"version":"fkst.ops.invocation.v1","ok":false,"failure":{"code":"<FailureCode>","message":"<String>","details":{}}}`; the `input`, `result`, and `details` objects carry contract-defined members, and `details` is present even when empty. Stderr is diagnostic only and is never parsed as result data. Exit `0` is required only for the success object. Exit `2` denotes contract or input failure; exit `1` denotes provider operation failure. Any other exit, malformed JSON, missing output, multiple JSON documents, an exit/object mismatch, or output that violates the selected contract is a port failure.
 
 The deployment bootstrap passes the declaration path and machine-reference resolution inputs without parsing either. Pinned `fkst-ops` resolves the logical references, validates the resolved declaration and every provider contract, and passes resolved concrete values to each port; no port accepts or resolves a logical machine name.
 
 | Kind / contract | Typed input | Typed result | Typed failures |
 |---|---|---|---|
-| `engine` / `fkst.ops.engine.v1` | `{engine_checkout: ExistingGitRoot, engine_binary: ExistingExecutablePath, expected_branch: Branch, operation: build}` | `{binary: ExistingExecutable, source_rev: FullGitSha}` | `INVALID_INPUT`, `CHECKOUT_MISSING`, `CONTRACT_MISSING`, `WRONG_BRANCH`, `UPDATE_FAILED`, `BUILD_FAILED` |
+| `engine` / `fkst.ops.engine.v1` | `{engine_checkout: ExistingGitRoot, engine_binary: ExistingExecutablePath, expected_branch: Branch, operation: build, build_command: [Arg]}` | `{binary: ExistingExecutable, source_rev: FullGitSha}` | `INVALID_INPUT`, `CHECKOUT_MISSING`, `CONTRACT_MISSING`, `WRONG_BRANCH`, `UPDATE_FAILED`, `BUILD_FAILED` |
 | `board.engine-durable` / `fkst.ops.board.engine-durable.v1` | `{engine_binary: ExistingExecutable, durable_root: ExistingRoot, cache: ConcretePath, refresh: Bool, ttl_seconds: NonNegativeInt, stall_seconds: NonNegativeInt}` | `{view: "engine-durable", rows: [BoardRow], health: BoardHealth}` | `INVALID_INPUT`, `OBSERVE_FAILED`, `CACHE_FAILED`, `MALFORMED_FACT` |
 | `board.github-control` / `fkst.ops.board.github-control.v1` | `{target_identity: OpaqueIdentity, platform_checkout: ExistingGitRoot, profile: AssembledResolvedProfileData, bot_login: ConcreteLogin, managed_bot_set: [ConcreteLogin]}`; producer-owned profile data is versioned by this pinned binding and contract | `{view: "github-control", rows: [BoardRow]}` | `INVALID_INPUT`, `AUTH_FAILED`, `FETCH_FAILED`, `PRODUCER_FAILED`, `MALFORMED_FACT` |
 
 `BoardRow` is `{key: String, classification: String, fields: Map<String, Scalar>}` and `BoardHealth` is `{status: String, anomalies: [BoardRow]}`. Providers return one typed result or one typed failure and never print an untyped success value. The engine contract reflects the present engine build at `scripts/run.sh:792-815`; the board contracts reflect the distinct current inputs and renderers at `scripts/board.py:43-50,528-542` and the GitHub label/comment producers at `dogfood_board.sh:9-16,67-116`.
+
+The engine input has one deliberate addition to the earlier four-field design: `build_command` is required as a non-empty argv list and is executed directly without a shell. The committed engine provider binding carries this deployment truth in its typed `configuration.build_command`; machine profiles have no command namespace or second carrier. Validation fails closed when the engine binding omits it. The resolved binding is wired into both live callers at `ops/dogfood.sh:engine-provider-configuration` and `host/bin_bootstrap.sh:engine-provider-configuration`, while `providers/engine.py:engine-contract-input` remains generic and owns no producer or build-system names.
 
 ## 5. Semantic Extraction Boundary
 

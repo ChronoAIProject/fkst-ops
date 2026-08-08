@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +17,41 @@ MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
 class OperatorLiftTest(unittest.TestCase):
+    def test_engine_provider_succeeds_through_dogfood_caller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            (checkout / ".git").mkdir()
+            binary = root / "engine"
+            tools = root / "tools"
+            tools.mkdir()
+            git = tools / "git"
+            git.write_text('#!/bin/sh\ncase "$1" in branch) echo build;; pull) :;; rev-parse) printf "%040d\\n" 0;; *) exit 1;; esac\n', encoding="ascii")
+            git.chmod(0o755)
+            build = root / "build"
+            build.write_text('#!/bin/sh\nprintf "#!/bin/sh\\nexit 0\\n" > "$1"\nchmod +x "$1"\n', encoding="ascii")
+            build.chmod(0o755)
+            command = f'''_self_dir="{ROOT / 'ops'}"
+invoke_provider() {{ python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }}
+eval "$(sed -n '/^engine_build_result()/,/^}}/p' "{OPERATOR}")"
+SUBSTRATE_SRC="$1"; BIN="$2"; UPSTREAM_BRANCH=build
+ENGINE_PROVIDER="{ROOT / 'providers/engine.py'}"; ENGINE_CONTRACT=fkst.ops.engine.v1
+ENGINE_PROVIDER_CONFIGURATION="$3"
+engine_build_result
+'''
+            env = os.environ.copy()
+            env["PATH"] = f"{tools}{os.pathsep}{env['PATH']}"
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(checkout), str(binary),
+                 json.dumps({"build_command": [str(build), str(binary)]})],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            response = json.loads(result.stdout)
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["result"]["binary"], str(binary))
+
     def test_shell_is_valid_and_uses_schema_validator(self) -> None:
         subprocess.run(["bash", "-n", str(OPERATOR)], check=True)
         source = OPERATOR.read_text(encoding="utf-8")

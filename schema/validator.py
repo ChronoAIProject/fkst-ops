@@ -12,6 +12,11 @@ import sys
 import tomllib
 from typing import Any, NoReturn
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from schema.provider_surface import MECHANISM_SOURCE_ID, PUBLISHED_PROVIDER_ENTRY_POINTS
+
 
 SCHEMA_ID = "fkst.ops.deployment.v1"
 MACHINE_SCHEMA_ID = "fkst.ops.machine-profile.v1"
@@ -171,7 +176,7 @@ def _require_unique(values: list[str], path: str) -> None:
         seen.add(value)
 
 
-def _validate_resolved_paths(resolved: dict[str, Any], path: str) -> None:
+def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str, dict[str, Any]]) -> None:
     machine = resolved["machine"]
     checkouts = {
         role: _require_directory(machine[f"{role}_checkout"], f"{path}.machine.{role}_checkout")
@@ -192,17 +197,26 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str) -> None:
         if lock_ref in source_roots and source_roots[lock_ref].resolve() != root.resolve():
             _fail(path + f".sources.{role}.lock_ref", f"lock reference {lock_ref} resolves to multiple checkouts")
         source_roots[lock_ref] = root
+    # provider-mechanism-source-root: bootstrap/run.sh verifies this checkout
+    # against this lock entry before handing control to the validator.
+    if MECHANISM_SOURCE_ID in pins:
+        source_roots[MECHANISM_SOURCE_ID] = Path(__file__).resolve().parents[1]
     for field, provider in resolved["providers"].items():
         lock_ref, relative = provider["implementation"].split(":", 1)
         root = source_roots.get(lock_ref)
         if root is None:
-            _fail(path + f".providers.{field}", f"provider source is not bound to a deployment source: {lock_ref}")
+            _fail(path + f".providers.{field}", f"provider source is not bound to a deployment or mechanism source: {lock_ref}")
+        if lock_ref == MECHANISM_SOURCE_ID:
+            published_kind = PUBLISHED_PROVIDER_ENTRY_POINTS.get(relative)
+            if published_kind != provider["kind"]:
+                _fail(path + f".providers.{field}.implementation", "entry point is not published for this provider kind")
         executable = (root / relative).resolve()
         try:
             executable.relative_to(root.resolve())
         except ValueError:
             _fail(path + f".providers.{field}", "provider entry point escapes its source checkout")
         _require_executable(str(executable), path + f".providers.{field}.implementation")
+        provider["executable"] = str(executable)
 
 
 def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str, Any], lock: dict[str, Any]) -> dict[str, Any]:
@@ -217,21 +231,33 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     provider_items = declaration.get("provider")
     if not isinstance(provider_items, list):
         _fail("declaration.provider", "must be an array of tables")
-    providers: dict[str, dict[str, str]] = {}
+    providers: dict[str, dict[str, Any]] = {}
     for index, raw in enumerate(provider_items):
         path = f"declaration.provider[{index}]"
         provider = _table(raw, path)
-        _closed(provider, {"id", "kind", "implementation", "contract"}, path)
+        _closed(provider, {"id", "kind", "implementation", "contract", "configuration"}, path)
         identity = _string(provider, "id", path)
         kind = _string(provider, "kind", path)
         implementation = _string(provider, "implementation", path)
         contract = _string(provider, "contract", path)
+        configuration = _table(provider.get("configuration"), path + ".configuration")
         if identity in providers:
             _fail(path + ".id", f"duplicate provider identity: {identity}")
         if kind not in CONTRACTS:
             _fail(path + ".kind", f"unknown provider kind: {kind}")
         if contract != CONTRACTS[kind]:
             _fail(path + ".contract", f"must be {CONTRACTS[kind]} for {kind}")
+        # provider-binding-configuration: committed, kind-specific provider semantics.
+        if kind == "engine":
+            _closed(configuration, {"build_command"}, path + ".configuration")
+            resolved_configuration = {
+                "build_command": copy.deepcopy(
+                    _string_list(configuration, "build_command", path + ".configuration", nonempty=True)
+                )
+            }
+        else:
+            _closed(configuration, set(), path + ".configuration")
+            resolved_configuration = {}
         if ":" not in implementation:
             _fail(path + ".implementation", "must be <source lock id>:<relative executable entry point>")
         lock_ref, entry_point = implementation.split(":", 1)
@@ -239,7 +265,8 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             _fail(path + ".implementation", f"references missing pin: {lock_ref}")
         if not entry_point or os.path.isabs(entry_point) or PurePosixPath(entry_point).is_absolute() or ".." in PurePosixPath(entry_point).parts:
             _fail(path + ".implementation", "entry point must be a safe relative path")
-        providers[identity] = {"id": identity, "kind": kind, "implementation": implementation, "contract": contract}
+        providers[identity] = {"id": identity, "kind": kind, "implementation": implementation,
+                               "contract": contract, "configuration": resolved_configuration}
 
     deployments = declaration.get("deployment")
     if not isinstance(deployments, list) or not deployments:
@@ -329,7 +356,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                          "machine": _resolve_machine(_table(dep.get("machine"), path + ".machine"), machine_values,
                                                      path + ".machine", profile_present=profile_block is not None),
                          "providers": resolved_bindings})
-        _validate_resolved_paths(resolved, path)
+        _validate_resolved_paths(resolved, path, pins)
         resolved_deployments.append(resolved)
     return {"schema": SCHEMA_ID, "deployment": resolved_deployments}
 
