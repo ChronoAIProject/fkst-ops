@@ -1,14 +1,12 @@
 # Deployment installation
 
 This repository intentionally contains no concrete deployment declaration. From
-the fkst-ops repository root, install the generic bootstrap files and templates
-in the deployment repository:
+the fkst-ops repository root, install only the configuration templates in the
+deployment repository:
 
 ```sh
-cp -R bootstrap/ <deployment-repository>/bootstrap/
 cp .fkst/deployment.example.toml <deployment-repository>/deployment.toml
 cp schema/examples/machine-profile.example.toml <deployment-repository>/.fkst/machine-profile.toml
-chmod +x <deployment-repository>/bootstrap/run.sh
 ```
 
 Keep the machine profile untracked. Replace every angle-bracket placeholder in
@@ -24,7 +22,7 @@ Before first use, the owner must:
 5. Run the pinned validator before any operator action:
 
    ```sh
-   <deployment-repository>/bootstrap/run.sh <deployment-repository>/deployment.toml --machine-profile <deployment-repository>/.fkst/machine-profile.toml --lock <deployment-repository>/fkst.lock status
+   <fkst-ops-checkout>/bin/fkst-ops --deployment-dir <deployment-repository> --declaration <deployment-repository>/deployment.toml --machine-profile <deployment-repository>/.fkst/machine-profile.toml --lock <deployment-repository>/fkst.lock status
    ```
 
-Invoke the deployment through `bootstrap/run.sh`; do not use a globally installed operator. The bootstrap accepts the declaration path first and passes all remaining machine-resolution arguments unchanged to the pinned `fkst-ops` entry.
+Invoke the deployment with the exact configuration-only owner form above. The entry verifies whether its physical checkout matches the mechanism pin and otherwise hydrates and re-executes the pinned `fkst-ops` with the original arguments.

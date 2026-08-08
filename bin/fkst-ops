@@ -2,15 +2,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TREE_HASHER="$ROOT/bootstrap/canonical_tree.py"
 usage() {
-  echo "usage: fkst-ops [preflight] --declaration PATH --machine-config PATH [--lock PATH] [board|status|logs|restart|sync] [args...]" >&2
+  echo "usage: fkst-ops [preflight] [--deployment-dir PATH] --declaration PATH --machine-config PATH [--lock PATH] [board|status|logs|restart|sync] [args...]" >&2
 }
 
+original_argv=("$@")
 preflight=0
 [ "${1:-}" = preflight ] && { preflight=1; shift; }
-declaration="" machine="" lock=""
+declaration="" deployment_root="" machine="" lock=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --deployment-dir) [ "$#" -ge 2 ] || { usage; exit 2; }; deployment_root="$2"; shift 2 ;;
     --declaration) [ "$#" -ge 2 ] || { usage; exit 2; }; declaration="$2"; shift 2 ;;
     --machine-config|--machine-profile) [ "$#" -ge 2 ] || { usage; exit 2; }; machine="$2"; shift 2 ;;
     --lock) [ "$#" -ge 2 ] || { usage; exit 2; }; lock="$2"; shift 2 ;;
@@ -19,8 +22,152 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$declaration" ] && [ -n "$machine" ] || { usage; exit 2; }
-deployment_root="$(cd "$(dirname "$declaration")" && pwd)"
+[ -n "$deployment_root" ] || deployment_root="$(dirname "$declaration")"
+deployment_root="$(cd "$deployment_root" && pwd)"
 [ -n "$lock" ] || lock="${FKST_OPS_LOCK_FILE:-$deployment_root/fkst.lock}"
+
+read_pin() {
+  python3 - "$lock" <<'PY'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+except (OSError, tomllib.TOMLDecodeError) as exc:
+    print(f"error: cannot read fkst lockfile {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+sources = data.get("external_source", [])
+if isinstance(sources, dict):
+    sources = [sources]
+for source in sources:
+    if source.get("id") != "fkst-ops":
+        continue
+    revision = source.get("resolved", {}).get("rev")
+    tree = source.get("resolved", {}).get("tree_sha256")
+    url = source.get("git")
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        print("error: fkst-ops lock entry needs resolved.rev as a full lowercase git SHA", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(tree, str) or not re.fullmatch(r"sha256-[0-9a-f]{64}", tree):
+        print("error: fkst-ops lock entry needs canonical resolved.tree_sha256", file=sys.stderr)
+        raise SystemExit(1)
+    if not isinstance(url, str) or not url or "\t" in url or "\n" in url:
+        print("error: fkst-ops lock entry needs git", file=sys.stderr)
+        raise SystemExit(1)
+    print(url, revision, tree, sep="\t")
+    raise SystemExit(0)
+print("error: fkst.lock is missing external_source(id=fkst-ops)", file=sys.stderr)
+raise SystemExit(1)
+PY
+}
+
+verify_checkout() {
+  local checkout="$1" revision="$2" expected_tree="$3" head actual_tree
+  head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
+  [ "$head" = "$revision" ] || return 1
+  actual_tree="$(python3 "$TREE_HASHER" "$checkout" "$revision")" || return 1
+  [ "$actual_tree" = "$expected_tree" ]
+}
+
+report_verification_failure() {
+  local checkout="$1" revision="$2" expected_tree="$3" head actual_tree
+  head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
+  if [ "$head" != "$revision" ]; then
+    echo "error: fkst-ops resolved.rev mismatch: expected $revision, got ${head:-missing}" >&2
+    return
+  fi
+  actual_tree="$(python3 "$TREE_HASHER" "$checkout" "$revision" 2>/dev/null || true)"
+  echo "error: fkst-ops tree_sha256 mismatch: expected $expected_tree, got ${actual_tree:-unavailable}" >&2
+}
+
+replace_pointer() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import sys
+
+os.replace(sys.argv[1], sys.argv[2])
+PY
+}
+
+IFS=$'\t' read -r repo_url revision expected_tree < <(read_pin)
+if ! verify_checkout "$ROOT" "$revision" "$expected_tree"; then
+  if [ "${FKST_OPS_REEXEC_DEPTH:-0}" != 0 ]; then
+    echo "error: fkst-ops re-exec target is not the physically pinned checkout" >&2
+    exit 1
+  fi
+  cache_root="${FKST_OPS_CACHE_ROOT:-$deployment_root/.fkst/run/fkst-ops}"
+  mkdir -p "$cache_root/checkouts"
+  current="$cache_root/current"
+  candidate=""
+  publish_lock=""
+  cleanup() {
+    [ -z "$candidate" ] || rm -rf "$candidate"
+    [ -z "$publish_lock" ] || rmdir "$publish_lock" 2>/dev/null || true
+  }
+  trap cleanup EXIT
+
+  if [ -L "$current" ] && cached="$(readlink "$current")" && [ -d "$cached/.git" ]; then
+    verify_checkout "$cached" "$revision" "$expected_tree" &&
+      FKST_OPS_REEXEC_DEPTH=1 exec "$cached/bin/fkst-ops" "${original_argv[@]}"
+  fi
+
+  verified="$cache_root/checkouts/$revision"
+  if [ -e "$verified" ]; then
+    verify_checkout "$verified" "$revision" "$expected_tree" || {
+      report_verification_failure "$verified" "$revision" "$expected_tree"
+      exit 1
+    }
+    if [ "$preflight" -eq 1 ]; then
+      FKST_OPS_REEXEC_DEPTH=1 "$verified/bin/fkst-ops" "${original_argv[@]}"
+      exit 0
+    fi
+    FKST_OPS_REEXEC_DEPTH=1 "$verified/bin/fkst-ops" preflight "${original_argv[@]}"
+    pointer="$cache_root/.current.$$"
+    ln -s "$verified" "$pointer"
+    replace_pointer "$pointer" "$current"
+    FKST_OPS_REEXEC_DEPTH=1 exec "$verified/bin/fkst-ops" "${original_argv[@]}"
+  fi
+
+  candidate="$(mktemp -d "$cache_root/checkouts/.partial.XXXXXX")"
+  git clone --quiet --no-checkout "$repo_url" "$candidate"
+  git -C "$candidate" checkout --quiet "$revision"
+  if ! verify_checkout "$candidate" "$revision" "$expected_tree"; then
+    report_verification_failure "$candidate" "$revision" "$expected_tree"
+    exit 1
+  fi
+  if [ "$preflight" -eq 1 ]; then
+    FKST_OPS_REEXEC_DEPTH=1 "$candidate/bin/fkst-ops" "${original_argv[@]}"
+  else
+    FKST_OPS_REEXEC_DEPTH=1 "$candidate/bin/fkst-ops" preflight "${original_argv[@]}"
+  fi
+
+  publish_lock="$verified.publish-lock"
+  if ! mkdir "$publish_lock"; then
+    echo "error: fkst-ops checkout publication already in progress: $verified" >&2
+    exit 1
+  fi
+  if [ -e "$verified" ]; then
+    verify_checkout "$verified" "$revision" "$expected_tree" || {
+      report_verification_failure "$verified" "$revision" "$expected_tree"
+      exit 1
+    }
+    rm -rf "$candidate"
+    candidate=""
+  else
+    mv "$candidate" "$verified"
+    candidate=""
+  fi
+  rmdir "$publish_lock"
+  publish_lock=""
+  pointer="$cache_root/.current.$$"
+  ln -s "$verified" "$pointer"
+  replace_pointer "$pointer" "$current"
+  [ "$preflight" -eq 0 ] || exit 0
+  FKST_OPS_REEXEC_DEPTH=1 exec "$verified/bin/fkst-ops" "${original_argv[@]}"
+fi
 
 export FKST_OPS_DECLARATION="$declaration"
 export FKST_OPS_MACHINE_PROFILE="$machine"

@@ -97,7 +97,21 @@ binary="{binary}"
 ''', encoding="utf-8")
     lock = tmp_path / "fkst.lock"
     pin = '0' * 40; tree = 'sha256-' + '0' * 64
+    mechanism_rev = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        check=True, text=True, capture_output=True,
+    ).stdout.strip()
+    mechanism_tree = subprocess.run(
+        ["python3", str(ROOT / "bootstrap" / "canonical_tree.py"), str(ROOT), mechanism_rev],
+        check=True, text=True, capture_output=True,
+    ).stdout.strip()
     lock.write_text(f'''[[external_source]]
+id="fkst-ops"
+git="{ROOT}"
+[external_source.resolved]
+rev="{mechanism_rev}"
+tree_sha256="{mechanism_tree}"
+[[external_source]]
 id="source"
 git="https://invalid.example/source.git"
 [external_source.resolved]
