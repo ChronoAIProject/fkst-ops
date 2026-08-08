@@ -230,12 +230,15 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
 def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str, Any], lock: dict[str, Any]) -> dict[str, Any]:
     """Validate all inputs and return a newly allocated resolved declaration."""
     declaration = _table(declaration, "declaration")
-    _closed(declaration, {"schema", "cadence_interval_seconds", "deployment", "provider"}, "declaration")
+    _closed(declaration, {"schema", "cadence_enabled", "cadence_interval_seconds", "deployment", "provider"}, "declaration")
     if _string(declaration, "schema", "declaration") != SCHEMA_ID:
         _fail("declaration.schema", f"must be {SCHEMA_ID}")
     cadence_interval_seconds = _positive_integer(
         declaration, "cadence_interval_seconds", "declaration"
     )
+    cadence_enabled = declaration.get("cadence_enabled")
+    if not isinstance(cadence_enabled, bool):
+        _fail("declaration.cadence_enabled", "must be a boolean")
     pins = _validate_lock(_table(lock, "lock"))
     machine_values = _validate_machine_profile(_table(machine_profile, "machine_profile"))
 
@@ -294,9 +297,12 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     for index, raw in enumerate(deployments):
         path = f"declaration.deployment[{index}]"
         dep = _table(raw, path)
-        _closed(dep, {"id", "target_identity", "claim_posture", "managed_bot_logins", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
+        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
+        github_write_enabled = dep.get("github_write_enabled")
+        if not isinstance(github_write_enabled, bool):
+            _fail(path + ".github_write_enabled", "must be a boolean")
         claim_path = path + ".claim_posture"
         claim = _table(dep.get("claim_posture"), claim_path)
         _closed(claim, {"mode", "label_exclusive"}, claim_path)
@@ -376,6 +382,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
         resolved: dict[str, Any] = {
             "id": identity,
             "target_identity": target,
+            "github_write_enabled": github_write_enabled,
             "claim_posture": {"mode": claim_mode, "label_exclusive": claim_label_exclusive},
         }
         profile_block = dep.get("github_devloop_profile")
@@ -405,6 +412,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
         resolved_deployments.append(resolved)
     return {
         "schema": SCHEMA_ID,
+        "cadence_enabled": cadence_enabled,
         "cadence_interval_seconds": cadence_interval_seconds,
         "deployment": resolved_deployments,
     }

@@ -34,10 +34,12 @@ print(json.dumps({"version":"fkst.ops.invocation.v1","ok":True,"result":result})
     executable(engine / "providers" / "build", provider)
     declaration = tmp_path / "deployment.toml"
     declaration.write_text('''schema="fkst.ops.deployment.v1"
+cadence_enabled=true
 cadence_interval_seconds=300
 [[deployment]]
 id="fixture"
 target_identity="owner/target"
+github_write_enabled=false
 managed_bot_logins=["bot"]
 [deployment.claim_posture]
 mode="assignee"

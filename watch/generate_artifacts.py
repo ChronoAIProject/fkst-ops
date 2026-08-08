@@ -280,7 +280,39 @@ def _plist_text(
     return rendered
 
 
-def generate(repository: Path, home: Path) -> tuple[Path, Path]:
+def _launchctl(home: Path, launch_agent: Path, enabled: bool) -> bool:
+    executable = os.environ.get("FKST_LAUNCHCTL", "/bin/launchctl")
+    domain = f"gui/{os.getuid()}"
+    service = f"{domain}/com.fkst.cadence"
+
+    def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [executable, *arguments], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+
+    if run("print", service).returncode == 0:
+        result = run("bootout", service)
+        if result.returncode != 0:
+            raise ValueError(f"cannot unload cadence schedule: {result.stderr.strip()}")
+    if enabled:
+        result = run("enable", service)
+        if result.returncode == 0:
+            result = run("bootstrap", domain, str(launch_agent))
+    else:
+        result = run("disable", service)
+    if result.returncode != 0:
+        action = "activate" if enabled else "deactivate"
+        raise ValueError(f"cannot {action} cadence schedule: {result.stderr.strip()}")
+    live = run("print", service).returncode == 0
+    if live != enabled:
+        raise ValueError(
+            f"cadence schedule reconciliation failed: requested enabled={enabled}, live={live}"
+        )
+    return live
+
+
+def generate(repository: Path, home: Path) -> tuple[Path, Path, bool, int]:
     repository = repository.resolve()
     home = home.resolve()
     declarations = _load_declarations(repository)
@@ -290,6 +322,12 @@ def generate(repository: Path, home: Path) -> tuple[Path, Path]:
     interval = intervals.pop()
     if not isinstance(interval, int) or isinstance(interval, bool) or interval <= 0:
         raise ValueError("cadence_interval_seconds must be a positive integer")
+    enablements = {document.get("cadence_enabled") for _, document in declarations}
+    if len(enablements) != 1:
+        raise ValueError("all deployment declarations must use one cadence_enabled")
+    enabled = enablements.pop()
+    if not isinstance(enabled, bool):
+        raise ValueError("cadence_enabled must be a boolean")
 
     profile = repository / ".fkst" / "machine-profile.toml"
     launch_agent = home / "Library" / "LaunchAgents" / "com.fkst.cadence.plist"
@@ -306,7 +344,8 @@ def generate(repository: Path, home: Path) -> tuple[Path, Path]:
     launch_agent.write_text(
         _plist_text(repository, profile, home, interval), encoding="utf-8"
     )
-    return profile, launch_agent
+    live = _launchctl(home, launch_agent, enabled)
+    return profile, launch_agent, live, interval
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -314,12 +353,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("deployment_repository", type=Path)
     args = parser.parse_args(argv)
     try:
-        profile, launch_agent = generate(args.deployment_repository, Path.home())
+        profile, launch_agent, live, interval = generate(args.deployment_repository, Path.home())
     except (OSError, ValueError, ValidationError) as exc:
         print(f"artifact generation failed: {exc}", file=sys.stderr)
         return 2
     print(profile)
     print(launch_agent)
+    print(f"cadence_schedule={'enabled' if live else 'disabled'} live={'yes' if live else 'no'} interval_seconds={interval}")
     return 0
 
 

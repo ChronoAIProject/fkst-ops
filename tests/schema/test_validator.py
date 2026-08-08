@@ -87,6 +87,14 @@ class ValidatorTests(unittest.TestCase):
         del self.declaration["cadence_interval_seconds"]
         self.reject("cadence_interval_seconds.*positive integer")
 
+    def test_cadence_enablement_is_required_without_a_default(self) -> None:
+        del self.declaration["cadence_enabled"]
+        self.reject("cadence_enabled.*boolean")
+
+    def test_github_write_posture_is_required_without_a_default(self) -> None:
+        del self.declaration["deployment"][0]["github_write_enabled"]
+        self.reject("github_write_enabled.*boolean")
+
     def test_claim_posture_is_required_and_closed(self) -> None:
         del self.declaration["deployment"][0]["claim_posture"]
         self.reject("claim_posture.*must be a table")

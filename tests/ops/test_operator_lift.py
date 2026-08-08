@@ -68,10 +68,10 @@ launch_one fixture 0
             env["CAPTURE"] = str(capture)
             env["GITHUB_CREDENTIAL_PROVIDER"] = str(helper)
             env["FKST_GITHUB_REAL_GH"] = "/usr/bin/true"
-            if write is None:
-                env.pop("FKST_GITHUB_WRITE", None)
-            else:
-                env["FKST_GITHUB_WRITE"] = write
+            env.pop("FKST_GITHUB_WRITE", None)
+            command = command.replace(
+                "CLAIM_MODE=label;", f"GITHUB_WRITE_POSTURE={write or '0'}; CLAIM_MODE=label;"
+            )
             result = subprocess.run(
                 ["bash", "-c", command, "test", str(root)],
                 env=env, text=True, capture_output=True, check=False, timeout=10,
@@ -189,19 +189,24 @@ bin_ensure_fresh
         self.assertNotIn('GH_TOKEN="$GITHUB_TOKEN_DISCOVERED"', source)
         self.assertIn('FKST_GITHUB_REAL_GH="$REAL_GH"', source)
 
-    def test_write_posture_is_a_host_fact_and_defaults_to_non_writing(self) -> None:
+    def test_restart_without_operator_environment_reproduces_declared_write_posture(self) -> None:
         command = f'''eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
 github_write_posture
 '''
         absent = os.environ.copy()
         absent.pop("FKST_GITHUB_WRITE", None)
-        disabled = subprocess.run(["bash", "-c", command], env=absent, text=True, capture_output=True, check=False)
         enabled = subprocess.run(
-            ["bash", "-c", command], env={**absent, "FKST_GITHUB_WRITE": "1"},
+            ["bash", "-c", "GITHUB_WRITE_POSTURE=1\n" + command], env=absent,
             text=True, capture_output=True, check=False,
         )
-        self.assertEqual((disabled.returncode, disabled.stdout), (0, "0\n"))
+        missing = subprocess.run(["bash", "-c", command], env=absent, text=True, capture_output=True, check=False)
+        ambient_opposite = subprocess.run(
+            ["bash", "-c", "GITHUB_WRITE_POSTURE=1\n" + command],
+            env={**absent, "FKST_GITHUB_WRITE": "0"}, text=True, capture_output=True, check=False,
+        )
         self.assertEqual((enabled.returncode, enabled.stdout), (0, "1\n"))
+        self.assertEqual((ambient_opposite.returncode, ambient_opposite.stdout), (0, "1\n"))
+        self.assertNotEqual(missing.returncode, 0)
 
         self.assertEqual(self._capture_launch_environment(None)["FKST_GITHUB_WRITE"], "0")
         self.assertEqual(self._capture_launch_environment("1")["FKST_GITHUB_WRITE"], "1")

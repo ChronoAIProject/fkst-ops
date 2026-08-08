@@ -1,9 +1,11 @@
 schema = "fkst.ops.deployment.v1"
+cadence_enabled = true
 cadence_interval_seconds = 300
 
 [[deployment]]
 id = "substrate"
 target_identity = "ChronoAIProject/fkst-substrate"
+github_write_enabled = false
 managed_bot_logins = ["fkst-bot"]
 
 [deployment.claim_posture]

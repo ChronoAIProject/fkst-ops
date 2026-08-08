@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run one externally scheduled sync round for a deployment repository."""
+"""Run one externally scheduled sync round for a deployment repository.
+
+The repository is an input control boundary and is deliberately never advanced here.
+An operator adopts declaration or mechanism-pin changes by updating that checkout and
+running artifact generation again.
+"""
 
 from __future__ import annotations
 

@@ -76,8 +76,28 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
 
 
 def run_generator(repository: Path, home: Path) -> subprocess.CompletedProcess[str]:
+    launchctl = home / "fake-launchctl"
+    if not launchctl.exists():
+        launchctl.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, pathlib, sys\n"
+            "state = pathlib.Path(os.environ['LAUNCHCTL_STATE'])\n"
+            "calls = pathlib.Path(os.environ['LAUNCHCTL_CALLS'])\n"
+            "with calls.open('a') as stream: stream.write(' '.join(sys.argv[1:]) + '\\n')\n"
+            "command = sys.argv[1]\n"
+            "if command == 'print': raise SystemExit(0 if state.exists() else 113)\n"
+            "if command == 'bootstrap': state.write_text('live\\n')\n"
+            "if command == 'bootout': state.unlink(missing_ok=True)\n",
+            encoding="ascii",
+        )
+        launchctl.chmod(0o755)
     environment = {**os.environ, "HOME": str(home)}
     environment.pop("GH_TOKEN", None)
+    environment.update({
+        "FKST_LAUNCHCTL": str(launchctl),
+        "LAUNCHCTL_STATE": str(home / "launchctl.state"),
+        "LAUNCHCTL_CALLS": str(home / "launchctl.calls"),
+    })
     return subprocess.run(
         [sys.executable, str(GENERATOR), str(repository)], env=environment,
         text=True, capture_output=True, check=False,
@@ -100,6 +120,40 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     plist_path = home / "Library" / "LaunchAgents" / "com.fkst.cadence.plist"
     with plist_path.open("rb") as stream:
         assert plistlib.load(stream)["StartInterval"] == 300
+    assert "cadence_schedule=enabled live=yes interval_seconds=300" in result.stdout
+
+
+def test_generation_activates_and_deactivates_declared_schedule(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration = repository / "deployment.toml"
+
+    enabled = run_generator(repository, home)
+    assert enabled.returncode == 0, enabled.stderr
+    assert (home / "launchctl.state").is_file()
+
+    declaration.write_text(
+        declaration.read_text().replace("cadence_enabled = true", "cadence_enabled = false"),
+        encoding="ascii",
+    )
+    disabled = run_generator(repository, home)
+    assert disabled.returncode == 0, disabled.stderr
+    assert not (home / "launchctl.state").exists()
+    assert "cadence_schedule=disabled live=no interval_seconds=300" in disabled.stdout
+    calls = (home / "launchctl.calls").read_text().splitlines()
+    assert any(line.startswith("bootstrap ") for line in calls)
+    assert any(line.startswith("bootout ") for line in calls)
+    assert any(line.startswith("disable ") for line in calls)
+
+
+def test_schedule_parameters_are_required_declaration_values(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration = repository / "deployment.toml"
+    declaration.write_text(
+        declaration.read_text().replace("cadence_enabled = true\n", ""), encoding="ascii"
+    )
+    result = run_generator(repository, home)
+    assert result.returncode == 2
+    assert "cadence_enabled must be a boolean" in result.stderr
 
 
 def test_wrong_checkout_content_is_replaced(tmp_path: Path) -> None:
