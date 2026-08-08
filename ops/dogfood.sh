@@ -68,10 +68,10 @@ empty="__FKST_OPS_EMPTY__"
 def provider(field):
     binding=dep["providers"][field]
     return [binding["executable"],binding["contract"],json.dumps(binding["configuration"],separators=(",",":"))]
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"]," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["platform"]["lock_ref"],dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"]," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE PLATFORM_SOURCE_ID TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
@@ -79,7 +79,7 @@ print("\t".join(fields))
 
 derive_devloop_pkgs_from_workspace() { # $1 name
   local name="$1" output
-  output="$(python3 "$_self_dir/workspace_manifest.py" platform-packages "$name" "$HOST" "$PKGSRC" "$PLATFORM_SOURCE_ID")" \
+  output="$(python3 "$_self_dir/workspace_manifest.py" platform-packages "$name" "$HOST" "$PKGSRC" "$PLATFORM_GIT_URL")" \
     || { printf '%s\n' "$output" >&2; return 1; }
   DEVLOOP_PKGS="$output"
 }
@@ -157,7 +157,7 @@ restore_generated_workspace_scratch() { # $1 worktree dir
   local wt="$1"
   [ -f "$wt/fkst.workspace.toml" ] || return 0
   git -C "$wt" diff --quiet -- fkst.workspace.toml 2>/dev/null && return 0
-  python3 "$_self_dir/workspace_manifest.py" is-generated-scratch "$wt" "$DEVLOOP_PKGS" "$PLATFORM_SOURCE_ID" >/dev/null || return 0
+  python3 "$_self_dir/workspace_manifest.py" is-generated-scratch "$wt" "$DEVLOOP_PKGS" "$PLATFORM_GIT_URL" >/dev/null || return 0
   echo "    restoring generated fkst.workspace.toml scratch before branch sync"
   git -C "$wt" checkout -q -- fkst.workspace.toml 2>/dev/null
 }

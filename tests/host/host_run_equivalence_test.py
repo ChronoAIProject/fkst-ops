@@ -545,7 +545,7 @@ class HostRunEquivalenceTest(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
-                "target fkst.workspace.toml must declare external_sources(id=fkst-packages-platform)",
+                "platform source lookup for git URL",
                 result.stderr + result.stdout,
             )
             self.assertFalse(layout.capture.exists())

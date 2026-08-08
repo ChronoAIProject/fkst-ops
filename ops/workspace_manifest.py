@@ -10,6 +10,7 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 
 def fail(message: str) -> None:
@@ -104,11 +105,49 @@ def insertion_point(lines: list[str], start: int, end: int) -> tuple[int, str]:
     return end, ""
 
 
-def platform_source(data: dict[str, object], source_id: str) -> dict[str, object] | None:
-    for source in table_array(data, "external_sources"):
-        if source.get("id") == source_id:
-            return source
-    return None
+def normalized_git_url(value: str) -> tuple[str, str, str, str]:
+    # Repository identity ignores transport scheme and user info, lowercases the host,
+    # and removes trailing slashes and one trailing `.git`. It deliberately does not
+    # equate host aliases, ports, or path case, nor discard query strings or fragments.
+    parsed = urlparse(value)
+    if not parsed.scheme and ":" in value and not value.startswith(("/", "./", "../")):
+        scp_host, scp_path = value.split(":", 1)
+        parsed = urlparse(f"ssh://{scp_host}/{scp_path}")
+    if parsed.scheme and parsed.scheme != "file":
+        host = (parsed.hostname or "").lower()
+        if parsed.port is not None:
+            host += f":{parsed.port}"
+        path = unquote(parsed.path).rstrip("/")
+        if path.endswith(".git"):
+            path = path[:-4]
+        return host, path.lstrip("/"), parsed.query, parsed.fragment
+    path_value = unquote(parsed.path) if parsed.scheme == "file" else value
+    path = str(Path(path_value).resolve()).rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    return "", path, "", ""
+
+
+def source_id(source: dict[str, object]) -> str:
+    value = source.get("id")
+    return value if isinstance(value, str) else repr(value)
+
+
+def platform_source(data: dict[str, object], git_url: str, name: str) -> tuple[str, dict[str, object]]:
+    sources = table_array(data, "external_sources")
+    wanted = normalized_git_url(git_url)
+    matches = [
+        source for source in sources
+        if isinstance(source.get("git"), str) and normalized_git_url(source["git"]) == wanted
+    ]
+    observed = [source_id(source) for source in sources]
+    if len(matches) != 1:
+        found = "no matches" if not matches else f"{len(matches)} matches with ids {[source_id(source) for source in matches]}"
+        fail(f"{name}: target fkst.workspace.toml platform source lookup for git URL {git_url!r} found {found}; observed external source ids: {observed}")
+    matched_id = matches[0].get("id")
+    if not isinstance(matched_id, str) or not matched_id:
+        fail(f"{name}: external source matching git URL {git_url!r} must declare a non-empty id; observed external source ids: {observed}")
+    return matched_id, matches[0]
 
 
 def platform_block(lines: list[str], source_id: str) -> tuple[int, int] | None:
@@ -144,16 +183,14 @@ def parse_workspace(text: str, workspace_path: Path, name: str) -> dict[str, Any
     return workspace
 
 
-def sync(name: str, host: Path, requested: list[str], source_id: str) -> None:
+def sync(name: str, host: Path, requested: list[str], git_url: str) -> None:
     workspace_path = host / "fkst.workspace.toml"
     if not workspace_path.is_file():
         fail(f"{name}: target fkst.workspace.toml is required for dogfood platform sync: {workspace_path}")
     reject_duplicates(requested, "DEVLOOP_PKGS")
     text = workspace_path.read_text(encoding="utf-8")
     workspace = parse_workspace(text, workspace_path, name)
-    source = platform_source(workspace, source_id)
-    if source is None:
-        fail(f"{name}: target fkst.workspace.toml must declare external_sources(id={source_id})")
+    source_id, source = platform_source(workspace, git_url, name)
     field = f"external_sources(id={source_id}).packages"
     declared_before = package_list(source.get("packages", []), field)
     reject_duplicates(declared_before, field)
@@ -167,16 +204,16 @@ def sync(name: str, host: Path, requested: list[str], source_id: str) -> None:
         tmp_path.replace(workspace_path)
 
     synced = parse_workspace(new_text, workspace_path, name)
-    source = platform_source(synced, source_id)
-    if source is None:
-        fail(f"{name}: synced fkst.workspace.toml lost external_sources(id={source_id})")
+    synced_source_id, source = platform_source(synced, git_url, name)
+    if synced_source_id != source_id:
+        fail(f"{name}: synced fkst.workspace.toml changed the platform external source id")
     declared = package_list(source.get("packages", []), field)
     reject_duplicates(declared, field)
     if declared != requested:
         fail(f"{name}: synced platform package list does not match DEVLOOP_PKGS")
 
 
-def platform_packages(name: str, host: Path, pkgsrc: Path, source_id: str) -> list[str]:
+def platform_packages(name: str, host: Path, pkgsrc: Path, git_url: str) -> list[str]:
     workspace_path = host / "fkst.workspace.toml"
     if not workspace_path.is_file():
         fail(f"{name}: target fkst.workspace.toml is required for dogfood platform package selection: {workspace_path}")
@@ -193,25 +230,16 @@ def platform_packages(name: str, host: Path, pkgsrc: Path, source_id: str) -> li
             fail(f"{name}: self-host fkst.workspace.toml must declare dogfood platform packages as [[package]] entries")
         return packages
 
-    matched: list[list[str]] = []
-    for source in table_array(workspace, "external_sources"):
-        if source.get("id") == source_id:
-            declared = package_list(
-                source.get("packages", []),
-                f"external_sources(id={source_id}).packages",
-            )
-            reject_duplicates(declared, f"external_sources(id={source_id}).packages")
-            matched.append(declared)
-    if not matched:
-        fail(f"{name}: target fkst.workspace.toml must declare external_sources(id={source_id})")
-    if len(matched) > 1:
-        fail(f"{name}: target fkst.workspace.toml declares external_sources(id={source_id}) more than once")
-    if not matched[0]:
+    source_id, source = platform_source(workspace, git_url, name)
+    field = f"external_sources(id={source_id}).packages"
+    declared = package_list(source.get("packages", []), field)
+    reject_duplicates(declared, field)
+    if not declared:
         fail(f"{name}: external_sources(id={source_id}).packages must not be empty")
-    return matched[0]
+    return declared
 
 
-def is_generated_scratch(worktree: Path, requested: list[str], source_id: str) -> bool:
+def is_generated_scratch(worktree: Path, requested: list[str], git_url: str) -> bool:
     current_path = worktree / "fkst.workspace.toml"
     if not current_path.is_file():
         return False
@@ -224,6 +252,8 @@ def is_generated_scratch(worktree: Path, requested: list[str], source_id: str) -
     )
     if head.returncode != 0:
         return False
+    head_workspace = parse_workspace(head.stdout, current_path, str(worktree))
+    source_id, _source = platform_source(head_workspace, git_url, str(worktree))
     return current_path.read_text(encoding="utf-8") == render_with_packages(head.stdout, requested, source_id)
 
 
@@ -233,17 +263,17 @@ def main(argv: list[str]) -> int:
     cmd = argv[1]
     if cmd == "sync":
         if len(argv) != 6:
-            fail("usage: workspace_manifest.py sync <name> <host> <packages> <platform-source-id>")
+            fail("usage: workspace_manifest.py sync <name> <host> <packages> <platform-git-url>")
         sync(argv[2], Path(argv[3]), [item for item in argv[4].split() if item], argv[5])
         return 0
     if cmd == "platform-packages":
         if len(argv) != 6:
-            fail("usage: workspace_manifest.py platform-packages <name> <host> <pkgsrc> <platform-source-id>")
+            fail("usage: workspace_manifest.py platform-packages <name> <host> <pkgsrc> <platform-git-url>")
         print(" ".join(platform_packages(argv[2], Path(argv[3]), Path(argv[4]), argv[5])))
         return 0
     if cmd == "is-generated-scratch":
         if len(argv) != 5:
-            fail("usage: workspace_manifest.py is-generated-scratch <worktree> <packages> <platform-source-id>")
+            fail("usage: workspace_manifest.py is-generated-scratch <worktree> <packages> <platform-git-url>")
         return 0 if is_generated_scratch(Path(argv[2]), [item for item in argv[3].split() if item], argv[4]) else 1
     fail(f"unknown command: {cmd}")
     return 1
