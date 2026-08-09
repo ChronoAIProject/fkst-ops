@@ -10,7 +10,7 @@
 
 `fkst-ops` never depends on, names, or contains a declaration for a concrete repository. Adding deployment N+1 requires one declaration and one content pin, with zero source changes in `fkst-ops`.
 
-The five actions `board`, `status`, `logs`, `restart`, and `sync` are the operator surface subject to equivalence comparison and the contract that authorizes cutover. The current operator dispatches status at `.claude/skills/dogfood-github-devloop/dogfood.sh:829`; `status` remains observational and performs no mutation. `doctor` remains a separately invocable operator entry in `fkst-ops`, preserving unchanged the current behaviour dispatched at `.claude/skills/dogfood-github-devloop/dogfood.sh:830` and implemented at `:710-720`. It retains durable health inspection, stray supervise detection, guarded leaked-test reaping, and stale receipt cleanup, whose current functions begin at `:567,602,633,696`. The mutating implementations kill guarded process groups at `:675-679` and remove stale receipts at `:696-705`. When `doctor` runs is owned outside `fkst-ops`; `fkst-ops` defines no trigger field, scheduler, or invocation event. `doctor` has fail-visible accounting and acceptance coverage separate from five-action equivalence. Private primitives required by the five actions and `doctor` remain internal.
+The six actions `board`, `status`, `logs`, `restart`, `sync`, and `stop` are the public operator surface. `stop` sends SIGKILL to the supervise process; deployments are crash-only and recover from durable state, so it is not a graceful shutdown. The implementing operator layer owns this public action declaration, and the self-pinning entry derives its usage and routing from that declaration. The current operator dispatches status at `.claude/skills/dogfood-github-devloop/dogfood.sh:829`; `status` remains observational and performs no mutation. `doctor` remains a separately invocable operator entry in `fkst-ops`, preserving unchanged the current behaviour dispatched at `.claude/skills/dogfood-github-devloop/dogfood.sh:830` and implemented at `:710-720`. It retains durable health inspection, stray supervise detection, guarded leaked-test reaping, and stale receipt cleanup, whose current functions begin at `:567,602,633,696`. The mutating implementations kill guarded process groups at `:675-679` and remove stale receipts at `:696-705`. When `doctor` runs is owned outside `fkst-ops`; `fkst-ops` defines no trigger field, scheduler, or invocation event. `doctor` has fail-visible accounting and acceptance coverage separate from public-action equivalence. Private primitives required by the public actions and `doctor` remain internal; `bin`, `start`, and `config` are not routable through the public entry.
 
 ## 2. Owner Acceptance Record
 
@@ -18,7 +18,7 @@ The `worth` seat approved this migration conditionally. The decisive assumption 
 
 - **Accepted debt:** old operational entries remain in place after cutover.
 - **Containment boundary:** after a deployment cuts over, its old entry is **READ-ONLY FROZEN**. Every operational-behaviour change is made in `fkst-ops` only. Editing both sides is forbidden.
-- **Removal condition:** either event triggers deletion: (a) the deployment has run on `fkst-ops` for a soak window with the five-action equivalence acceptance passing; or (b) any behavioural divergence is observed between the two entries.
+- **Removal condition:** either event triggers deletion: (a) the deployment has run on `fkst-ops` for a soak window with the producer-declared public-action equivalence acceptance passing; or (b) any behavioural divergence is observed between the two entries.
 - **Named first adopter:** the `packages` deployment.
 - **Normative constraint:** "temporary without a removal condition" is not acceptable. The removal condition is normative, not advisory.
 
@@ -28,7 +28,7 @@ The owner records a finite soak duration in the `packages` cutover record before
 
 ### 3.1 L-mechanism: fkst-ops
 
-`fkst-ops` owns the generic executor, deployment-declaration schema and all resolved-schema and provider-contract validation, lifecycle execution and observation reachable from the five actions and `doctor`, and generic board orchestration and rendering.
+`fkst-ops` owns the generic executor, deployment-declaration schema and all resolved-schema and provider-contract validation, lifecycle execution and observation reachable from the six public actions and `doctor`, and generic board orchestration and rendering.
 
 Constraint: `fkst-ops` source contains **ZERO concrete repository names** and **ZERO deployment declarations**. It receives a declaration path plus machine-reference resolution inputs and never discovers targets. Its validation rejects unresolved logical references, duplicate identities, missing pins, unknown fields, and absolute machine values in logical-reference fields.
 
@@ -231,7 +231,7 @@ The extraction is cut by semantic responsibility, not filename.
 
 ### 5.2 Moves to fkst-ops
 
-Generic lifecycle execution and observation reachable from the five actions move to `fkst-ops`. The existing `doctor` command moves as a separately invocable operator entry with unchanged behaviour, fail-visible accounting, sourced-shell/helper closure, and separate tests; it is not called by a five-action implementation, and its invocation timing remains externally owned.
+Generic lifecycle execution and observation reachable from the six public actions move to `fkst-ops`. The existing `doctor` command moves as a separately invocable operator entry with unchanged behaviour, fail-visible accounting, sourced-shell/helper closure, and separate tests; it is not called by a public-action implementation, and its invocation timing remains externally owned.
 
 Engine build is owned by the engine repository and invoked by `fkst-ops` through the declared `engine` provider. The provider receives the resolved concrete engine checkout and binary. `fkst-packages`' `cmd_build` is deleted, not moved: it locates an fkst-substrate checkout, hardcodes `fkst-substrate` as a fallback, rejects a branch other than `dev`, pulls, and builds `fkst-framework` at `scripts/run.sh:792-815`.
 
@@ -285,7 +285,7 @@ Canonical `tree_sha256` is `"sha256-" + lowercase_hex(SHA-256(stream))`, where `
 
 Preflight failure is non-mutating: declaration validation failure, a missing referenced logical name, a missing checkout/package root or required contract, clone/checkout failure, `HEAD` mismatch, or tree-hash mismatch exits nonzero before any operational process, Git mutation of a resolved working checkout, durable mutation, or cache-pointer mutation. Acquisition occurs in a new sibling temporary directory; failure removes only that partial directory and preserves the last verified checkout and cache pointer. The self-pinning entry verifies `HEAD` and tree hash in the temporary directory, hands that unpromoted checkout to pinned `fkst-ops`, and replaces the cache pointer with one rename only after pinned `fkst-ops` completes all validation successfully. A cached checkout is verified before every handover. Tests cover positive fresh, cached, and already-pinned paths, `resolved.rev` mismatch, tree-hash mismatch, acquisition failure, preservation of last-known-good, and cleanup of partial state; pinned-`fkst-ops` tests cover missing machine names/contracts/roots and resolved-schema and provider-contract failures. The full preflight tests assert zero operational or cache-pointer mutation across both stages on every failure.
 
-A globally installed unpinned launcher is rejected because it breaks versioned reproducibility. A smaller adapter is permitted only after two deployments demonstrate identical five-action behaviour.
+A globally installed unpinned launcher is rejected because it breaks versioned reproducibility. A smaller adapter is permitted only after two deployments demonstrate identical producer-declared public-action behaviour.
 
 ## 8. Lift, Do Not Rewrite
 
@@ -297,9 +297,9 @@ The producer port owns profile interpretation, including label-state meaning and
 
 A language rewrite is out of scope.
 
-## 9. Five-Action Equivalence Acceptance
+## 9. Producer-Declared Public-Action Equivalence Acceptance
 
-`fkst-ops-compare` is a bounded executable gate for the five-action operator surface and cutover authorization contract. Before every invocation, it independently seeds or namespaces per side every mutable or observable fixture resource: source checkout, runtime root, durable root, log directory, cache paths, and process namespace. It runs the old entry once against one side and the new entry once against the other, enforces a per-invocation timeout, and retains both sides until comparison completes. Cross-side visibility is forbidden. A comparison run that cannot demonstrate this per-side isolation is a gate failure, not a pass. This reset is mandatory for every cell, especially stateful `restart` and `sync` cells. Provider and network inputs come from versioned deterministic fixtures; live network access is disabled.
+`fkst-ops-compare` is a bounded executable gate for the producer-declared public-action surface and cutover authorization contract. Before every invocation, it independently seeds or namespaces per side every mutable or observable fixture resource: source checkout, runtime root, durable root, log directory, cache paths, and process namespace. It runs the old entry once against one side and the new entry once against the other, enforces a per-invocation timeout, and retains both sides until comparison completes. Cross-side visibility is forbidden. A comparison run that cannot demonstrate this per-side isolation is a gate failure, not a pass. This reset is mandatory for every cell, especially stateful `restart` and `sync` cells. Provider and network inputs come from versioned deterministic fixtures; live network access is disabled.
 
 The closed observation record is `{fixture_id, action, argv, provider_fixture_ids, seed_refs, exit_code, stdout_normalized, stderr_normalized, git_before, git_after, runtime_before, runtime_after, durable_before, durable_after, process_state_before, process_state_after}`. Normalization removes only timestamps, PIDs, declared absolute-root prefixes, and ANSI styling. A cell passes only when exit codes match and every action-specific field below compares equal; the gate exits `0` only when every matrix cell passes, `1` for any mismatch, and `2` for fixture/setup/comparator error. The deployment cutover record stores the complete observations and comparator version. This is a comparator plus fixture matrix, not a proof apparatus.
 
@@ -310,12 +310,13 @@ The closed observation record is `{fixture_id, action, argv, provider_fixture_id
 | `logs` | Same latest logical supervise log and tail semantics | Seed two logs; compare selected identity and exact final N normalized lines for default and explicit N |
 | `restart` | Same source sync, prior-process replacement, durable reuse, composition, readiness, and failure exit | Compare PID replacement, durable identity, loaded revisions, readiness markers, and exit code |
 | `sync` | Same advancement, engine freshness, stale class, restart decision, and dirty/diverged refusal | Run current, stale-package, stale-engine, dirty, and diverged fixtures; compare final refs, build/restart decisions, and exit code |
+| `stop` | Same stopped/running handling, SIGKILL result, exhaustive all-target attempts, and aggregate failure exit | Run stopped and running fixtures; compare attempted targets, process state, output, and exit code |
 
-The required five-action matrix is finite and the gate runs every cell: `board` has both-healthy, engine/durable-failed, GitHub-failed, and both-failed cells; `status` has stopped and running cells; `logs` has default-N, explicit-N, and multiple-candidate selection-identity cells; `restart` has success and failure-with-rollback cells; `sync` has current, stale-package, stale-engine, dirty, and diverged cells. Each board failure cell verifies that every healthy plane is rendered, every failed plane has its explicit named failure row, and any provider failure exits nonzero. A missing required cell is gate failure.
+The required producer-declared public-action matrix is finite and the gate runs every cell: `board` has both-healthy, engine/durable-failed, GitHub-failed, and both-failed cells; `status` has stopped and running cells; `logs` has default-N, explicit-N, and multiple-candidate selection-identity cells; `restart` has success and failure-with-rollback cells; `sync` has current, stale-package, stale-engine, dirty, and diverged cells; `stop` has stopped and running cells. Each board failure cell verifies that every healthy plane is rendered, every failed plane has its explicit named failure row, and any provider failure exits nonzero. A missing required cell is gate failure.
 
 Current status observation is at `.claude/skills/dogfood-github-devloop/dogfood.sh:499-509` and its dispatch is at `:829`. The current doctor implementation is at `:710-720` and its separate dispatch is at `:830`.
 
-`doctor` has a separate deterministic closed acceptance suite outside five-action equivalence. Each fixture invokes the `doctor` entry and compares the exact normalized observation and fail-visible accounting. Age-based fixtures use one fixed fixture clock, and process elapsed times and receipt mtimes are seeded relative to that clock:
+`doctor` has a separate deterministic closed acceptance suite outside public-action equivalence. Each fixture invokes the `doctor` entry and compares the exact normalized observation and fail-visible accounting. Age-based fixtures use one fixed fixture clock, and process elapsed times and receipt mtimes are seeded relative to that clock:
 
 | Capability | Setup | Exact observation compared | Pass rule |
 |---|---|---|---|
@@ -326,11 +327,11 @@ Current status observation is at `.claude/skills/dogfood-github-devloop/dogfood.
 
 Live production behaviour of the current dogfood path was not exercised by this read-only review and is **ASSUMED-UNVERIFIED**. First-adopter acceptance and soak supply that evidence.
 
-Contract tests scan **all Git-tracked paths in `fkst-ops`** for a versioned denylist containing the concrete repository names from the first adoption. Test configuration contains one exact, explicit path enumeration for every exclusion, including this design document, each intentional concrete-name fixture, and each named generated path. Category-only, directory, glob, implicit, and otherwise unenumerated exclusions are forbidden and are gate failure. Every other tracked source, configuration, and build artifact is scanned, and any literal match fails. An N+1 fixture copies the `fkst-ops` tree, adds only a deployment declaration and lock in a separate deployment fixture, invokes all five actions with deterministic providers, and asserts the copied `fkst-ops` tree hash is unchanged. This executable scan and N+1 test verify the zero-name and zero-source-change contracts; concrete names occur only at explicitly enumerated excluded paths.
+Contract tests scan **all Git-tracked paths in `fkst-ops`** for a versioned denylist containing the concrete repository names from the first adoption. Test configuration contains one exact, explicit path enumeration for every exclusion, including this design document, each intentional concrete-name fixture, and each named generated path. Category-only, directory, glob, implicit, and otherwise unenumerated exclusions are forbidden and are gate failure. Every other tracked source, configuration, and build artifact is scanned, and any literal match fails. An N+1 fixture copies the `fkst-ops` tree, adds only a deployment declaration and lock in a separate deployment fixture, invokes every producer-declared public action with deterministic providers, and asserts the copied `fkst-ops` tree hash is unchanged. This executable scan and N+1 test verify the zero-name and zero-source-change contracts; concrete names occur only at explicitly enumerated excluded paths.
 
 ## 10. Cutover: No Dual Mode
 
-"Build new before deleting old" is an ordering constraint, not permission for permanent duplication. Each deployment uses one authoritative invocation marker: a single repository-owned pointer file naming the active pinned entry. Cutover ordering is acceptance on the candidate, atomic replacement of that one pointer, post-switch execution of the five-action smoke matrix, then read-only freeze of the old entry. The old pointer and checkout remain as last-known-good until Section 2 permits removal.
+"Build new before deleting old" is an ordering constraint, not permission for permanent duplication. Each deployment uses one authoritative invocation marker: a single repository-owned pointer file naming the active pinned entry. Cutover ordering is acceptance on the candidate, atomic replacement of that one pointer, post-switch execution of the producer-declared public-action smoke matrix, then read-only freeze of the old entry. The old pointer and checkout remain as last-known-good until Section 2 permits removal.
 
 The pointer replacement writes and verifies a sibling temporary file, then atomically renames it over the authoritative pointer; no second marker is created. On interruption before rename, the old pointer remains authoritative and resume deletes the temporary file and restarts acceptance. On interruption after rename, the new pointer is authoritative and resume runs post-switch verification. A failed post-switch verification atomically restores the preserved old pointer and records failure; retry starts from acceptance. Every state has exactly one authoritative entry, never zero or two.
 
@@ -343,8 +344,8 @@ This generation deletes:
 - [ ] The hardcoded three-target `cfg()` block; never copy it into `fkst-ops` (`dogfood.sh:82-99`).
 - [ ] `scripts/check_repo_dogfood_boundary.py`; it names the skill script and requires `scripts/run.sh supervise` solely to police the current seam at `scripts/check_repo_dogfood_boundary.py:10-14,96-123`.
 - [ ] The second board front-end, after Section 6 binds and names every view and the per-deployment removal condition fires; delete neither provider plane.
-- [ ] Public commands outside the five-action cutover contract, except the retained invocable `doctor` entry; retain private primitives required by the five actions and `doctor`.
-- [ ] Any coupling from `status` or another five-action implementation to `doctor`; retain `doctor`, its externally owned invocation timing, fail-visible accounting, and closed acceptance suite.
+- [ ] Public commands outside the six-action cutover contract, except the retained invocable `doctor` entry; retain private primitives required by the six actions and `doctor`.
+- [ ] Any coupling from `status` or another public-action implementation to `doctor`; retain `doctor`, its externally owned invocation timing, fail-visible accounting, and closed acceptance suite.
 - [ ] `fkst-packages`' `cmd_build`; engine build is reached only through the declared engine provider (`scripts/run.sh:792-815`).
 
 At cutover, additionally delete after the removal condition fires:

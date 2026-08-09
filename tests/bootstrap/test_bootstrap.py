@@ -30,6 +30,7 @@ class BootstrapTest(unittest.TestCase):
         (self.source / "schema").mkdir()
         shutil.copy2(ROOT / "bin" / "fkst-ops", self.source / "bin" / "fkst-ops")
         shutil.copy2(SOURCE / "canonical_tree.py", self.source / "bootstrap" / "canonical_tree.py")
+        shutil.copy2(ROOT / "ops" / "public_actions.sh", self.source / "ops" / "public_actions.sh")
         runner = self.source / "ops" / "deployment_operator.sh"
         runner.write_text(
             "#!/usr/bin/env bash\n"
@@ -67,15 +68,28 @@ class BootstrapTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def invoke(self, **overrides: str):
+    def invoke_action(self, action: str, *action_args: str, **overrides: str):
         env = os.environ.copy()
         env.update(CALL_LOG=str(self.log), FKST_OPS_CACHE_ROOT=str(self.cache))
         env.update(overrides)
         return run(
             "bash", str(ROOT / "bin" / "fkst-ops"), "--deployment-dir", str(self.deployment),
             "--declaration", "deployment.toml",
-            "--machine-config", "machine.toml", "status", cwd=self.deployment, check=False, env=env,
+            "--machine-config", "machine.toml", action, *action_args,
+            cwd=self.deployment, check=False, env=env,
         )
+
+    def invoke(self, **overrides: str):
+        return self.invoke_action("status", **overrides)
+
+    def declared_actions(self) -> list[str]:
+        result = run(
+            "bash", "-c",
+            'source "$1"; printf "%s\\n" "${FKST_OPS_PUBLIC_ACTIONS[@]}"',
+            "test-public-actions", str(self.source / "ops" / "public_actions.sh"),
+            cwd=self.root,
+        )
+        return result.stdout.splitlines()
 
     def commit_fixture_change(self):
         marker = self.source / "fixture-version.txt"
@@ -227,6 +241,62 @@ class BootstrapTest(unittest.TestCase):
             [value.encode() for value in ["status", *trailing]],
             self.log.read_bytes().split(b"\0")[:-1],
         )
+
+    def test_stop_is_pinned_validated_and_delegated_but_private_primitives_are_not(self):
+        stop = self.invoke_action("stop", "deployment-a", "forwarded argument")
+        self.assertEqual(0, stop.returncode, stop.stderr)
+        self.assertEqual(
+            ["stop deployment-a forwarded argument"],
+            self.log.read_text(encoding="utf-8").splitlines(),
+        )
+        self.assertTrue((self.cache / "current").is_symlink())
+
+        before = self.log.read_bytes()
+        for action in ("bin", "start", "config"):
+            with self.subTest(action=action):
+                rejected = self.invoke_action(action)
+                self.assertEqual(2, rejected.returncode)
+                self.assertIn("usage: fkst-ops", rejected.stderr)
+                self.assertEqual(before, self.log.read_bytes())
+
+    def test_usage_and_dispatch_are_derived_from_the_producer_owned_action_set(self):
+        actions = self.source / "ops" / "public_actions.sh"
+        actions.write_text(
+            "#!/usr/bin/env bash\nreadonly FKST_OPS_PUBLIC_ACTIONS=(inspect quiesce)\n",
+            encoding="ascii",
+        )
+        run("git", "add", "ops/public_actions.sh", cwd=self.source)
+        run("git", "commit", "-qm", "vary public actions", cwd=self.source)
+        revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
+        tree = run(
+            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), revision, cwd=self.root
+        ).stdout.strip()
+        self.write_lock(revision, tree)
+
+        declared = self.declared_actions()
+        self.assertEqual(["inspect", "quiesce"], declared)
+        for action in declared:
+            with self.subTest(action=action):
+                result = self.invoke_action(action)
+                self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            declared, self.log.read_text(encoding="utf-8").splitlines()
+        )
+
+        undeclared = ("shadow", "board", "status", "logs", "restart", "sync", "stop",
+                      "bin", "start", "config")
+        for action in undeclared:
+            with self.subTest(undeclared_action=action):
+                before = self.log.read_bytes()
+                rejected = self.invoke_action(action, "proof")
+                self.assertEqual(2, rejected.returncode, rejected.stderr)
+                self.assertIn("[inspect|quiesce]", rejected.stderr)
+                self.assertNotIn("board|status|logs|restart|sync|stop", rejected.stderr)
+                self.assertEqual(
+                    before,
+                    self.log.read_bytes(),
+                    f"undeclared action {action!r} reached the deployment operator",
+                )
 
     def test_failed_stale_pin_upgrade_preserves_current_checkout_and_action_log(self):
         self.assertEqual(0, self.invoke().returncode)

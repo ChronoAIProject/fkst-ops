@@ -113,7 +113,7 @@ bundle, and design material.
 ## Open items
 
 - No deployment has cut over from the previous operator.
-- The five-action equivalence matrix has not run against both real entries.
+- The producer-declared public-action equivalence matrix has not run against both real entries.
 - The website deployment is pending because its workspace manifest does not
   provide a non-empty package composition for its external platform source.
 

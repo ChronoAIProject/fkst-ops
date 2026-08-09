@@ -3,8 +3,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TREE_HASHER="$ROOT/bootstrap/canonical_tree.py"
+source "$ROOT/ops/public_actions.sh"
 usage() {
-  echo "usage: fkst-ops [preflight] [--deployment-dir PATH] --declaration PATH --machine-config PATH [--lock PATH] [board|status|logs|restart|sync] [args...]" >&2
+  local actions
+  actions="$(IFS='|'; echo "${FKST_OPS_PUBLIC_ACTIONS[*]}")"
+  echo "usage: fkst-ops [preflight] [--deployment-dir PATH] --declaration PATH --machine-config PATH [--lock PATH] [$actions] [args...]" >&2
+  echo "stop: sends SIGKILL; 'stop all' attempts every target and exits nonzero if any target fails; recovery uses durable state" >&2
 }
 
 original_argv=("$@")
@@ -190,8 +194,11 @@ PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m schema.validator "$decl
 
 action="${1:-status}"
 shift || true
-case "$action" in
-  board|status|logs|restart|sync) exec "$ROOT/ops/deployment_operator.sh" "$action" "$@" ;;
-  doctor) exec "$ROOT/doctor/doctor.sh" "$@" ;;
-  *) usage; exit 2 ;;
-esac
+for public_action in "${FKST_OPS_PUBLIC_ACTIONS[@]}"; do
+  if [ "$action" = "$public_action" ]; then
+    exec "$ROOT/ops/deployment_operator.sh" "$action" "$@"
+  fi
+done
+[ "$action" = doctor ] && exec "$ROOT/doctor/doctor.sh" "$@"
+usage
+exit 2

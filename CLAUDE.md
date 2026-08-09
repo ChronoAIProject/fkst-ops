@@ -167,11 +167,11 @@
 
 fkst-ops 是从其首个采用方抽取出来的、**仓库无关且版本受控的运维机制**。它由 Bash + Python 实现，只使用 Python 标准库，不引入第三方依赖。部署仓库 pin 本仓、提供声明，并通过部署仓自己拥有的 bootstrap 调用；依赖方向永远单向：`deployment repository → pinned fkst-ops`，本仓绝不反向依赖具体部署仓。
 
-本仓的公开 operator surface 只有五个 action：`board`、`status`、`logs`、`restart`、`sync`；`doctor` 是独立可调用入口，不属于五 action 等价契约。私有 primitive 只服务这五个 action 与 `doctor`，不得膨胀成第二套公开 surface。`status` 保持纯观察、不得产生 mutation；`doctor` 保留 durable health、stray supervise 检测、guarded leaked-test reaping、stale receipt 清理以及 fail-visible accounting，其调用时机归部署外层所有，本仓不定义 scheduler、trigger field 或 invocation event。
+本仓的公开 operator surface 只有 producer-declared 的六个 action：`board`、`status`、`logs`、`restart`、`sync`、`stop`；`doctor` 是独立可调用入口，不属于六 action 等价契约。私有 primitive 只服务这六个 action 与 `doctor`，不得膨胀成第二套公开 surface。`status` 保持纯观察、不得产生 mutation；`doctor` 保留 durable health、stray supervise 检测、guarded leaked-test reaping、stale receipt 清理以及 fail-visible accounting，其调用时机归部署外层所有，本仓不定义 scheduler、trigger field 或 invocation event。
 
 ### 四层 ownership（本仓的操作教义）
 
-1. **L-mechanism（fkst-ops）**：拥有 generic executor、deployment declaration schema、resolved-schema 与 provider-contract validation、五 action 与 `doctor` 可达的 lifecycle execution/observation，以及 generic board orchestration/rendering。
+1. **L-mechanism（fkst-ops）**：拥有 generic executor、deployment declaration schema、resolved-schema 与 provider-contract validation、producer-declared 六 action 与 `doctor` 可达的 lifecycle execution/observation，以及 generic board orchestration/rendering。
 2. **L-deployment（deployment repository）**：拥有 target/platform/engine 的 versioned source bindings 与 content pins、package composition、integration policy、target identity、logical durable/runtime/log identities、provider bindings，以及自己的 bootstrap 与 lock。一个部署仓里的多个 declaration 共用 repository-level lock entry，不复制 SHA。
 3. **L-machine（每台机器一份配置）**：拥有 absolute roots、login、bot set、credentials 与 machine defaults。declaration 只引用 logical name，绝不嵌入绝对路径、login 或 secret。
 4. **L-package-semantics（fact producer）**：producer 拥有自己的 workflow/lifecycle/AVM 等事实解释；consumer 永不接管 producer semantics。
@@ -184,9 +184,9 @@ fkst-ops 是从其首个采用方抽取出来的、**仓库无关且版本受控
 
 provider 是 direct executable port，不是 plugin framework。每个 deployment 对每种 required kind 只能绑定一个 provider；共享 envelope 为 `fkst.ops.invocation.v1`，stdin/stdout 各恰好一个 UTF-8 JSON document，stderr 只作诊断且不解析为结果。provider 必须返回 typed success 或 typed failure；missing/duplicate/version-mismatched binding、malformed JSON、missing/multiple output、exit/object mismatch 都是 port failure。board 必须同时绑定 `board.engine-durable` 与 `board.github-control` 两个 plane：健康 plane 永远渲染，失败 plane 显式渲染 named failure row，任一 provider 失败则整体 nonzero；package-owned facts 仍通过 producer port 提供，本仓只做 generic orchestration/rendering。
 
-五 action 的 cutover 由 bounded executable equivalence acceptance 授权；每个 matrix cell 两侧的 source/runtime/durable/log/cache/process fixtures 必须隔离且重置，live network 禁止，任何未能证明隔离的 run 都算 gate failure。`doctor` 使用独立、确定性、closed acceptance suite。迁移是 **lift, do not rewrite**，语言重写不在范围内。
+producer-declared 六 action 的 cutover 由 bounded executable equivalence acceptance 授权；每个 matrix cell 两侧的 source/runtime/durable/log/cache/process fixtures 必须隔离且重置，live network 禁止，任何未能证明隔离的 run 都算 gate failure。`doctor` 使用独立、确定性、closed acceptance suite。迁移是 **lift, do not rewrite**，语言重写不在范围内。
 
-**No dual mode**：build-new-before-delete-old 只是顺序约束，不是永久复制许可。每个 deployment 始终只有一个 authoritative invocation pointer；candidate acceptance → atomic pointer replacement → post-switch five-action smoke → old entry read-only freeze。失败则原子恢复保存的旧 pointer。不存在 deprecated shim、compatibility mode、opt-in switch 或 dual-write path；任何状态都不能出现零个或两个 authoritative entry。旧入口只可在有明确 removal condition 的期限内存在，cutover 后行为修改只进 fkst-ops，禁止双修。权威设计见 `docs/superpowers/specs/2026-08-08-fkst-ops-extraction-design.md`。
+**No dual mode**：build-new-before-delete-old 只是顺序约束，不是永久复制许可。每个 deployment 始终只有一个 authoritative invocation pointer；candidate acceptance → atomic pointer replacement → post-switch six-action smoke → old entry read-only freeze。失败则原子恢复保存的旧 pointer。不存在 deprecated shim、compatibility mode、opt-in switch 或 dual-write path；任何状态都不能出现零个或两个 authoritative entry。旧入口只可在有明确 removal condition 的期限内存在，cutover 后行为修改只进 fkst-ops，禁止双修。权威设计见 `docs/superpowers/specs/2026-08-08-fkst-ops-extraction-design.md`。
 
 ## 零具体仓库名、零部署声明（本仓最强硬约束）
 
@@ -221,14 +221,14 @@ python3 scan/zero_target_names.py --name fkst-packages --name fkst-substrate --n
 
 真实顶层目录是 `bin/`、`ops/`、`host/`、`board/`、`providers/`、`doctor/`、`schema/`、`bootstrap/`、`scan/`、`acceptance/`、`migration/`、`deployments/`、`tests/`、`docs/`。
 
-- `bin/` 只放稳定 public entry；五 action 与独立 `doctor` 的 dispatch 必须保持单一。
+- `bin/` 只放稳定 public entry；producer-declared 六 action 与独立 `doctor` 的 dispatch 必须保持单一。
 - `ops/`、`host/` 承载 generic lifecycle/operator implementation；不得嵌入 concrete deployment identity 或 declaration。
 - `board/` 只拥有 consolidated front-end 与 generic rendering；producer semantics 留在 `providers/` 背后的 producing package。
 - `providers/` 是 closed、typed、direct executable ports，不发展成 plugin framework；contract/version/input/result/failure 都须显式。
-- `doctor/` 拥有独立 sweep/preflight 能力与 fail-visible accounting；不得暗接进 `status` 或其他五 action。
+- `doctor/` 拥有独立 sweep/preflight 能力与 fail-visible accounting；不得暗接进 `status` 或其他六 action。
 - `schema/` 拥有 declaration、machine resolution 与 provider-binding validation；bootstrap 不复制这些知识。
 - `bootstrap/` 只实现 edge trust-root 三职责；不得演化成 bootstrap framework。
-- `scan/` 与 `acceptance/` 是机械 gate；前者守 zero-name/zero-declaration，后者守隔离 fixture 上的 five-action equivalence 与 cutover authorization。
+- `scan/` 与 `acceptance/` 是机械 gate；前者守 zero-name/zero-declaration，后者守隔离 fixture 上的 producer-declared six-action equivalence 与 cutover authorization。
 - `deployments/` 只允许保存 deployment installation guidance，不得包含真实 deployment declaration；真实 declaration、lock 与 bootstrap 归 deployment repository。
 - `migration/` 只容纳有明确 removal condition 的迁移账；不得成为永久 allowlist、compat layer 或 dual mode 的藏身处。
 - `tests/` 镜像行为 ownership，测试 public contracts、failure paths、non-mutation、isolation 与 N+1 zero-source-change；测试不得靠 live network。
@@ -633,7 +633,7 @@ python3 scan/zero_target_names.py --name fkst-packages --name fkst-substrate --n
 
 本次实跑：完整测试命令通过；zero-target-name gate exit 0。另一次 `python3 -m unittest discover -s tests -p '*test.py'` 收集 0 tests 并 exit 5，不是本仓测试命令，不得把它当绿灯。
 
-行为验收以 `acceptance/fkst-ops-compare` 的隔离 deterministic fixture matrix 为准；五 action 的每个 required cell 都必须存在并通过。N+1 acceptance 要证明只在独立 deployment fixture 增加 declaration/lock 即可调用五 action，且 fkst-ops tree hash 不变。`doctor` 走独立 deterministic closed acceptance，不拿五 action 等价测试代替。真实 deployment operation/cutover 必须经 pinned bootstrap、preflight、candidate acceptance、atomic pointer switch 与 post-switch smoke；不得用全局 unpinned entry 或 live-network fixture 冒充验收。
+行为验收以 `acceptance/fkst-ops-compare` 的隔离 deterministic fixture matrix 为准；producer-declared 六 action 的每个 required cell 都必须存在并通过。N+1 acceptance 要证明只在独立 deployment fixture 增加 declaration/lock 即可调用这六 action，且 fkst-ops tree hash 不变。`doctor` 走独立 deterministic closed acceptance，不拿六 action 等价测试代替。真实 deployment operation/cutover 必须经 pinned bootstrap、preflight、candidate acceptance、atomic pointer switch 与 post-switch smoke；不得用全局 unpinned entry 或 live-network fixture 冒充验收。
 
 ## Git 提交/分支规范
 
@@ -648,7 +648,7 @@ python3 scan/zero_target_names.py --name fkst-packages --name fkst-substrate --n
 - **实事求是**：所有 repository facts 必须从当前文件、命令末态与 executable contract 核实；来源仓案例只能明确标为 origin case，不能写成本仓现状。
 - **守 ownership boundary**：mechanism/deployment/machine/package-semantics 四层不可倒置；consumer 不拥有 producer semantics，bootstrap 不解析 schema，provider 不解析 logical machine reference。
 - **守单向依赖**：只有 `deployment repository → pinned fkst-ops`；本仓不发现 target、不持有真实 deployment declaration、不反向读取具体部署仓。
-- **守公开面**：只有 `board/status/logs/restart/sync` 五 action，加独立 `doctor`；不新增兼容命令、第二 board、隐式 scheduler 或 status→doctor coupling。
+- **守公开面**：只有 producer-declared 的 `board/status/logs/restart/sync/stop` 六 action，加独立 `doctor`；不新增兼容命令、第二 board、隐式 scheduler 或 status→doctor coupling。
 - **守 preflight 原子性**：所有 validation 先完成，失败零 operational/durable/cache-pointer mutation；任何时刻恰好一个 authoritative pointer。
 - **守 no-dual-mode**：cutover 后旧入口 read-only frozen，行为修复只进 fkst-ops；有明确 removal condition 才准短期保留旧入口。
 - **守语言与依赖**：source、comment、docstring、log/error、identifier 只用英文；实现保持 Bash + Python standard library only。
@@ -657,4 +657,3 @@ python3 scan/zero_target_names.py --name fkst-packages --name fkst-substrate --n
 
 
 ⟦AI:FKST⟧
-

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded five-action equivalence gate for an fkst-ops cutover."""
+"""Bounded public-action equivalence gate for an fkst-ops cutover."""
 
 from __future__ import annotations
 
@@ -17,13 +17,37 @@ from typing import Any
 
 
 VERSION = "fkst.ops.compare.v1"
-REQUIRED_CELLS = {
+PUBLIC_ACTIONS_DECLARATION = Path(__file__).resolve().parents[1] / "ops" / "public_actions.sh"
+FIXTURES_BY_ACTION = {
     "board": {"both-healthy", "engine-durable-failed", "github-control-failed", "both-failed"},
     "status": {"stopped", "running"},
     "logs": {"default-n", "explicit-n", "multiple-candidate-logs"},
     "restart": {"success", "failure-with-rollback"},
     "sync": {"current", "stale-package", "stale-engine", "dirty-worktree", "diverged-branch"},
+    "stop": {"stopped", "running"},
 }
+
+
+def load_public_actions() -> tuple[str, ...]:
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; printf \'%s\\n\' "${FKST_OPS_PUBLIC_ACTIONS[@]}"',
+         "fkst-ops-compare", str(PUBLIC_ACTIONS_DECLARATION)],
+        text=True, capture_output=True, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"cannot load public actions: {result.stderr.strip()}")
+    actions = tuple(result.stdout.splitlines())
+    if not actions or len(actions) != len(set(actions)):
+        raise RuntimeError("public action declaration must be nonempty and unique")
+    return actions
+
+
+PUBLIC_ACTIONS = load_public_actions()
+if set(FIXTURES_BY_ACTION) != set(PUBLIC_ACTIONS):
+    missing = sorted(set(PUBLIC_ACTIONS) - set(FIXTURES_BY_ACTION))
+    extra = sorted(set(FIXTURES_BY_ACTION) - set(PUBLIC_ACTIONS))
+    raise RuntimeError(f"acceptance fixtures differ from public actions: missing={missing}, extra={extra}")
+REQUIRED_CELLS = {action: FIXTURES_BY_ACTION[action] for action in PUBLIC_ACTIONS}
 RESOURCE_NAMES = ("source", "runtime", "durable", "logs", "cache", "process")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 TIMESTAMP_RE = re.compile(

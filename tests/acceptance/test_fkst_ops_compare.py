@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the bounded five-action equivalence comparator."""
+"""Tests for the bounded public-action equivalence comparator."""
 
 from __future__ import annotations
 
@@ -20,13 +20,27 @@ REQUIRES_OLD_OPERATOR = unittest.skipUnless(
     OLD_OPERATOR is not None and OLD_OPERATOR.is_file(),
     f"set {OLD_OPERATOR_ENV} to the existing old-operator file",
 )
-MATRIX = {
+FIXTURES_BY_ACTION = {
     "board": ("both-healthy", "engine-durable-failed", "github-control-failed", "both-failed"),
     "status": ("stopped", "running"),
     "logs": ("default-n", "explicit-n", "multiple-candidate-logs"),
     "restart": ("success", "failure-with-rollback"),
     "sync": ("current", "stale-package", "stale-engine", "dirty-worktree", "diverged-branch"),
+    "stop": ("stopped", "running"),
 }
+
+
+def load_public_actions() -> tuple[str, ...]:
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; printf \'%s\\n\' "${FKST_OPS_PUBLIC_ACTIONS[@]}"',
+         "test-fkst-ops-compare", str(ROOT / "ops" / "public_actions.sh")],
+        text=True, capture_output=True, check=True,
+    )
+    return tuple(result.stdout.splitlines())
+
+
+PUBLIC_ACTIONS = load_public_actions()
+MATRIX = {action: FIXTURES_BY_ACTION[action] for action in PUBLIC_ACTIONS}
 
 
 class ComparatorFixture:
@@ -106,7 +120,8 @@ class FkstOpsCompareTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(self.fixture.output.read_text(encoding="utf-8"))
         self.assertTrue(report["passed"])
-        self.assertEqual(len(report["cells"]), 16)
+        self.assertEqual(set(FIXTURES_BY_ACTION), set(PUBLIC_ACTIONS))
+        self.assertEqual(len(report["cells"]), sum(map(len, MATRIX.values())))
         record = report["cells"][0]["old"]
         required = {
             "fixture_id", "action", "argv", "provider_fixture_ids", "seed_refs", "exit_code",
@@ -181,7 +196,11 @@ class FkstOpsCompareTest(unittest.TestCase):
         self.assertIn("seed lacks required isolation resource: cache", result.stderr)
 
     def test_missing_required_cell_is_gate_failure(self) -> None:
-        self.fixture.write_manifest(self.fixture.cells()[:-1])
+        cells = [
+            cell for cell in self.fixture.cells()
+            if (cell["action"], cell["fixture_id"]) != ("sync", "diverged-branch")
+        ]
+        self.fixture.write_manifest(cells)
         result = self.fixture.run()
         self.assertEqual(result.returncode, 1, result.stderr)
         report = json.loads(self.fixture.output.read_text(encoding="utf-8"))

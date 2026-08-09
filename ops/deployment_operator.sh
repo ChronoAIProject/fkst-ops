@@ -16,7 +16,7 @@
 #   ./deployment_operator.sh board   [name|all] [stale_h]  GitHub board sweep: which issues/PRs flow vs are stuck (default stale 6h)
 #   ./deployment_operator.sh bin                           ensure engine BIN == substrate origin/dev; rebuild if stale (no restart)
 #   ./deployment_operator.sh start   [name|all]            launch via host-run contract
-#   ./deployment_operator.sh stop    [name|all]            SIGKILL (releases the redb lock)
+#   ./deployment_operator.sh stop    [name|all]            SIGKILL supervise; all attempts every target and any failure exits nonzero
 #   ./deployment_operator.sh restart [name|all]            sync run checkouts to origin/<integration> + relaunch (unconditional)
 #   ./deployment_operator.sh sync    [name|all]            auto-deploy: advance declared source checkouts, rebuild BIN,
 #                                              and restart ONLY supervises whose running code is a real
@@ -232,11 +232,23 @@ restore_generated_workspace_scratch() { # $1 worktree dir
 
 sync_to_run_branch() { # $1 worktree dir
   git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || { echo "  ! $1 is not a git worktree"; return 1; }
-  git -C "$1" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null
-  local target; target=$(git -C "$1" rev-parse --short "origin/$INTEGRATION_BRANCH" 2>/dev/null)
+  git -C "$1" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null \
+    || { echo "  $1 -> FETCH-FAILED ($INTEGRATION_BRANCH)"; return 1; }
+  local target; target=$(git -C "$1" rev-parse --short "origin/$INTEGRATION_BRANCH" 2>/dev/null) \
+    || { echo "  $1 -> MISSING-REMOTE-BRANCH ($INTEGRATION_BRANCH)"; return 1; }
   # checkout -B (not reset --hard): leaves the checkout actually ON the integration branch
   # tracking origin/<integration>, instead of pointing a stale local 'dev' ref at integration content.
-  local note; note=$(git -C "$1" checkout -q -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>&1 | tail -1)
+  local note checkout_status checkout_output
+  checkout_output=$(mktemp "${TMPDIR:-/tmp}/fkst-checkout.XXXXXX") || return 1
+  git -C "$1" checkout -q -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>&1 \
+    | tail -1 >"$checkout_output"
+  checkout_status=${PIPESTATUS[0]}
+  note=$(cat "$checkout_output")
+  rm -f "$checkout_output"
+  if [ "$checkout_status" -ne 0 ]; then
+    echo "  $1 -> CHECKOUT-FAILED ($INTEGRATION_BRANCH)"
+    return "$checkout_status"
+  fi
   # Verify the checkout actually REACHED target, then self-heal. A checkout that aborts (working-tree
   # obstruction, a file<->symlink/dir transition racing the running supervise, a dirty tree) otherwise
   # leaves the clone on STALE code while the function returns ok and the supervise silently launches
@@ -245,7 +257,7 @@ sync_to_run_branch() { # $1 worktree dir
   # obstruction; clean -fd keeps gitignored .fkst/ runtime), then re-assert the branch so the checkout
   # stays ON <integration>. If it STILL cannot reach target (deep corruption ensure_run_checkout should
   # have re-cloned), fail loud with STALE-CHECKOUT so the operator and doctor (pkg-stale) catch it.
-  if [ -n "$target" ] && [ "$(git -C "$1" rev-parse --short HEAD 2>/dev/null)" != "$target" ]; then
+  if [ "$(git -C "$1" rev-parse --short HEAD 2>/dev/null)" != "$target" ]; then
     git -C "$1" reset --hard "origin/$INTEGRATION_BRANCH" -q 2>/dev/null
     git -C "$1" clean -fdq 2>/dev/null
     git -C "$1" checkout -q -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>/dev/null
@@ -491,7 +503,12 @@ stop_one() {
   cfg "$1" || return 1
   local p; p=$(pidof_df)
   if [ -z "$p" ]; then echo "[$1] not running"; return 0; fi
-  kill -9 $p 2>/dev/null; echo "[$1] killed $p"
+  if kill -9 "$p" 2>/dev/null; then
+    echo "[$1] killed $p with SIGKILL"
+    return 0
+  fi
+  echo "[$1] failed to SIGKILL $p" >&2
+  return 1
 }
 
 restart_one() {
@@ -627,7 +644,7 @@ cmd="${1:-status}"; arg2="${2:-}"; arg3="${3:-}"
 case "$cmd" in
   bin)     bin_ensure_fresh ;;
   start)   rc=0; for n in $(expand "${arg2:-all}"); do start_one "$n" || rc=1; done; exit "$rc" ;;
-  stop)    for n in $(expand "${arg2:-all}"); do stop_one "$n"; done ;;
+  stop)    rc=0; for n in $(expand "${arg2:-all}"); do stop_one "$n" || rc=1; done; exit "$rc" ;;
   restart) rc=0; for n in $(expand "${arg2:-all}"); do restart_one "$n" || rc=1; done; exit "$rc" ;;
   sync)    cmd_sync "$arg2" ;;
   status)  for n in $(expand "${arg2:-all}"); do status_one "$n"; done ;;

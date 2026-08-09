@@ -18,6 +18,144 @@ MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
 class OperatorLiftTest(unittest.TestCase):
+    def test_stop_all_preserves_an_earlier_target_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tools = Path(directory)
+            resolved = {
+                "deployment": [
+                    {
+                        "id": name,
+                        "target_identity": name,
+                        "machine": {
+                            "target_checkout": f"/{name}",
+                            "platform_checkout": f"/{name}",
+                            "engine_checkout": "/engine",
+                            "engine_binary": "/engine/bin",
+                            "durable": f"/{name}/durable",
+                            "runtime": f"/{name}/runtime",
+                            "logs": f"/{name}/logs",
+                        },
+                        "github_devloop_profile": {},
+                        "providers": {
+                            key: {"executable": "/provider", "contract": "v1", "configuration": {}}
+                            for key in (
+                                "github_credential", "engine", "board_engine_durable",
+                                "board_github_control",
+                            )
+                        },
+                        "claim_posture": {"mode": "label", "label_exclusive": False},
+                        "integration": {
+                            "upstream_branch": "dev",
+                            "integration_branch": "integration",
+                            "rollup_merge": "merge",
+                        },
+                        "github_write_enabled": False,
+                        "packages": {"host": []},
+                        "sources": {
+                            "target": {"git": "target"},
+                            "platform": {"git": "platform"},
+                        },
+                    }
+                    for name in ("fails", "stopped")
+                ]
+            }
+            resolved_fixture = tools / "resolved.json"
+            resolved_fixture.write_text(json.dumps(resolved), encoding="ascii")
+            fake_python = tools / "python3"
+            fake_python.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = -m ] && [ \"$2\" = schema.validator ]; then\n"
+                "  exec cat \"$RESOLVED_FIXTURE\"\n"
+                "else\n"
+                f"  exec {sys.executable} \"$@\"\n"
+                "fi\n",
+                encoding="ascii",
+            )
+            fake_python.chmod(0o755)
+            fake_pgrep = tools / "pgrep"
+            fake_pgrep.write_text(
+                "#!/bin/sh\ncase \"$*\" in *'/fails '*) echo 999999999;; esac\n",
+                encoding="ascii",
+            )
+            fake_pgrep.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{tools}:{os.environ['PATH']}",
+                "FKST_OPS_DECLARATION": str(tools / "deployment.toml"),
+                "FKST_OPS_MACHINE_PROFILE": str(tools / "machine.toml"),
+                "FKST_OPS_LOCK": str(tools / "fkst.lock"),
+                "RESOLVED_FIXTURE": str(resolved_fixture),
+            }
+
+            result = subprocess.run(
+                ["bash", str(OPERATOR), "stop", "all"],
+                env=environment, text=True, capture_output=True, check=False,
+            )
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertEqual("[stopped] not running\n", result.stdout, result.stderr)
+            self.assertEqual("[fails] failed to SIGKILL 999999999\n", result.stderr)
+
+    def test_stop_reports_running_stopped_unknown_and_kill_failure_honestly(self) -> None:
+        stop_function = f'''eval "$(sed -n '/^stop_one()/,/^}}/p' "{OPERATOR}")"
+cfg() {{ [ "$1" != unknown ] || {{ echo "unknown deployment: $1" >&2; return 1; }}; }}
+pidof_df() {{ printf '%s' "${{FAKE_PID:-}}"; }}
+kill() {{ [ "${{KILL_FAIL:-0}}" = 0 ]; }}
+stop_one "$1"
+'''
+        cases = (
+            ("running", {"FAKE_PID": "4321"}, 0, "[running] killed 4321 with SIGKILL\n", ""),
+            ("stopped", {}, 0, "[stopped] not running\n", ""),
+            ("unknown", {}, 1, "", "unknown deployment: unknown\n"),
+            ("running", {"FAKE_PID": "4321", "KILL_FAIL": "1"}, 1, "", "[running] failed to SIGKILL 4321\n"),
+        )
+        for name, extra_env, status, stdout, stderr in cases:
+            with self.subTest(name=name, extra_env=extra_env):
+                result = subprocess.run(
+                    ["bash", "-c", stop_function, "test", name],
+                    env={**os.environ, **extra_env}, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(status, result.returncode)
+                self.assertEqual(stdout, result.stdout)
+                self.assertEqual(stderr, result.stderr)
+
+    def test_sync_to_run_branch_propagates_fetch_and_checkout_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tools = Path(directory)
+            fake_git = tools / "git"
+            fake_git.write_text(
+                "#!/bin/sh\n"
+                "[ \"$1\" = -C ] && shift 2\n"
+                "case \"$MODE:$*\" in\n"
+                "  fetch:rev-parse*--git-dir*) exit 0;;\n"
+                "  fetch:fetch*) exit 9;;\n"
+                "  checkout:rev-parse*--git-dir*) exit 0;;\n"
+                "  checkout:fetch*) exit 0;;\n"
+                "  checkout:rev-parse*origin/integration*) echo abc; exit 0;;\n"
+                "  checkout:checkout*) exit 8;;\n"
+                "  checkout:reset*) exit 8;;\n"
+                "  checkout:clean*) exit 0;;\n"
+                "  checkout:rev-parse*HEAD*) echo abc; exit 0;;\n"
+                "esac\n"
+                "exit 1\n",
+                encoding="ascii",
+            )
+            fake_git.chmod(0o755)
+            command = f'''eval "$(sed -n '/^sync_to_run_branch()/,/^}}/p' "{OPERATOR}")"
+INTEGRATION_BRANCH=integration
+sync_to_run_branch /checkout
+'''
+            for mode, marker, status in (
+                ("fetch", "FETCH-FAILED", 1), ("checkout", "CHECKOUT-FAILED", 8)
+            ):
+                environment = {**os.environ, "MODE": mode, "PATH": f"{tools}:{os.environ['PATH']}"}
+                result = subprocess.run(
+                    ["bash", "-c", command], env=environment, text=True,
+                    capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                self.assertIn(marker, result.stdout)
+
     def _capture_launch_environment(self, write: str | None) -> dict[str, str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
