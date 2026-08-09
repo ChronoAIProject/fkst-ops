@@ -12,6 +12,8 @@
     <string>__DEPLOYMENT_REPOSITORY__</string>
     <string>--machine-profile</string>
     <string>__MACHINE_PROFILE__</string>
+    <string>--declaration-manifest</string>
+    <string>__DECLARATION_MANIFEST__</string>
     <string>--ledger</string>
     <string>__LEDGER__</string>
     <string>--operator-entry</string>

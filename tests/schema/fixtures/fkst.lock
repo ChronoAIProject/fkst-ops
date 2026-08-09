@@ -1,6 +1,7 @@
 [[external_source]]
 id = "target-source"
 git = "https://invalid.example/target.git"
+checkout_role = "deployment-operated"
 [external_source.resolved]
 rev = "1111111111111111111111111111111111111111"
 tree_sha256 = "sha256-1111111111111111111111111111111111111111111111111111111111111111"
@@ -8,6 +9,7 @@ tree_sha256 = "sha256-1111111111111111111111111111111111111111111111111111111111
 [[external_source]]
 id = "platform-source"
 git = "https://invalid.example/platform.git"
+checkout_role = "deployment-operated"
 [external_source.resolved]
 rev = "2222222222222222222222222222222222222222"
 tree_sha256 = "sha256-2222222222222222222222222222222222222222222222222222222222222222"
@@ -15,6 +17,7 @@ tree_sha256 = "sha256-2222222222222222222222222222222222222222222222222222222222
 [[external_source]]
 id = "engine-source"
 git = "https://invalid.example/engine.git"
+checkout_role = "deployment-operated"
 [external_source.resolved]
 rev = "3333333333333333333333333333333333333333"
 tree_sha256 = "sha256-3333333333333333333333333333333333333333333333333333333333333333"
@@ -22,6 +25,7 @@ tree_sha256 = "sha256-3333333333333333333333333333333333333333333333333333333333
 [[external_source]]
 id = "fkst-ops"
 git = "https://invalid.example/ops.git"
+checkout_role = "mechanism"
 [external_source.resolved]
 rev = "4444444444444444444444444444444444444444"
 tree_sha256 = "sha256-4444444444444444444444444444444444444444444444444444444444444444"

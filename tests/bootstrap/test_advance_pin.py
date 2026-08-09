@@ -24,6 +24,7 @@ def test_advanced_pin_is_observed_and_accepted_by_entry_point(tmp_path: Path) ->
         (source / directory).mkdir()
     shutil.copy2(ROOT / "bin" / "fkst-ops", source / "bin" / "fkst-ops")
     shutil.copy2(ROOT / "bootstrap" / "canonical_tree.py", source / "bootstrap" / "canonical_tree.py")
+    shutil.copy2(ROOT / "ops" / "public_actions.sh", source / "ops" / "public_actions.sh")
     operator = source / "ops" / "deployment_operator.sh"
     operator.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
     operator.chmod(operator.stat().st_mode | stat.S_IXUSR)

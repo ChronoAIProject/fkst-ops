@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -27,6 +28,27 @@ from bootstrap.canonical_tree import canonical_tree_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "watch" / "com.fkst.cadence.plist.template"
+DECLARATION_SET_NAME = "deployment-set.json"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_repository_file(repository: Path, relative: str, label: str) -> Path:
+    item = Path(relative)
+    if item.is_absolute() or ".." in item.parts:
+        raise ValueError(f"forbidden {label} path: {relative}")
+    target = (repository / item).resolve()
+    try:
+        canonical_relative = target.relative_to(repository)
+    except ValueError as exc:
+        raise ValueError(f"{label} escapes deployment repository: {relative}") from exc
+    if "tests" in canonical_relative.parts or ".fkst" in canonical_relative.parts:
+        raise ValueError(f"forbidden canonical {label} target: {relative} -> {target}")
+    if not target.is_file():
+        raise ValueError(f"enumerated {label} does not exist: {relative}")
+    return target
 
 
 def _run_git(root: Path, *arguments: str) -> str:
@@ -36,14 +58,38 @@ def _run_git(root: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
-def _verified_checkout(root: Path, revision: str, tree: str) -> bool:
+def _verified_checkout(root: Path, revision: str, tree: str, branch: str | None = None) -> bool:
     try:
         if _run_git(root, "rev-parse", "HEAD") != revision:
             return False
         if canonical_tree_sha256(root, revision) != tree:
             return False
+        if branch is not None and _run_git(root, "branch", "--show-current") != branch:
+            return False
         # The canonical hasher proves the commit; this proves the materialised
         # tracked files still represent it. Build outputs are intentionally ignored.
+        return not _run_git(root, "status", "--porcelain", "--untracked-files=no")
+    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError):
+        return False
+
+
+def _verified_deployment_checkout(
+    root: Path, revision: str, tree: str, branch: str
+) -> bool:
+    try:
+        if _run_git(root, "branch", "--show-current") != branch:
+            return False
+        remote_branch = f"refs/remotes/origin/{branch}"
+        if _run_git(root, "rev-parse", "--verify", remote_branch) == "":
+            return False
+        if canonical_tree_sha256(root, revision) != tree:
+            return False
+        ancestor = subprocess.run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", revision, remote_branch],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        if ancestor.returncode != 0:
+            return False
         return not _run_git(root, "status", "--porcelain", "--untracked-files=no")
     except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError):
         return False
@@ -55,22 +101,39 @@ def _source_candidates(home: Path, source_url: str) -> list[Path]:
 
 
 def _materialise_checkout(
-    destination: Path, source_url: str, revision: str, tree: str, home: Path
+    destination: Path, source_url: str, revision: str, tree: str, home: Path,
+    checkout_role: str, branch: str | None = None,
 ) -> None:
     parsed = urlsplit(source_url)
     if parsed.scheme in {"http", "https"} and (
         parsed.username is not None or parsed.password is not None
     ):
         raise ValueError(f"checkout {destination.name} has a credential-bearing source URL")
-    if _verified_checkout(destination, revision, tree):
+    if checkout_role not in {"deployment-operated", "mechanism"}:
+        raise ValueError(f"checkout {destination.name} has unknown role {checkout_role}")
+    if checkout_role == "deployment-operated" and not branch:
+        raise ValueError(f"deployment-operated checkout {destination.name} needs an integration branch")
+    if checkout_role == "mechanism" and branch is not None:
+        raise ValueError(f"mechanism checkout {destination.name} cannot declare a branch")
+    destination_verified = (
+        _verified_deployment_checkout(destination, revision, tree, branch)
+        if checkout_role == "deployment-operated"
+        else _verified_checkout(destination, revision, tree)
+    )
+    if destination_verified:
         return
+    if destination.exists() or destination.is_symlink():
+        raise ValueError(
+            f"checkout {destination} does not match its declared reproducible state; "
+            "refusing to replace existing work"
+        )
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
     try:
         reusable = next(
             (candidate for candidate in _source_candidates(home, source_url)
              if candidate.resolve() != destination.resolve()
-             and _verified_checkout(candidate, revision, tree)),
+            and _verified_checkout(candidate, revision, tree)),
             None,
         )
         clone_source = reusable if reusable is not None else source_url
@@ -78,16 +141,25 @@ def _materialise_checkout(
             ["git", "clone", "--quiet", "--no-checkout", str(clone_source), str(temporary)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
         )
+        checkout_arguments = (
+            ["checkout", "--quiet", "--detach", revision]
+            if checkout_role == "mechanism"
+            else ["checkout", "--quiet", "-B", branch, revision]
+        )
         subprocess.run(
-            ["git", "-C", str(temporary), "checkout", "--quiet", "--detach", revision],
+            ["git", "-C", str(temporary), *checkout_arguments],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
         )
-        if not _verified_checkout(temporary, revision, tree):
+        temporary_verified = (
+            _verified_deployment_checkout(temporary, revision, tree, branch)
+            if checkout_role == "deployment-operated"
+            else _verified_checkout(temporary, revision, tree)
+        )
+        if not temporary_verified:
             raise ValueError(
-                f"checkout {destination.name} does not match pin {revision} / {tree}"
+                f"checkout {destination.name} does not match pin {revision} / {tree} "
+                f"or remote integration branch {branch} is missing"
             )
-        if destination.exists() or destination.is_symlink():
-            shutil.rmtree(destination) if destination.is_dir() and not destination.is_symlink() else destination.unlink()
         os.replace(temporary, destination)
     finally:
         if temporary.exists():
@@ -137,28 +209,32 @@ def _materialise_engine(
 
 
 def _hydrate(
-    declarations: list[tuple[Path, dict[str, Any]]], lock_path: Path, home: Path
+    declarations: list[tuple[Path, dict[str, Any]]], lock_path: Path, machine_root: Path
 ) -> None:
     lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     pins = {entry["id"]: entry for entry in lock.get("external_source", [])}
-    base = home / ".fkst" / "machine"
-    checkout_specs: dict[str, tuple[str, str, str]] = {}
+    base = machine_root
+    checkout_specs: dict[str, tuple[str, str, str, str, str]] = {}
     engine_specs: dict[str, tuple[str, list[str]]] = {}
     preserved_roots: set[str] = set()
     for declaration_path, declaration in declarations:
         providers = {provider["id"]: provider for provider in declaration["provider"]}
         for index, deployment in enumerate(declaration["deployment"]):
             machine = deployment["machine"]
+            branch = deployment["integration"]["integration_branch"]
             for role in ("target", "platform", "engine"):
                 logical = machine[f"{role}_checkout"]
                 source_id = deployment["sources"][role]["lock_ref"]
                 try:
                     pin = pins[source_id]
-                    spec = (pin["git"], pin["resolved"]["rev"], pin["resolved"]["tree_sha256"])
+                    spec = (
+                        pin["git"], pin["resolved"]["rev"], pin["resolved"]["tree_sha256"],
+                        pin["checkout_role"], branch,
+                    )
                 except (KeyError, TypeError) as exc:
                     raise ValueError(f"{declaration_path} deployment[{index}] source {source_id} has no complete pin") from exc
                 if logical in checkout_specs and checkout_specs[logical] != spec:
-                    raise ValueError(f"checkout root {logical} is assigned conflicting pins")
+                    raise ValueError(f"checkout root {logical} is assigned conflicting pins, roles, or branches")
                 checkout_specs[logical] = spec
             for field in ("durable", "runtime", "logs", "rate_pool"):
                 preserved_roots.add(machine[field])
@@ -170,35 +246,56 @@ def _hydrate(
             if binary_name in engine_specs and engine_specs[binary_name] != engine_spec:
                 raise ValueError(f"engine binary {binary_name} is assigned conflicting build inputs")
             engine_specs[binary_name] = engine_spec
-    for logical, (url, revision, tree) in checkout_specs.items():
-        _materialise_checkout(base / "roots" / logical, url, revision, tree, home)
+    for logical, (url, revision, tree, checkout_role, branch) in checkout_specs.items():
+        _materialise_checkout(
+            base / "roots" / logical, url, revision, tree, machine_root, checkout_role, branch
+        )
     # These roots contain accumulated or runtime state. Generation creates them,
     # but never removes or replaces their contents.
     for logical in preserved_roots:
         (base / "roots" / logical).mkdir(parents=True, exist_ok=True)
     for binary_name, (checkout_name, command) in engine_specs.items():
-        _, revision, tree = checkout_specs[checkout_name]
+        _, revision, tree, _, _ = checkout_specs[checkout_name]
         _materialise_engine(
             base / "roots" / checkout_name, base / "bin" / binary_name,
             command, revision, tree, base / "state",
         )
 
 
-def _load_declarations(repository: Path) -> list[tuple[Path, dict[str, Any]]]:
+def _load_declarations(
+    repository: Path,
+) -> tuple[list[tuple[Path, dict[str, Any]]], Path]:
+    parts = repository.resolve().parts
+    if "tests" in parts or ".fkst" in parts:
+        raise ValueError(f"deployment repository is forbidden control material: {repository}")
+    declaration_set = _canonical_repository_file(
+        repository, DECLARATION_SET_NAME, "input set"
+    )
+    try:
+        document = json.loads(declaration_set.read_text(encoding="ascii"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read explicit declaration set {declaration_set}: {exc}") from exc
+    if not isinstance(document, dict) or set(document) != {"schema", "declarations"}:
+        raise ValueError("explicit declaration set has unknown or missing fields")
+    if document["schema"] != "fkst.ops.declaration-input.v1":
+        raise ValueError("explicit declaration set has unsupported schema")
+    items = document["declarations"]
+    if not isinstance(items, list) or not items or any(not isinstance(item, str) or not item for item in items):
+        raise ValueError("explicit declaration set must enumerate non-empty relative paths")
+    if len(set(items)) != len(items):
+        raise ValueError("explicit declaration set contains duplicates")
     found: list[tuple[Path, dict[str, Any]]] = []
-    for path in sorted(repository.rglob("*.toml")):
-        if ".fkst" in path.relative_to(repository).parts:
-            continue
+    for item in items:
+        path = _canonical_repository_file(repository, item, "declaration")
         try:
             with path.open("rb") as stream:
-                document = tomllib.load(stream)
+                declaration = tomllib.load(stream)
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            raise ValueError(f"cannot read declaration candidate {path}: {exc}") from exc
-        if document.get("schema") == SCHEMA_ID:
-            found.append((path, document))
-    if not found:
-        raise ValueError(f"no {SCHEMA_ID} declarations found below {repository}")
-    return found
+            raise ValueError(f"cannot read enumerated declaration {path}: {exc}") from exc
+        if declaration.get("schema") != SCHEMA_ID:
+            raise ValueError(f"enumerated declaration has wrong schema: {item}")
+        found.append((path, declaration))
+    return found, declaration_set
 
 
 def _quoted(value: str) -> str:
@@ -207,8 +304,8 @@ def _quoted(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
-def _profile_text(declarations: list[tuple[Path, dict[str, Any]]], home: Path) -> str:
-    base = home / ".fkst" / "machine"
+def _profile_text(declarations: list[tuple[Path, dict[str, Any]]], machine_root: Path) -> str:
+    base = machine_root
     roots: dict[str, str] = {}
     binaries: dict[str, str] = {}
     credentials: dict[str, str] = {}
@@ -259,17 +356,18 @@ def _profile_text(declarations: list[tuple[Path, dict[str, Any]]], home: Path) -
 
 
 def _plist_text(
-    repository: Path, profile: Path, home: Path, interval: int
+    repository: Path, profile: Path, manifest: Path, machine_root: Path, interval: int
 ) -> str:
     values = {
         "__PYTHON3__": sys.executable,
         "__FKST_OPS_CHECKOUT__": str(ROOT),
         "__DEPLOYMENT_REPOSITORY__": str(repository),
         "__MACHINE_PROFILE__": str(profile),
-        "__LEDGER__": str(home / ".fkst" / "watch" / "cadence.jsonl"),
+        "__DECLARATION_MANIFEST__": str(manifest),
+        "__LEDGER__": str(machine_root / "watch" / "cadence.jsonl"),
         "__INTERVAL_SECONDS__": str(interval),
-        "__STANDARD_OUT_LOG__": str(home / ".fkst" / "watch" / "cadence.stdout.log"),
-        "__STANDARD_ERROR_LOG__": str(home / ".fkst" / "watch" / "cadence.stderr.log"),
+        "__STANDARD_OUT_LOG__": str(machine_root / "watch" / "cadence.stdout.log"),
+        "__STANDARD_ERROR_LOG__": str(machine_root / "watch" / "cadence.stderr.log"),
     }
     rendered = TEMPLATE.read_text(encoding="ascii")
     for marker, value in values.items():
@@ -280,7 +378,13 @@ def _plist_text(
     return rendered
 
 
-def _launchctl(home: Path, launch_agent: Path, enabled: bool) -> bool:
+@dataclass(frozen=True)
+class ScheduleState:
+    live: bool
+    source: Path | None
+
+
+def _launchctl(launch_agent: Path, enabled: bool) -> bool:
     executable = os.environ.get("FKST_LAUNCHCTL", "/bin/launchctl")
     domain = f"gui/{os.getuid()}"
     service = f"{domain}/com.fkst.cadence"
@@ -312,10 +416,167 @@ def _launchctl(home: Path, launch_agent: Path, enabled: bool) -> bool:
     return live
 
 
-def generate(repository: Path, home: Path) -> tuple[Path, Path, bool, int]:
+def _schedule_state() -> ScheduleState:
+    executable = os.environ.get("FKST_LAUNCHCTL", "/bin/launchctl")
+    service = f"gui/{os.getuid()}/com.fkst.cadence"
+    result = subprocess.run(
+        [executable, "print", service], text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    if result.returncode != 0:
+        return ScheduleState(False, None)
+    for line in result.stdout.splitlines():
+        key, separator, value = line.strip().partition(" = ")
+        if separator and key == "path" and value:
+            return ScheduleState(True, Path(value).resolve(strict=False))
+    raise ValueError("cannot identify source path of live cadence schedule")
+
+
+def _publication_checkpoint(_point: str) -> None:
+    """Test seam for abrupt-death verification; production publication is uninterrupted."""
+
+
+def _relative_symlink(destination: Path, target: Path) -> None:
+    candidate = destination.with_name(f".{destination.name}.{os.getpid()}.link")
+    candidate.unlink(missing_ok=True)
+    candidate.symlink_to(os.path.relpath(target, destination.parent))
+    os.replace(candidate, destination)
+
+
+def _prepare_control_lineage(staged: dict[Path, Path], control: Path) -> str | None:
+    current = control / "current"
+    generations = control / "generations"
+    generations.mkdir(parents=True, exist_ok=True)
+    if current.is_symlink():
+        previous = os.readlink(current)
+    elif current.exists():
+        raise ValueError(f"control generation selector is not a symlink: {current}")
+    elif any(destination.exists() or destination.is_symlink() for destination in staged):
+        baseline = generations / f"baseline-{os.getpid()}"
+        baseline.mkdir()
+        for destination, candidate in staged.items():
+            prior = baseline / candidate.name
+            if destination.exists():
+                prior.write_bytes(destination.read_bytes())
+            else:
+                prior.write_bytes(b"")
+        selector = control / f".current.{os.getpid()}"
+        selector.symlink_to(os.path.relpath(baseline, control))
+        os.replace(selector, current)
+        previous = os.readlink(current)
+    else:
+        previous = None
+
+    for index, (destination, candidate) in enumerate(staged.items(), start=1):
+        expected = control / "current" / candidate.name
+        if destination.is_symlink() and destination.resolve(strict=False) == expected.resolve(strict=False):
+            continue
+        if (
+            previous is not None
+            and destination.exists()
+            and destination.read_bytes() != (control / previous / candidate.name).read_bytes()
+        ):
+            raise ValueError(f"control path is outside the active generation: {destination}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _relative_symlink(destination, expected)
+        _publication_checkpoint(f"public-link-{index}")
+    return previous
+
+
+def _generation_for_path(path: Path, generations: Path) -> Path | None:
+    try:
+        relative = path.resolve(strict=False).relative_to(generations.resolve())
+    except ValueError:
+        return None
+    return generations / relative.parts[0] if relative.parts else None
+
+
+def _prune_generations(control: Path, schedule: ScheduleState | None) -> None:
+    generations = control / "generations"
+    protected: set[Path] = set()
+    current = control / "current"
+    if current.is_symlink():
+        selected = _generation_for_path(current, generations)
+        if selected is not None:
+            protected.add(selected)
+    if schedule is not None and schedule.live:
+        if schedule.source is None:
+            return
+        source_generation = _generation_for_path(schedule.source, generations)
+        if source_generation is not None:
+            protected.add(source_generation)
+        try:
+            with schedule.source.open("rb") as stream:
+                arguments = plistlib.load(stream).get("ProgramArguments", [])
+        except (OSError, plistlib.InvalidFileException, AttributeError):
+            return
+        for argument in arguments:
+            if isinstance(argument, str):
+                generation = _generation_for_path(Path(argument), generations)
+                if generation is not None:
+                    protected.add(generation)
+    for generation in generations.iterdir():
+        if generation not in protected:
+            shutil.rmtree(generation)
+
+
+def _publish_control_files(
+    staged: dict[Path, Path], launch_agent: Path, enabled: bool, reconcile: bool,
+    control: Path, generation_name: str | None = None,
+) -> bool | None:
+    previous_schedule = _schedule_state() if reconcile else None
+    previous_generation = _prepare_control_lineage(staged, control)
+    generations = control / "generations"
+    generation = generations / (
+        generation_name or f"generation-{os.getpid()}-{os.urandom(8).hex()}"
+    )
+    generation.mkdir()
+    for candidate in staged.values():
+        os.replace(candidate, generation / candidate.name)
+    selector = control / f".current.{os.getpid()}"
+    selector.symlink_to(os.path.relpath(generation, control))
+    try:
+        os.replace(selector, control / "current")
+        _publication_checkpoint("generation-selected")
+        live = _launchctl(launch_agent, enabled) if reconcile else None
+        schedule = _schedule_state() if reconcile else None
+        _prune_generations(control, schedule)
+        return live
+    except (OSError, ValueError) as primary:
+        failures: list[str] = []
+        try:
+            rollback = control / f".current.{os.getpid()}.rollback"
+            if previous_generation is None:
+                (control / "current").unlink(missing_ok=True)
+            else:
+                rollback.symlink_to(previous_generation)
+                os.replace(rollback, control / "current")
+        except OSError as exc:
+            failures.append(f"control rollback failed: {exc}")
+        if previous_schedule is not None:
+            try:
+                restore_source = previous_schedule.source or launch_agent
+                _launchctl(restore_source, previous_schedule.live)
+            except (OSError, ValueError) as exc:
+                failures.append(f"schedule restoration failed: {exc}")
+        try:
+            schedule = _schedule_state() if reconcile else None
+            _prune_generations(control, schedule)
+        except (OSError, ValueError):
+            pass
+        if failures:
+            raise ValueError(f"publication failed: {primary}; {'; '.join(failures)}") from primary
+        raise
+
+
+def generate(
+    repository: Path, home: Path, machine_root: Path | None = None
+) -> tuple[Path, Path, bool | None, int]:
     repository = repository.resolve()
     home = home.resolve()
-    declarations = _load_declarations(repository)
+    machine_root = (machine_root or home / ".fkst" / "machine").expanduser().resolve()
+    live_machine_root = (home / ".fkst" / "machine").resolve()
+    declarations, declaration_set = _load_declarations(repository)
     intervals = {document.get("cadence_interval_seconds") for _, document in declarations}
     if len(intervals) != 1:
         raise ValueError("all deployment declarations must use one cadence_interval_seconds")
@@ -329,37 +590,78 @@ def generate(repository: Path, home: Path) -> tuple[Path, Path, bool, int]:
     if not isinstance(enabled, bool):
         raise ValueError("cadence_enabled must be a boolean")
 
-    profile = repository / ".fkst" / "machine-profile.toml"
-    launch_agent = home / "Library" / "LaunchAgents" / "com.fkst.cadence.plist"
+    profile = machine_root / "profile.toml"
+    manifest = machine_root / "declarations.json"
+    launch_agent = machine_root / "LaunchAgents" / "com.fkst.cadence.plist"
     profile.parent.mkdir(parents=True, exist_ok=True)
-    (home / ".fkst" / "watch").mkdir(parents=True, exist_ok=True)
+    (machine_root / "watch").mkdir(parents=True, exist_ok=True)
     launch_agent.parent.mkdir(parents=True, exist_ok=True)
-    profile.write_text(_profile_text(declarations, home), encoding="ascii")
+    lock = _canonical_repository_file(repository, "fkst.lock", "lock")
+    profile_text = _profile_text(declarations, machine_root)
+    manifest_text = json.dumps({
+        "schema": "fkst.ops.declaration-set.v2",
+        "repository": str(repository),
+        "input_set": {"path": DECLARATION_SET_NAME, "sha256": _sha256(declaration_set)},
+        "lock": {"path": "fkst.lock", "sha256": _sha256(lock)},
+        "declarations": [
+            {"path": str(path.relative_to(repository)), "sha256": _sha256(path)}
+            for path, _ in declarations
+        ],
+    }, sort_keys=True, separators=(",", ":")) + "\n"
 
-    lock = repository / "fkst.lock"
-    _hydrate(declarations, lock, home)
-    for declaration_path, _ in declarations:
-        load_and_resolve(declaration_path, profile, lock)
-
-    launch_agent.write_text(
-        _plist_text(repository, profile, home, interval), encoding="utf-8"
-    )
-    live = _launchctl(home, launch_agent, enabled)
+    _hydrate(declarations, lock, machine_root)
+    staging = Path(tempfile.mkdtemp(prefix=".control-", dir=machine_root))
+    try:
+        generation_name = f"generation-{os.getpid()}-{os.urandom(8).hex()}"
+        generation_root = machine_root / "control" / "generations" / generation_name
+        staged_profile = staging / "profile.toml"
+        staged_manifest = staging / "declarations.json"
+        staged_launch_agent = staging / "com.fkst.cadence.plist"
+        staged_profile.write_text(profile_text, encoding="ascii")
+        staged_manifest.write_text(manifest_text, encoding="ascii")
+        for declaration_path, _ in declarations:
+            load_and_resolve(declaration_path, staged_profile, lock)
+        staged_launch_agent.write_text(
+            _plist_text(
+                repository, generation_root / "profile.toml",
+                generation_root / "declarations.json", machine_root, interval,
+            ),
+            encoding="utf-8",
+        )
+        live = _publish_control_files(
+            {
+                profile: staged_profile,
+                manifest: staged_manifest,
+                launch_agent: staged_launch_agent,
+            },
+            launch_agent,
+            enabled,
+            machine_root == live_machine_root,
+            machine_root / "control",
+            generation_name,
+        )
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return profile, launch_agent, live, interval
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("deployment_repository", type=Path)
+    parser.add_argument("--machine-state-root", type=Path)
     args = parser.parse_args(argv)
     try:
-        profile, launch_agent, live, interval = generate(args.deployment_repository, Path.home())
+        profile, launch_agent, live, interval = generate(
+            args.deployment_repository, Path.home(), args.machine_state_root
+        )
     except (OSError, ValueError, ValidationError) as exc:
         print(f"artifact generation failed: {exc}", file=sys.stderr)
         return 2
     print(profile)
     print(launch_agent)
-    print(f"cadence_schedule={'enabled' if live else 'disabled'} live={'yes' if live else 'no'} interval_seconds={interval}")
+    schedule = "not-reconciled" if live is None else ("enabled" if live else "disabled")
+    live_text = "not-queried" if live is None else ("yes" if live else "no")
+    print(f"cadence_schedule={schedule} live={live_text} interval_seconds={interval}")
     return 0
 
 

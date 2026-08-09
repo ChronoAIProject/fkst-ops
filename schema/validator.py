@@ -15,7 +15,7 @@ from typing import Any, NoReturn
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from schema.provider_surface import MECHANISM_SOURCE_ID, PUBLISHED_PROVIDER_ENTRY_POINTS
+from schema.provider_surface import PUBLISHED_PROVIDER_ENTRY_POINTS
 
 
 SCHEMA_ID = "fkst.ops.deployment.v1"
@@ -108,9 +108,12 @@ def _validate_lock(lock: dict[str, Any]) -> dict[str, dict[str, Any]]:
     for index, raw in enumerate(entries):
         path = f"lock.external_source[{index}]"
         entry = _table(raw, path)
-        _closed(entry, {"id", "git", "intent", "resolved", "libraries"}, path)
+        _closed(entry, {"id", "git", "intent", "checkout_role", "resolved", "libraries"}, path)
         identity = _string(entry, "id", path)
         _string(entry, "git", path)
+        checkout_role = _string(entry, "checkout_role", path)
+        if checkout_role not in {"deployment-operated", "mechanism"}:
+            _fail(path + ".checkout_role", "must be deployment-operated or mechanism")
         resolved = _table(entry.get("resolved"), f"{path}.resolved")
         _closed(resolved, {"rev", "tree_sha256"}, f"{path}.resolved")
         rev = _string(resolved, "rev", f"{path}.resolved")
@@ -205,16 +208,17 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
         if lock_ref in source_roots and source_roots[lock_ref].resolve() != root.resolve():
             _fail(path + f".sources.{role}.lock_ref", f"lock reference {lock_ref} resolves to multiple checkouts")
         source_roots[lock_ref] = root
-    # provider-mechanism-source-root: bootstrap/run.sh verifies this checkout
-    # against this lock entry before handing control to the validator.
-    if MECHANISM_SOURCE_ID in pins:
-        source_roots[MECHANISM_SOURCE_ID] = Path(__file__).resolve().parents[1]
+    # bootstrap/run.sh verifies the explicitly declared mechanism checkout before
+    # handing control to the validator. Its identity is not inferred from its id.
+    for lock_ref, pin in pins.items():
+        if pin["checkout_role"] == "mechanism":
+            source_roots[lock_ref] = Path(__file__).resolve().parents[1]
     for field, provider in resolved["providers"].items():
         lock_ref, relative = provider["implementation"].split(":", 1)
         root = source_roots.get(lock_ref)
         if root is None:
             _fail(path + f".providers.{field}", f"provider source is not bound to a deployment or mechanism source: {lock_ref}")
-        if lock_ref == MECHANISM_SOURCE_ID:
+        if pins[lock_ref]["checkout_role"] == "mechanism":
             published_kind = PUBLISHED_PROVIDER_ENTRY_POINTS.get(relative)
             if published_kind != provider["kind"]:
                 _fail(path + f".providers.{field}.implementation", "entry point is not published for this provider kind")
@@ -338,9 +342,15 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             lock_ref = _string(source, "lock_ref", f"{path}.sources.{role}")
             if lock_ref not in pins:
                 _fail(f"{path}.sources.{role}.lock_ref", f"references missing pin: {lock_ref}")
+            if pins[lock_ref]["checkout_role"] != "deployment-operated":
+                _fail(
+                    f"{path}.sources.{role}.lock_ref",
+                    f"references {pins[lock_ref]['checkout_role']} source; deployment sources must be deployment-operated",
+                )
             resolved_sources[role] = {
                 "lock_ref": lock_ref,
                 "git": pins[lock_ref]["git"],
+                "checkout_role": pins[lock_ref]["checkout_role"],
                 "pin": copy.deepcopy(pins[lock_ref]["resolved"]),
             }
 

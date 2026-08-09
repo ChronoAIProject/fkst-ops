@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import plistlib
+import json
 import shutil
 import subprocess
 import sys
 import tomllib
+import pytest
 
 from bootstrap.canonical_tree import canonical_tree_sha256
 from schema.validator import load_and_resolve
@@ -50,6 +52,10 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     text = text.replace('configuration = { build_command = ["make", "engine"] }',
                         'configuration = { build_command = ["./cargo", "build", "-p", "engine"] }')
     (repository / "deployment.toml").write_text(text)
+    (repository / "deployment-set.json").write_text(json.dumps({
+        "schema": "fkst.ops.declaration-input.v1",
+        "declarations": ["deployment.toml"],
+    }), encoding="ascii")
 
     target = tmp_path / "target-source"
     engine = tmp_path / "engine-source"
@@ -64,18 +70,24 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
         "bin/build-provider": "#!/bin/sh\nexit 0\n",
         "cargo": "#!/bin/sh\nmkdir -p target/debug\nprintf '#!/bin/sh\\nexit 0\\n' > target/debug/engine\nchmod +x target/debug/engine\n",
     })
+    git(target, "branch", "integration")
+    git(engine, "branch", "integration")
     lock = ""
     for identity, path, pin in (
         ("target-source", target, target_pin), ("engine-source", engine, engine_pin),
         ("fkst-ops", ROOT, ("4" * 40, "sha256-" + "4" * 64)),
     ):
+        checkout_role = "mechanism" if identity == "fkst-ops" else "deployment-operated"
         lock += (f'[[external_source]]\nid = "{identity}"\ngit = "{path}"\n'
+                 f'checkout_role = "{checkout_role}"\n'
                  f'[external_source.resolved]\nrev = "{pin[0]}"\ntree_sha256 = "{pin[1]}"\n\n')
     (repository / "fkst.lock").write_text(lock)
     return repository, home, tomllib.loads((repository / "deployment.toml").read_text())
 
 
-def run_generator(repository: Path, home: Path) -> subprocess.CompletedProcess[str]:
+def run_generator(
+    repository: Path, home: Path, machine_root: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     launchctl = home / "fake-launchctl"
     if not launchctl.exists():
         launchctl.write_text(
@@ -85,8 +97,10 @@ def run_generator(repository: Path, home: Path) -> subprocess.CompletedProcess[s
             "calls = pathlib.Path(os.environ['LAUNCHCTL_CALLS'])\n"
             "with calls.open('a') as stream: stream.write(' '.join(sys.argv[1:]) + '\\n')\n"
             "command = sys.argv[1]\n"
-            "if command == 'print': raise SystemExit(0 if state.exists() else 113)\n"
-            "if command == 'bootstrap': state.write_text('live\\n')\n"
+            "if command == 'print':\n"
+            "  if state.exists(): print('path = ' + state.read_text().strip()); raise SystemExit(0)\n"
+            "  raise SystemExit(113)\n"
+            "if command == 'bootstrap': state.write_text(sys.argv[-1] + '\\n')\n"
             "if command == 'bootout': state.unlink(missing_ok=True)\n",
             encoding="ascii",
         )
@@ -98,8 +112,11 @@ def run_generator(repository: Path, home: Path) -> subprocess.CompletedProcess[s
         "LAUNCHCTL_STATE": str(home / "launchctl.state"),
         "LAUNCHCTL_CALLS": str(home / "launchctl.calls"),
     })
+    command = [sys.executable, str(GENERATOR), str(repository)]
+    if machine_root is not None:
+        command.extend(["--machine-state-root", str(machine_root)])
     return subprocess.run(
-        [sys.executable, str(GENERATOR), str(repository)], env=environment,
+        command, env=environment,
         text=True, capture_output=True, check=False,
     )
 
@@ -108,18 +125,28 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     repository, home, declaration = prepared(tmp_path)
     result = run_generator(repository, home)
     assert result.returncode == 0, result.stderr
-    profile = repository / ".fkst" / "machine-profile.toml"
+    profile = home / ".fkst" / "machine" / "profile.toml"
     profile_data = tomllib.loads(profile.read_text())
     assert all(Path(path).is_dir() for path in profile_data["roots"].values())
     assert all(Path(path).is_file() and os.access(path, os.X_OK)
                for path in profile_data["binaries"].values())
+    checkout = home / ".fkst" / "machine" / "roots" / declaration["deployment"][0]["machine"]["target_checkout"]
+    assert git(checkout, "branch", "--show-current") == "integration"
+    assert git(checkout, "rev-parse", "HEAD") == git(tmp_path / "target-source", "rev-parse", "HEAD")
     resolved = load_and_resolve(repository / "deployment.toml", profile, repository / "fkst.lock")
     assert resolved["deployment"][0]["machine"]["bot_login"] == "fkst-bot"
     assert resolved["deployment"][0]["machine"]["managed_bot_set"] == ["fkst-bot"]
 
-    plist_path = home / "Library" / "LaunchAgents" / "com.fkst.cadence.plist"
+    plist_path = home / ".fkst" / "machine" / "LaunchAgents" / "com.fkst.cadence.plist"
     with plist_path.open("rb") as stream:
-        assert plistlib.load(stream)["StartInterval"] == 300
+        plist = plistlib.load(stream)
+    assert plist["StartInterval"] == 300
+    arguments = plist["ProgramArguments"]
+    profile_argument = Path(arguments[arguments.index("--machine-profile") + 1])
+    manifest_argument = Path(arguments[arguments.index("--declaration-manifest") + 1])
+    assert profile_argument.parent == manifest_argument.parent
+    assert profile_argument.parent.parent.name == "generations"
+    assert profile_argument.read_bytes() == profile.read_bytes()
     assert "cadence_schedule=enabled live=yes interval_seconds=300" in result.stdout
 
 
@@ -156,15 +183,16 @@ def test_schedule_parameters_are_required_declaration_values(tmp_path: Path) -> 
     assert "cadence_enabled must be a boolean" in result.stderr
 
 
-def test_wrong_checkout_content_is_replaced(tmp_path: Path) -> None:
+def test_dirty_checkout_is_refused_without_destroying_work(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
     assert run_generator(repository, home).returncode == 0
     checkout = home / ".fkst" / "machine" / "roots" / declaration["deployment"][0]["machine"]["target_checkout"]
     tracked = checkout / "providers" / "engine-board"
     tracked.write_text("tampered\n")
     result = run_generator(repository, home)
-    assert result.returncode == 0, result.stderr
-    assert tracked.read_text().startswith("#!/bin/sh")
+    assert result.returncode == 2
+    assert "refusing to replace existing work" in result.stderr
+    assert tracked.read_text() == "tampered\n"
 
 
 def test_regeneration_preserves_accumulated_state_and_skips_settled_build(tmp_path: Path) -> None:
@@ -181,6 +209,339 @@ def test_regeneration_preserves_accumulated_state_and_skips_settled_build(tmp_pa
     assert binary.lstat().st_mtime_ns == first_mtime
 
 
+def test_regeneration_preserves_advanced_deployment_branch(tmp_path: Path) -> None:
+    repository, home, declaration = prepared(tmp_path)
+    assert run_generator(repository, home).returncode == 0
+    checkout = home / ".fkst" / "machine" / "roots" / declaration["deployment"][0]["machine"]["target_checkout"]
+    (checkout / "advanced").write_text("branch state\n", encoding="ascii")
+    git(checkout, "add", "advanced")
+    git(checkout, "-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-qm", "advance")
+    advanced = git(checkout, "rev-parse", "HEAD")
+
+    result = run_generator(repository, home)
+    assert result.returncode == 0, result.stderr
+    assert git(checkout, "branch", "--show-current") == "integration"
+    assert git(checkout, "rev-parse", "HEAD") == advanced
+
+
+@pytest.mark.parametrize("state", ["wrong-branch", "behind", "diverged"])
+def test_regeneration_refuses_non_reproducible_checkout_states(
+    tmp_path: Path, state: str
+) -> None:
+    repository, home, declaration = prepared(tmp_path)
+    assert run_generator(repository, home).returncode == 0
+    checkout = home / ".fkst" / "machine" / "roots" / declaration["deployment"][0]["machine"]["target_checkout"]
+    evidence = checkout / "local-evidence"
+    if state == "wrong-branch":
+        git(checkout, "checkout", "-qb", "personal")
+        evidence.write_text("wrong branch\n", encoding="ascii")
+        git(checkout, "add", "local-evidence")
+        git(checkout, "-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-qm", "personal")
+    elif state == "behind":
+        pinned = git(tmp_path / "target-source", "rev-parse", "HEAD")
+        parent = git(tmp_path / "target-source", "rev-parse", f"{pinned}^") if git(tmp_path / "target-source", "rev-list", "--count", "HEAD") != "1" else None
+        if parent is None:
+            (tmp_path / "target-source" / "later").write_text("later", encoding="ascii")
+            git(tmp_path / "target-source", "add", "later")
+            git(tmp_path / "target-source", "commit", "-qm", "later")
+            parent = pinned
+        git(checkout, "checkout", "-q", "--detach", parent)
+        evidence.write_text("behind evidence\n", encoding="ascii")
+    else:
+        git(checkout, "checkout", "-qb", "diverged", "HEAD^") if git(checkout, "rev-list", "--count", "HEAD") != "1" else git(checkout, "checkout", "-qb", "diverged")
+        evidence.write_text("diverged evidence\n", encoding="ascii")
+        git(checkout, "add", "local-evidence")
+        git(checkout, "-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-qm", "diverged")
+    head = git(checkout, "rev-parse", "HEAD")
+    result = run_generator(repository, home)
+    assert result.returncode == 2
+    assert "refusing to replace existing work" in result.stderr
+    assert git(checkout, "rev-parse", "HEAD") == head
+    assert evidence.read_text().endswith("evidence\n") or state == "wrong-branch"
+
+
+def test_scratch_machine_root_leaves_live_machine_state_untouched(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    live = home / ".fkst" / "machine"
+    live.mkdir(parents=True)
+    sentinels = [
+        live / "profile.toml", live / "declarations.json",
+        live / "LaunchAgents" / "com.fkst.cadence.plist",
+        live / "roots" / "existing" / "work",
+    ]
+    for path in sentinels:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("live\n", encoding="ascii")
+    scratch = tmp_path / "scratch-machine"
+    result = run_generator(repository, home, scratch)
+    assert result.returncode == 0, result.stderr
+    assert all(path.read_text() == "live\n" for path in sentinels)
+    assert not (home / "launchctl.calls").exists()
+    assert (scratch / "profile.toml").is_file()
+    assert (scratch / "declarations.json").is_file()
+    assert (scratch / "LaunchAgents" / "com.fkst.cadence.plist").is_file()
+
+
+def test_generation_rejects_repository_root_symlink_to_test_fixture(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    hidden = repository / "tests" / "fixtures" / "hidden.toml"
+    hidden.parent.mkdir(parents=True)
+    hidden.write_text((repository / "deployment.toml").read_text(), encoding="ascii")
+    (repository / "adopted.toml").symlink_to(hidden.relative_to(repository))
+    (repository / "deployment-set.json").write_text(json.dumps({
+        "schema": "fkst.ops.declaration-input.v1", "declarations": ["adopted.toml"],
+    }), encoding="ascii")
+    result = run_generator(repository, home)
+    assert result.returncode == 2
+    assert "forbidden canonical declaration target" in result.stderr
+    assert not (home / ".fkst" / "machine" / "profile.toml").exists()
+
+
+def test_generation_rejects_missing_remote_integration_branch(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    git(tmp_path / "target-source", "branch", "-D", "integration")
+    result = run_generator(repository, home)
+    assert result.returncode == 2
+    assert "remote integration branch integration is missing" in result.stderr
+
+
+def test_generation_rejects_pin_outside_remote_integration_history(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    source_root = tmp_path / "target-source"
+    original_branch = git(source_root, "branch", "--show-current")
+    git(source_root, "checkout", "--orphan", "unrelated")
+    git(source_root, "rm", "-q", "-r", "-f", ".")
+    (source_root / "unrelated").write_text("orphan history\n", encoding="ascii")
+    git(source_root, "add", "unrelated")
+    git(source_root, "commit", "-qm", "unrelated")
+    git(source_root, "branch", "-f", "integration")
+    git(source_root, "checkout", "-q", original_branch)
+
+    result = run_generator(repository, home)
+    assert result.returncode == 2
+    assert "does not match pin" in result.stderr
+
+
+def test_hydration_failure_preserves_coherent_live_control_state(tmp_path: Path) -> None:
+    repository, home, declaration_data = prepared(tmp_path)
+    first = run_generator(repository, home)
+    assert first.returncode == 0, first.stderr
+    machine = home / ".fkst" / "machine"
+    profile = machine / "profile.toml"
+    manifest = machine / "declarations.json"
+    launch_agent = machine / "LaunchAgents" / "com.fkst.cadence.plist"
+    before = {path: path.read_bytes() for path in (profile, manifest, launch_agent)}
+
+    checkout = machine / "roots" / declaration_data["deployment"][0]["machine"]["target_checkout"]
+    (checkout / "providers" / "engine-board").write_text("unusable\n", encoding="ascii")
+    failed = run_generator(repository, home)
+    assert failed.returncode == 2
+    assert {path: path.read_bytes() for path in before} == before
+
+    operator = tmp_path / "operator"
+    calls = tmp_path / "scheduled.calls"
+    operator.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CALLS\"\nexit 0\n", encoding="ascii"
+    )
+    operator.chmod(0o755)
+    environment = {**os.environ, "CALLS": str(calls)}
+    scheduled = subprocess.run(
+        [
+            sys.executable, str(ROOT / "watch" / "cadence_round.py"),
+            "--deployment-repository", str(repository),
+            "--machine-profile", str(profile),
+            "--declaration-manifest", str(manifest),
+            "--ledger", str(tmp_path / "ledger.jsonl"),
+            "--operator-entry", str(operator),
+        ],
+        env=environment, text=True, capture_output=True, check=False,
+    )
+    assert scheduled.returncode == 0, scheduled.stderr
+    assert len(calls.read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize(
+    "checkpoint", ["public-link-1", "public-link-2", "public-link-3", "generation-selected"]
+)
+def test_abrupt_death_never_exposes_mixed_control_generation(
+    tmp_path: Path, checkpoint: str
+) -> None:
+    import signal
+    import watch.generate_artifacts as generator
+
+    machine = tmp_path / "machine"
+    destinations = (
+        machine / "profile.toml",
+        machine / "declarations.json",
+        machine / "LaunchAgents" / "com.fkst.cadence.plist",
+    )
+    for destination in destinations:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = machine / "staging"
+    staging.mkdir()
+    candidates = []
+    for index, name in enumerate(("profile.toml", "declarations.json", "com.fkst.cadence.plist")):
+        candidate = staging / name
+        candidate.write_bytes(f"new-{index}".encode("ascii"))
+        candidates.append(candidate)
+
+    child = os.fork()
+    if child == 0:
+        generator._publication_checkpoint = lambda point: (
+            os.kill(os.getpid(), signal.SIGKILL) if point == checkpoint else None
+        )
+        generator._publish_control_files(
+            dict(zip(destinations, candidates)), destinations[-1], True, False,
+            machine / "control",
+        )
+        os._exit(0)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    observed = tuple(path.read_bytes() for path in destinations) if all(
+        path.exists() for path in destinations
+    ) else tuple(None for _ in destinations)
+    old = tuple(None for _ in destinations)
+    new = tuple(f"new-{index}".encode("ascii") for index in range(3))
+    assert observed in (old, new)
+
+
+def test_generation_retention_protects_selected_and_running_generations(tmp_path: Path) -> None:
+    import watch.generate_artifacts as generator
+
+    control = tmp_path / "control"
+    generations = control / "generations"
+    generations.mkdir(parents=True)
+    selected = generations / "selected"
+    running = generations / "running"
+    abandoned = generations / "abandoned"
+    for generation in (selected, running, abandoned):
+        generation.mkdir()
+    (control / "current").symlink_to("generations/selected")
+    running_agent = running / "com.fkst.cadence.plist"
+    running_agent.write_bytes(plistlib.dumps({"ProgramArguments": [
+        str(running / "profile.toml"), str(running / "declarations.json")
+    ]}))
+
+    generator._prune_generations(control, generator.ScheduleState(True, running_agent))
+
+    assert {path.name for path in generations.iterdir()} == {"selected", "running"}
+
+
+def test_repeated_isolated_publication_is_bounded(tmp_path: Path) -> None:
+    import watch.generate_artifacts as generator
+
+    machine = tmp_path / "machine"
+    destinations = (
+        machine / "profile.toml", machine / "declarations.json",
+        machine / "LaunchAgents" / "com.fkst.cadence.plist",
+    )
+    for run in range(4):
+        staging = machine / f"staging-{run}"
+        staging.mkdir(parents=True)
+        candidates = []
+        for index, name in enumerate(("profile.toml", "declarations.json", "com.fkst.cadence.plist")):
+            candidate = staging / name
+            candidate.write_bytes(f"{run}-{index}".encode("ascii"))
+            candidates.append(candidate)
+        generator._publish_control_files(
+            dict(zip(destinations, candidates)), destinations[-1], True, False,
+            machine / "control",
+        )
+        assert len(list((machine / "control" / "generations").iterdir())) == 1
+
+
+def _reconciliation_launchctl(tmp_path: Path, restoration_fails: bool) -> tuple[Path, Path]:
+    executable = tmp_path / "launchctl"
+    state = tmp_path / "schedule.state"
+    calls = tmp_path / "schedule.calls"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, sys\n"
+        "state=pathlib.Path(os.environ['LAUNCHCTL_STATE'])\n"
+        "calls=pathlib.Path(os.environ['LAUNCHCTL_CALLS'])\n"
+        "with calls.open('a') as stream: stream.write(' '.join(sys.argv[1:])+'\\n')\n"
+        "command=sys.argv[1]\n"
+        "if command == 'print':\n"
+        "  if state.exists(): print('path = '+state.read_text().strip()); raise SystemExit(0)\n"
+        "  raise SystemExit(113)\n"
+        "if command == 'bootout': state.unlink(missing_ok=True); raise SystemExit(0)\n"
+        "if command == 'enable': raise SystemExit(0)\n"
+        "if command == 'bootstrap':\n"
+        "  source=sys.argv[-1]\n"
+        "  if source != os.environ['LEGACY_PATH'] or os.environ.get('RESTORE_FAIL') == '1':\n"
+        "    print('injected bootstrap failure', file=sys.stderr); raise SystemExit(1)\n"
+        "  state.write_text(source+'\\n'); raise SystemExit(0)\n",
+        encoding="ascii",
+    )
+    executable.chmod(0o755)
+    return executable, state
+
+
+@pytest.mark.parametrize("restoration_fails", [False, True])
+def test_reconciliation_failure_restores_exact_legacy_schedule_or_surfaces_both_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restoration_fails: bool
+) -> None:
+    import watch.generate_artifacts as generator
+
+    machine = tmp_path / "machine"
+    legacy = tmp_path / "Library" / "LaunchAgents" / "com.fkst.cadence.plist"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy agent", encoding="ascii")
+    executable, state = _reconciliation_launchctl(tmp_path, restoration_fails)
+    state.write_text(str(legacy), encoding="ascii")
+    monkeypatch.setenv("FKST_LAUNCHCTL", str(executable))
+    monkeypatch.setenv("LAUNCHCTL_STATE", str(state))
+    monkeypatch.setenv("LAUNCHCTL_CALLS", str(tmp_path / "schedule.calls"))
+    monkeypatch.setenv("LEGACY_PATH", str(legacy))
+    monkeypatch.setenv("RESTORE_FAIL", "1" if restoration_fails else "0")
+
+    destinations = (
+        machine / "profile.toml", machine / "declarations.json",
+        machine / "LaunchAgents" / "com.fkst.cadence.plist",
+    )
+    staging = machine / "staging"
+    staging.mkdir(parents=True)
+    candidates = []
+    for index, name in enumerate(("profile.toml", "declarations.json", "com.fkst.cadence.plist")):
+        candidate = staging / name
+        candidate.write_bytes(f"new-{index}".encode("ascii"))
+        candidates.append(candidate)
+
+    with pytest.raises(ValueError) as raised:
+        generator._publish_control_files(
+            dict(zip(destinations, candidates)), destinations[-1], True, True,
+            machine / "control",
+        )
+    if restoration_fails:
+        assert "publication failed: cannot activate cadence schedule" in str(raised.value)
+        assert "schedule restoration failed: cannot activate cadence schedule" in str(raised.value)
+        assert not state.exists()
+    else:
+        assert state.read_text().strip() == str(legacy)
+        assert f"bootstrap gui/{os.getuid()} {legacy}" in (tmp_path / "schedule.calls").read_text()
+    assert not any(path.exists() for path in destinations)
+    # The legacy source is deliberately not a plist, so reference evidence cannot
+    # be obtained and pruning fails closed rather than guessing about a live job.
+    generations = machine / "control" / "generations"
+    assert len(list(generations.iterdir())) == (0 if restoration_fails else 1)
+
+    if not restoration_fails:
+        monkeypatch.setenv("RESTORE_FAIL", "0")
+        state.unlink()
+        retry_staging = machine / "retry-staging"
+        retry_staging.mkdir()
+        retry_candidates = []
+        for index, name in enumerate(("profile.toml", "declarations.json", "com.fkst.cadence.plist")):
+            candidate = retry_staging / name
+            candidate.write_bytes(f"retry-{index}".encode("ascii"))
+            retry_candidates.append(candidate)
+        generator._publish_control_files(
+            dict(zip(destinations, retry_candidates)), destinations[-1], True, False,
+            machine / "control",
+        )
+        assert len(list(generations.iterdir())) == 1
+
+
 def test_rejects_missing_or_ambiguous_declared_bot_login(tmp_path: Path) -> None:
     declaration = tomllib.loads((FIXTURES / "packages.toml").read_text())
     home = tmp_path / "home"
@@ -194,3 +555,18 @@ def test_rejects_missing_or_ambiguous_declared_bot_login(tmp_path: Path) -> None
             assert "exactly one" in str(exc)
         else:
             raise AssertionError("invalid bot login declaration was accepted")
+
+
+def test_mechanism_checkout_is_materialised_detached(tmp_path: Path) -> None:
+    from watch.generate_artifacts import _materialise_checkout
+
+    home = tmp_path / "home"
+    home.mkdir()
+    mechanism = tmp_path / "mechanism-source"
+    revision, tree = source(mechanism, {"bin/entry": "#!/bin/sh\nexit 0\n"})
+    checkout = tmp_path / "mechanism-checkout"
+    _materialise_checkout(
+        checkout, str(mechanism), revision, tree, home, "mechanism"
+    )
+    assert git(checkout, "rev-parse", "HEAD") == revision
+    assert git(checkout, "branch", "--show-current") == ""

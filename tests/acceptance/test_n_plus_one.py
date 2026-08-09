@@ -13,7 +13,15 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTIONS = ("board", "status", "logs", "restart", "sync")
+
+
+def public_actions(root: Path) -> tuple[str, ...]:
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; printf \'%s\\n\' "${FKST_OPS_PUBLIC_ACTIONS[@]}"',
+         "test", str(root / "ops" / "public_actions.sh")],
+        text=True, capture_output=True, check=True,
+    )
+    return tuple(result.stdout.splitlines())
 
 
 def byte_tree(root: Path) -> str:
@@ -97,18 +105,21 @@ integration-branch = "integration"
             lock.write_text(f'''[[external_source]]
 id = "fkst-ops"
 git = "{mechanism}"
+checkout_role = "mechanism"
 [external_source.resolved]
 rev = "0000000000000000000000000000000000000000"
 tree_sha256 = "sha256-{'0' * 64}"
 [[external_source]]
 id = "target-source"
 git = "{target}"
+checkout_role = "deployment-operated"
 [external_source.resolved]
 rev = "1111111111111111111111111111111111111111"
 tree_sha256 = "sha256-{'1' * 64}"
 [[external_source]]
 id = "engine-source"
 git = "{engine}"
+checkout_role = "deployment-operated"
 [external_source.resolved]
 rev = "2222222222222222222222222222222222222222"
 tree_sha256 = "sha256-{'2' * 64}"
@@ -122,15 +133,17 @@ tree_sha256 = "sha256-{'2' * 64}"
                 "FKST_OPS_LOCK": str(lock),
             })
             results = {}
-            for action in ACTIONS:
+            actions = public_actions(mechanism)
+            for action in actions:
                 results[action] = subprocess.run(
                     [str(mechanism / "ops/deployment_operator.sh"), action, "n-plus-one"],
                     cwd=deployment, env=env, text=True, capture_output=True,
                     timeout=8, check=False,
                 ).returncode
-            self.assertEqual(set(results), set(ACTIONS))
+            self.assertEqual(set(results), set(actions))
             self.assertEqual(results["status"], 0, results)
             self.assertEqual(results["logs"], 0, results)
+            self.assertEqual(results["stop"], 0, results)
             self.assertEqual(before, byte_tree(mechanism), results)
 
 
