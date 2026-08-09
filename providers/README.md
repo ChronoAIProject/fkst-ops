@@ -1,8 +1,9 @@
 # Provider ports
 
-The executables in this directory implement the direct ports defined
-by `fkst.ops.invocation.v1`. They read one JSON document from standard input and
-write one JSON document to standard output.
+This directory contains the mechanism-owned provider executables. The binding,
+published-surface, and transport contracts are owned by
+[`SPEC.md`](../SPEC.md#provider-binding-and-transport); the executable path and
+kind registry is `schema/provider_surface.py`.
 
 `engine.py` updates a declared Git checkout with `git pull --ff-only`, executes
 the resolved argv-only build command without a shell, and verifies the declared
