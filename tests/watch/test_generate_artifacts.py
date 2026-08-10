@@ -12,6 +12,8 @@ import pytest
 
 from bootstrap.canonical_tree import canonical_tree_sha256
 from schema.validator import ValidationError, load_and_resolve
+from schema.mechanism_tools import MECHANISM_TOOLS
+from watch.generate_artifacts import _discover_tools
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -187,10 +189,9 @@ def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
     assert result.returncode == 0, result.stderr
     profile = home / ".fkst" / "machine" / "profile.toml"
     profile_data = tomllib.loads(profile.read_text(encoding="ascii"))
-    assert profile_data["tools"] == {
-        tool_name: str(tool.resolve()),
-        additional_tool_name: str(additional_tool.resolve()),
-    }
+    assert profile_data["tools"][tool_name] == str(tool.resolve())
+    assert profile_data["tools"][additional_tool_name] == str(additional_tool.resolve())
+    assert set(MECHANISM_TOOLS) <= set(profile_data["tools"])
     resolved = load_and_resolve(repository / "deployment.toml", profile, repository / "fkst.lock")
     deployment = resolved["deployment"][0]
     command_from_profile = deployment["providers"]["engine"]["configuration"]["build_command"]
@@ -240,13 +241,57 @@ def test_generation_fails_with_unavailable_declared_tool_named(
         declaration.read_text(encoding="ascii").replace('"./cargo"', f'"{missing_tool}"'),
         encoding="ascii",
     )
-    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    tool_directory = tmp_path / "mechanism-tools"
+    tool_directory.mkdir()
+    for name, tool in MECHANISM_TOOLS.items():
+        if not tool.required:
+            continue
+        executable = tool_directory / name
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tool_directory))
 
     result = run_generator(repository, home)
 
     assert result.returncode == 2
     assert f"declared external tool cannot be found: {missing_tool}" in result.stderr
     assert not (home / ".fkst" / "machine" / "profile.toml").exists()
+
+
+def test_generation_fails_with_unavailable_required_mechanism_tool_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    tool_directory = tmp_path / "mechanism-tools"
+    tool_directory.mkdir()
+    resolver = tool_directory / "gh-app"
+    resolver.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+    resolver.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tool_directory))
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 2
+    assert "mechanism tool cannot be found: gh" in result.stderr
+    assert not (home / ".fkst" / "machine" / "profile.toml").exists()
+
+
+def test_discovery_allows_optional_lsof_to_be_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool_directory = tmp_path / "mechanism-tools"
+    tool_directory.mkdir()
+    for name in ("gh", "gh-app"):
+        executable = tool_directory / name
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        executable.chmod(0o755)
+    monkeypatch.setattr(shutil, "which", lambda name: (
+        str(tool_directory / name) if name in {"gh", "gh-app"} else None
+    ))
+
+    tools = _discover_tools([])
+
+    assert tools == {name: str(tool_directory / name) for name in ("gh", "gh-app")}
 
 
 def test_generation_activates_and_deactivates_declared_schedule(tmp_path: Path) -> None:

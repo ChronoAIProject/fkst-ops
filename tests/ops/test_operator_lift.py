@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from schema.mechanism_tools import MECHANISM_TOOLS
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
@@ -19,6 +21,54 @@ MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
 class OperatorLiftTest(unittest.TestCase):
+    def test_every_enumerated_mechanism_tool_is_loaded_from_profile(self) -> None:
+        source = OPERATOR.read_text(encoding="utf-8")
+        loader = source[source.index("MECHANISM_TOOL_ASSIGNMENTS="):
+                        source.index("DEPLOYMENT_OPERATOR_DEPLOYMENTS=")]
+        self.assertIn("from schema.mechanism_tools import MECHANISM_TOOLS", loader)
+        self.assertIn("for name, tool in MECHANISM_TOOLS.items()", loader)
+        for name, tool in MECHANISM_TOOLS.items():
+            with self.subTest(name=name):
+                self.assertIn(f'"{name}"', (ROOT / "schema" / "mechanism_tools.py").read_text())
+                self.assertIn(f'"{tool.shell_variable}"',
+                              (ROOT / "schema" / "mechanism_tools.py").read_text())
+
+    def test_mechanism_tools_have_no_runtime_path_lookup(self) -> None:
+        source = OPERATOR.read_text(encoding="utf-8")
+        self.assertNotIn("type -P gh", source)
+        self.assertNotIn("type -P gh-app", source)
+        self.assertNotIn("command -v lsof", source)
+        self.assertNotIn("writer_census=$(lsof ", source)
+
+    def test_carried_lsof_runs_with_restricted_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            platform = root / "platform"
+            runtime = root / "runtime"
+            logs = root / "logs"
+            old_runtime = runtime / "fixture.old"
+            platform.mkdir()
+            old_runtime.mkdir(parents=True)
+            logs.mkdir()
+            subprocess.run(["git", "-C", str(platform), "init", "-q"], check=True)
+            lsof = root / "carried-lsof"
+            lsof.write_text("#!/bin/sh\nexit 1\n", encoding="ascii")
+            lsof.chmod(0o755)
+            command = f'''PYTHON="{sys.executable}"
+_self_dir="{ROOT / 'ops'}"
+eval "$(sed -n '/^clean_stale_runtime_worktrees()/,/^}}/p' "{OPERATOR}")"
+PKGSRC="$1"; RUNTIME_ROOT="$2"; LOGDIR="$3"; LSOF="$4"
+clean_stale_runtime_worktrees fixture "$2/fixture.current"
+'''
+            result = subprocess.run(
+                ["/bin/bash", "-c", command, "test", str(platform), str(runtime),
+                 str(logs), str(lsof)],
+                env={**os.environ, "PATH": "/usr/bin:/bin"},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertFalse(old_runtime.exists())
+
     def test_stop_all_preserves_an_earlier_target_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tools = Path(directory)
@@ -67,6 +117,10 @@ class OperatorLiftTest(unittest.TestCase):
             }
             resolved_fixture = tools / "resolved.json"
             resolved_fixture.write_text(json.dumps(resolved), encoding="ascii")
+            (tools / "machine.toml").write_text(
+                '[tools]\ngh = "/usr/bin/true"\ngh-app = "/usr/bin/true"\n',
+                encoding="ascii",
+            )
             fake_python = tools / "python3"
             fake_python.write_text(
                 "#!/bin/sh\n"
@@ -216,6 +270,7 @@ launch_one fixture 0
             env["CAPTURE"] = str(capture)
             env["GITHUB_CREDENTIAL_PROVIDER"] = str(helper)
             env["FKST_GITHUB_REAL_GH"] = "/usr/bin/true"
+            env["FKST_GITHUB_CREDENTIAL_RESOLVER"] = "/usr/bin/true"
             env.pop("FKST_GITHUB_WRITE", None)
             command = command.replace(
                 "CLAIM_MODE=label;", f"GITHUB_WRITE_POSTURE={write or '0'}; CLAIM_MODE=label;"
@@ -408,7 +463,14 @@ authorize_github_writer
             helper = Path(directory) / "helper"
             helper.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"login":"human-writer","token":"fixture-secret-token","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}\'\n', encoding="ascii")
             helper.chmod(0o755)
-            result = subprocess.run(["bash", "-c", command], env={**os.environ, "GITHUB_CREDENTIAL_PROVIDER": str(helper), "FKST_GITHUB_REAL_GH": "/usr/bin/true", "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true"}, text=True, capture_output=True, check=False)
+            result = subprocess.run(
+                ["bash", "-c", command],
+                env={**os.environ, "PATH": "/usr/bin:/bin",
+                     "GITHUB_CREDENTIAL_PROVIDER": str(helper),
+                     "FKST_GITHUB_REAL_GH": "/usr/bin/true",
+                     "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true"},
+                text=True, capture_output=True, check=False,
+            )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("identity-mismatch", result.stderr)
         self.assertIn("HEALTH=UNHEALTHY", result.stderr)
@@ -425,23 +487,38 @@ authorize_github_writer
             helper = Path(directory) / "helper"
             helper.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"login":"fkst-loning-s-macbook-m5[bot]","token":"fixture-secret-token","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}\'\n', encoding="ascii")
             helper.chmod(0o755)
-            result = subprocess.run(["bash", "-c", command], env={**os.environ, "GITHUB_CREDENTIAL_PROVIDER": str(helper), "FKST_GITHUB_REAL_GH": "/usr/bin/true", "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true"}, text=True, capture_output=True, check=False)
+            result = subprocess.run(
+                ["bash", "-c", command],
+                env={**os.environ, "PATH": "/usr/bin:/bin",
+                     "GITHUB_CREDENTIAL_PROVIDER": str(helper),
+                     "FKST_GITHUB_REAL_GH": "/usr/bin/true",
+                     "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true"},
+                text=True, capture_output=True, check=False,
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_active_account_resolution_fails_closed_for_ambiguous_report(self) -> None:
         command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
 eval "$(sed -n '/^resolve_github_writer()/,/^}}/p' "{OPERATOR}")"
-gh() {{ cat <<'EOF'
+REAL_GH="$1"
+resolve_github_writer
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            gh = Path(directory) / "gh"
+            gh.write_text("""#!/bin/sh
+cat <<'EOF'
 github.com
   ✓ Logged in to github.com account first[bot] (GH_TOKEN)
   - Active account: true
   ✓ Logged in to github.com account second[bot] (GH_TOKEN)
   - Active account: true
 EOF
-}}
-resolve_github_writer
-'''
-        result = subprocess.run(["bash", "-c", command], text=True, capture_output=True, check=False)
+""", encoding="utf-8")
+            gh.chmod(0o755)
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(gh)],
+                text=True, capture_output=True, check=False,
+            )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ambiguous or not parseable", result.stderr)
 
