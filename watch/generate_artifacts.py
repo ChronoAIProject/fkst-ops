@@ -24,6 +24,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from schema.validator import SCHEMA_ID, ValidationError, declared_external_tools, load_and_resolve
+from schema.mechanism_tools import MECHANISM_TOOLS
 from bootstrap.canonical_tree import canonical_tree_sha256
 
 
@@ -310,18 +311,26 @@ def _quoted(value: str) -> str:
 
 
 def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str, str]:
-    names = set().union(*(declared_external_tools(document) for _, document in declarations))
+    declared_names = set().union(
+        *(declared_external_tools(document) for _, document in declarations)
+    )
+    names = declared_names | set(MECHANISM_TOOLS)
     discovered: dict[str, str] = {}
     for name in sorted(names):
         location = shutil.which(name)
         if location is None:
-            raise ValueError(f"declared external tool cannot be found: {name}")
+            mechanism_tool = MECHANISM_TOOLS.get(name)
+            if mechanism_tool is not None and not mechanism_tool.required:
+                continue
+            kind = "mechanism" if mechanism_tool is not None else "declared external"
+            raise ValueError(f"{kind} tool cannot be found: {name}")
         # Record the entry point as found, without resolving symlinks. Toolchain
         # shims such as rustup's `cargo` dispatch on argv[0]; resolving the link
         # rewrites that name and the shim stops knowing which tool it is.
         path = Path(location).absolute()
         if not path.is_file() or not os.access(path, os.X_OK):
-            raise ValueError(f"declared external tool is not executable: {name}")
+            kind = "mechanism" if name in MECHANISM_TOOLS else "declared external"
+            raise ValueError(f"{kind} tool is not executable: {name}")
         discovered[name] = str(path)
     return discovered
 

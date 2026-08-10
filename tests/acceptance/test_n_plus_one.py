@@ -96,7 +96,9 @@ shared-rate-pool = "{deployment / 'rates'}"
 [binaries]
 engine = "{engine / 'fkst-framework'}"
 [tools]
-make = "{shutil.which('make')}"
+    make = "{shutil.which('make')}"
+    gh = "{shutil.which('gh')}"
+    gh-app = "{shutil.which('gh-app')}"
 [credentials]
 github-bot = "fixture-bot"
 [sets]

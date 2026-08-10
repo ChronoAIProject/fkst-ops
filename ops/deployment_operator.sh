@@ -37,6 +37,18 @@ _repo_root="$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null || true)
 : "${FKST_OPS_LOCK:?FKST_OPS_LOCK is required}"
 RESOLVED_DECLARATION="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -m schema.validator \
   "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK")" || exit $?
+MECHANISM_TOOL_ASSIGNMENTS="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -c '
+import os, shlex, sys, tomllib
+from schema.mechanism_tools import MECHANISM_TOOLS
+with open(sys.argv[1], "rb") as stream:
+    profile_tools = tomllib.load(stream).get("tools", {})
+for name, tool in MECHANISM_TOOLS.items():
+    value = os.environ.get(tool.environment) or profile_tools.get(name, "")
+    if tool.required and not value:
+        raise SystemExit(f"error: machine profile has no carried mechanism tool: {name}")
+    print(f"{tool.shell_variable}={shlex.quote(value)}")
+' "$FKST_OPS_MACHINE_PROFILE")" || exit $?
+eval "$MECHANISM_TOOL_ASSIGNMENTS"
 DEPLOYMENT_OPERATOR_DEPLOYMENTS="$(printf '%s' "$RESOLVED_DECLARATION" | "$PYTHON" -c \
   'import json,sys; print(" ".join(item["id"] for item in json.load(sys.stdin)["deployment"]))')"
 
@@ -145,7 +157,12 @@ github_write_posture() {
 
 resolve_github_writer() {
   local auth_report resolved
-  auth_report="$(gh auth status --active --hostname github.com 2>&1)" || {
+  REAL_GH="${FKST_GITHUB_REAL_GH:-${REAL_GH:-}}"
+  [ -n "$REAL_GH" ] || {
+    echo "error: real gh executable not carried in machine profile" >&2
+    return 1
+  }
+  auth_report="$("$REAL_GH" auth status --active --hostname github.com 2>&1)" || {
     echo "error: cannot determine the active GitHub CLI account" >&2
     return 1
   }
@@ -188,10 +205,13 @@ authorize_github_writer() {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-source-not-github-app" >&2
     return 1
   }
-  REAL_GH="${FKST_GITHUB_REAL_GH:-}"
-  [ -n "$REAL_GH" ] || REAL_GH=$(type -P gh) || { echo "error: real gh executable not found" >&2; return 1; }
-  GITHUB_CREDENTIAL_RESOLVER="${FKST_GITHUB_CREDENTIAL_RESOLVER:-}"
-  [ -n "$GITHUB_CREDENTIAL_RESOLVER" ] || GITHUB_CREDENTIAL_RESOLVER=$(type -P gh-app) || {
+  REAL_GH="${FKST_GITHUB_REAL_GH:-${REAL_GH:-}}"
+  GITHUB_CREDENTIAL_RESOLVER="${FKST_GITHUB_CREDENTIAL_RESOLVER:-${GITHUB_CREDENTIAL_RESOLVER:-}}"
+  [ -n "$REAL_GH" ] || {
+    echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=real-gh-unavailable" >&2
+    return 1
+  }
+  [ -n "$GITHUB_CREDENTIAL_RESOLVER" ] || {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=github-app-resolver-unavailable" >&2
     return 1
   }
@@ -365,7 +385,7 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
     echo "  ! preserving $(printf '%s\n' "$held" | wc -l | tr -d ' ') still-registered worktree(s) from older runtime roots (#2925):"
     printf '%s\n' "$held" | sed 's|^|      |'
   fi
-  if ! command -v lsof >/dev/null 2>&1; then
+  if [ -z "$LSOF" ]; then
     echo "[$name] cannot prove stale runtime writer quiescence: lsof unavailable; retaining old runtimes" >&2
     return 0
   fi
@@ -383,7 +403,7 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
     # The killed supervisor cannot spawn new writers. Existing orphaned children only shrink this
     # holder set, so an empty kernel open-file census is the deletion barrier for the old runtime.
     writer_census_status=0
-    writer_census=$(lsof +D "$d" 2>&1) || writer_census_status=$?
+    writer_census=$("$LSOF" +D "$d" 2>&1) || writer_census_status=$?
     if [ "$writer_census_status" -eq 0 ] && [ -n "$writer_census" ]; then
       echo "[$name] retaining stale runtime with active writers: $d" >&2
       continue
