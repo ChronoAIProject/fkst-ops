@@ -316,7 +316,10 @@ def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str
         location = shutil.which(name)
         if location is None:
             raise ValueError(f"declared external tool cannot be found: {name}")
-        path = Path(location).resolve()
+        # Record the entry point as found, without resolving symlinks. Toolchain
+        # shims such as rustup's `cargo` dispatch on argv[0]; resolving the link
+        # rewrites that name and the shim stops knowing which tool it is.
+        path = Path(location).absolute()
         if not path.is_file() or not os.access(path, os.X_OK):
             raise ValueError(f"declared external tool is not executable: {name}")
         discovered[name] = str(path)
