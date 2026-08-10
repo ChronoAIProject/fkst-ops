@@ -8,6 +8,11 @@ target_identity = "ChronoAIProject/fkst-packages"
 github_write_enabled = false
 managed_bot_logins = ["fkst-bot"]
 
+[deployment.author_authorization]
+authorized_logins = ["trusted-author"]
+authorize_org_members = true
+authorize_repo_collaborators = false
+
 [deployment.claim_posture]
 mode = "label"
 label_exclusive = false

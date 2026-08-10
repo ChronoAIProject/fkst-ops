@@ -301,7 +301,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     for index, raw in enumerate(deployments):
         path = f"declaration.deployment[{index}]"
         dep = _table(raw, path)
-        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
+        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
         github_write_enabled = dep.get("github_write_enabled")
@@ -326,6 +326,24 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             _require_unique(managed_bot_logins, path + ".managed_bot_logins")
         elif "github_devloop_profile" in dep:
             _fail(path + ".managed_bot_logins", "must be a non-empty string list")
+        author_authorization_path = path + ".author_authorization"
+        author_authorization = dep.get("author_authorization", {})
+        author_authorization = _table(author_authorization, author_authorization_path)
+        _closed(
+            author_authorization,
+            {"authorized_logins", "authorize_org_members", "authorize_repo_collaborators"},
+            author_authorization_path,
+        )
+        authorized_logins = _string_list(
+            author_authorization, "authorized_logins", author_authorization_path, nonempty=False
+        ) if "authorized_logins" in author_authorization else []
+        _require_unique(authorized_logins, author_authorization_path + ".authorized_logins")
+        authorize_org_members = author_authorization.get("authorize_org_members", False)
+        if not isinstance(authorize_org_members, bool):
+            _fail(author_authorization_path + ".authorize_org_members", "must be a boolean")
+        authorize_repo_collaborators = author_authorization.get("authorize_repo_collaborators", False)
+        if not isinstance(authorize_repo_collaborators, bool):
+            _fail(author_authorization_path + ".authorize_repo_collaborators", "must be a boolean")
         if identity in seen_ids:
             _fail(path + ".id", f"duplicate deployment identity: {identity}")
         if target in seen_targets:
@@ -394,6 +412,11 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             "target_identity": target,
             "github_write_enabled": github_write_enabled,
             "claim_posture": {"mode": claim_mode, "label_exclusive": claim_label_exclusive},
+            "author_authorization": {
+                "authorized_logins": authorized_logins,
+                "authorize_org_members": authorize_org_members,
+                "authorize_repo_collaborators": authorize_repo_collaborators,
+            },
         }
         profile_block = dep.get("github_devloop_profile")
         if profile_block is not None:

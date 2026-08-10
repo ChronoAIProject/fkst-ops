@@ -70,10 +70,11 @@ def provider(field):
     binding=dep["providers"][field]
     return [binding["executable"],binding["contract"],json.dumps(binding["configuration"],separators=(",",":"))]
 claim=dep["claim_posture"]
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],"1" if dep["github_write_enabled"] else "0",claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
+authorization=dep["author_authorization"]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(m.get("managed_bot_set", []),separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],"1" if dep["github_write_enabled"] else "0",claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE GITHUB_WRITE_POSTURE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC SUBSTRATE_SRC BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE GITHUB_WRITE_POSTURE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
@@ -400,7 +401,7 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
 }
 
 launch_one() { # $1 name, $2 restart flag (0|1)
-  local name="$1" restart="${2:-0}" ts log rt write_posture managed_bot_logins args=()
+  local name="$1" restart="${2:-0}" ts log rt write_posture managed_bot_logins authorized_logins args=()
   require_engine_binary || return 1
   ts=$(date +%s); log="$LOGDIR/${name}-sv-${ts}.log"; rt="$RUNTIME_ROOT/${name}.${ts}"
   derive_devloop_pkgs_from_workspace "$name" || return 1
@@ -420,6 +421,8 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   write_posture=$(github_write_posture) || return 1
   authorize_github_writer || return 1
   managed_bot_logins=$(printf '%s' "$MANAGED_BOT_LOGINS" | python3 -c \
+    'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
+  authorized_logins=$(printf '%s' "$AUTHORIZED_LOGINS" | python3 -c \
     'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
 
   # Own-session launch: make the supervise its OWN session/process-group leader. CONFIRMED (ps): the
@@ -443,6 +446,9 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     FKST_GITHUB_CLAIM_MODE="$CLAIM_MODE" FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE="$CLAIM_LABEL_EXCLUSIVE" \
     FKST_RATE_POOL_ROOT="$RATE_POOL" FKST_GITHUB_BOT_LOGIN="$BOT" \
     FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins" \
+    FKST_GITHUB_AUTHORIZED_LOGINS="$authorized_logins" \
+    FKST_GITHUB_AUTHORIZE_ORG_MEMBERS="$AUTHORIZE_ORG_MEMBERS" \
+    FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS="$AUTHORIZE_REPO_COLLABORATORS" \
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
     FKST_WORKTREE_GC_REMOVE=1 PATH="$_self_dir:$PATH" \
