@@ -114,6 +114,42 @@ class ValidatorTests(unittest.TestCase):
         self.declaration["deployment"][0]["managed_bot_logins"] = ["another-bot"]
         self.reject("resolved set must equal deployment.managed_bot_logins")
 
+    def test_author_authorization_resolves_declared_policy(self) -> None:
+        self.declaration["deployment"][0]["author_authorization"] = {
+            "authorized_logins": ["trusted-author"],
+            "authorize_org_members": True,
+            "authorize_repo_collaborators": True,
+        }
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(
+            result["deployment"][0]["author_authorization"],
+            {
+                "authorized_logins": ["trusted-author"],
+                "authorize_org_members": True,
+                "authorize_repo_collaborators": True,
+            },
+        )
+
+    def test_author_authorization_defaults_to_no_additional_authors(self) -> None:
+        del self.declaration["deployment"][0]["author_authorization"]
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(
+            result["deployment"][0]["author_authorization"],
+            {
+                "authorized_logins": [],
+                "authorize_org_members": False,
+                "authorize_repo_collaborators": False,
+            },
+        )
+
+    def test_author_authorization_rejects_malformed_policy(self) -> None:
+        self.declaration["deployment"][0]["author_authorization"] = {
+            "authorized_logins": "trusted-author",
+            "authorize_org_members": True,
+            "authorize_repo_collaborators": False,
+        }
+        self.reject("author_authorization.authorized_logins.*string list")
+
     def test_source_git_url_resolves_from_lock(self) -> None:
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
         source = result["deployment"][0]["sources"]["platform"]

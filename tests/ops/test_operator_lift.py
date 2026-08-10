@@ -44,6 +44,11 @@ class OperatorLiftTest(unittest.TestCase):
                             )
                         },
                         "claim_posture": {"mode": "label", "label_exclusive": False},
+                        "author_authorization": {
+                            "authorized_logins": [],
+                            "authorize_org_members": False,
+                            "authorize_repo_collaborators": False,
+                        },
                         "integration": {
                             "upstream_branch": "dev",
                             "integration_branch": "integration",
@@ -172,7 +177,7 @@ sync_to_run_branch /checkout
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json, os, time\n"
-                "keys = ['FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS']\n"
+                "keys = ['FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps({key: os.environ.get(key) for key in keys}))\n"
                 "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
                 "print('MSG=event runtime running', flush=True)\n"
@@ -196,6 +201,7 @@ engine_panic_count() {{ echo 0; }}
 REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
 DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
 RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","peer-bot"]'
+AUTHORIZED_LOGINS='["trusted-author","second-author"]'; AUTHORIZE_ORG_MEMBERS=1; AUTHORIZE_REPO_COLLABORATORS=0
 UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
 CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
 LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
@@ -365,6 +371,12 @@ github_write_posture
         self.assertTrue(captured["FKST_RATE_POOL_ROOT"].endswith("/rates"))
         self.assertEqual(captured["FKST_GITHUB_BOT_LOGIN"], "resolved-bot")
         self.assertEqual(captured["FKST_DEVLOOP_MANAGED_BOT_LOGINS"], "resolved-bot,peer-bot")
+
+    def test_declared_author_authorization_reaches_launched_process(self) -> None:
+        captured = self._capture_launch_environment(None)
+        self.assertEqual(captured["FKST_GITHUB_AUTHORIZED_LOGINS"], "trusted-author,second-author")
+        self.assertEqual(captured["FKST_GITHUB_AUTHORIZE_ORG_MEMBERS"], "1")
+        self.assertEqual(captured["FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS"], "0")
 
     def test_declared_claim_posture_reaches_launched_process(self) -> None:
         captured = self._capture_launch_environment(None)
