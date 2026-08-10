@@ -398,6 +398,54 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(target, (self.cache / "current").resolve())
         self.assertEqual(before, self.log.read_bytes())
 
+    def test_tracked_cached_checkout_drift_is_refused_before_delegation(self):
+        self.assertEqual(0, self.invoke().returncode)
+        target = (self.cache / "current").resolve()
+        runner = target / "ops" / "deployment_operator.sh"
+        original = runner.read_bytes()
+        original_mode = runner.stat().st_mode
+        before = self.log.read_bytes()
+
+        cases = {
+            "modified": lambda: runner.write_bytes(original + b"# modified\n"),
+            "deleted": runner.unlink,
+            "mode": lambda: runner.chmod(original_mode ^ stat.S_IXUSR),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name):
+                mutate()
+                result = self.invoke()
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("tracked checkout differs from the pinned revision", result.stderr)
+                self.assertIn("ops/deployment_operator.sh", result.stderr)
+                self.assertIn("Restore or replace the cached checkout", result.stderr)
+                self.assertEqual(before, self.log.read_bytes())
+                runner.write_bytes(original)
+                runner.chmod(original_mode)
+
+    def test_checkout_action_metadata_is_not_executed_before_verification(self):
+        self.assertEqual(0, self.invoke().returncode)
+        target = (self.cache / "current").resolve()
+        marker = self.root / "action-metadata-executed"
+        actions = target / "ops" / "public_actions.sh"
+        actions.write_text(
+            f"touch {str(marker)!r}\nreadonly FKST_OPS_PUBLIC_ACTIONS=(status)\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update(CALL_LOG=str(self.log), FKST_OPS_CACHE_ROOT=str(self.cache),
+                   FKST_OPS_REEXEC_DEPTH="1")
+
+        result = run(
+            "bash", str(target / "bin" / "fkst-ops"), "--deployment-dir", str(self.deployment),
+            "--declaration", "deployment.toml", "--machine-config", "machine.toml", "status",
+            cwd=self.deployment, check=False, env=env,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("re-exec target is not the physically pinned checkout", result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_cached_checkout_cannot_use_its_lying_tree_hasher(self):
         self.assertEqual(0, self.invoke().returncode)
         target = (self.cache / "current").resolve()

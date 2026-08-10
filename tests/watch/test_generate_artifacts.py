@@ -397,9 +397,7 @@ def test_abrupt_death_never_exposes_mixed_control_generation(
         os._exit(0)
     _, status = os.waitpid(child, 0)
     assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
-    observed = tuple(path.read_bytes() for path in destinations) if all(
-        path.exists() for path in destinations
-    ) else tuple(None for _ in destinations)
+    observed = tuple(path.read_bytes() if path.exists() else None for path in destinations)
     old = tuple(None for _ in destinations)
     new = tuple(f"new-{index}".encode("ascii") for index in range(3))
     assert observed in (old, new)
@@ -412,19 +410,104 @@ def test_generation_retention_protects_selected_and_running_generations(tmp_path
     generations = control / "generations"
     generations.mkdir(parents=True)
     selected = generations / "selected"
-    running = generations / "running"
+    launch_source = generations / "launch-source"
+    profile_reference = generations / "profile-reference"
+    manifest_reference = generations / "manifest-reference"
     abandoned = generations / "abandoned"
-    for generation in (selected, running, abandoned):
+    for generation in (
+        selected, launch_source, profile_reference, manifest_reference, abandoned
+    ):
         generation.mkdir()
     (control / "current").symlink_to("generations/selected")
-    running_agent = running / "com.fkst.cadence.plist"
+    running_agent = launch_source / "com.fkst.cadence.plist"
     running_agent.write_bytes(plistlib.dumps({"ProgramArguments": [
-        str(running / "profile.toml"), str(running / "declarations.json")
+        str(profile_reference / "profile.toml"),
+        str(manifest_reference / "declarations.json"),
     ]}))
 
     generator._prune_generations(control, generator.ScheduleState(True, running_agent))
 
-    assert {path.name for path in generations.iterdir()} == {"selected", "running"}
+    assert {path.name for path in generations.iterdir()} == {
+        "selected", "launch-source", "profile-reference", "manifest-reference",
+    }
+
+
+def test_concurrent_publications_are_serialised_per_control_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import fcntl
+    import watch.generate_artifacts as generator
+
+    machine = tmp_path / "machine"
+    control = machine / "control"
+    destinations = (
+        machine / "profile.toml", machine / "declarations.json",
+        machine / "LaunchAgents" / "com.fkst.cadence.plist",
+    )
+    attempted_second = threading.Event()
+    release_second_attempt = threading.Event()
+    resumed_second_attempt = threading.Event()
+    entered_first = threading.Event()
+    release_first = threading.Event()
+    entered_second = threading.Event()
+    errors: list[BaseException] = []
+
+    def checkpoint(point: str) -> None:
+        if point == "lock-attempt" and threading.current_thread().name == "publisher-b":
+            attempted_second.set()
+            assert release_second_attempt.wait(5)
+            resumed_second_attempt.set()
+            return
+        if point != "generation-selected":
+            return
+        if threading.current_thread().name == "publisher-a":
+            entered_first.set()
+            assert release_first.wait(5)
+        else:
+            entered_second.set()
+
+    monkeypatch.setattr(generator, "_publication_checkpoint", checkpoint)
+
+    def publish(label: str) -> None:
+        staging = machine / f"staging-{label}"
+        staging.mkdir(parents=True)
+        candidates = []
+        for index, name in enumerate((
+            "profile.toml", "declarations.json", "com.fkst.cadence.plist"
+        )):
+            candidate = staging / name
+            candidate.write_bytes(f"{label}-{index}".encode("ascii"))
+            candidates.append(candidate)
+        try:
+            generator._publish_control_files(
+                dict(zip(destinations, candidates)), destinations[-1], True, False,
+                control, f"generation-{label}",
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=publish, args=("a",), name="publisher-a")
+    second = threading.Thread(target=publish, args=("b",), name="publisher-b")
+    first.start()
+    assert entered_first.wait(5)
+    second.start()
+    assert attempted_second.wait(5), "second publisher did not reach the lock attempt"
+    release_second_attempt.set()
+    assert resumed_second_attempt.wait(5), "second publisher did not resume its lock attempt"
+    with (control / ".publish.lock").open("a+b") as probe:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert not entered_second.is_set(), "second publisher entered the publication transaction"
+    release_first.set()
+    first.join(5)
+    second.join(5)
+
+    assert not errors
+    assert not first.is_alive() and not second.is_alive()
+    assert entered_second.is_set()
+    assert (control / "current").resolve().name == "generation-b"
+    assert {path.name for path in (control / "generations").iterdir()} == {"generation-b"}
 
 
 def test_repeated_isolated_publication_is_bounded(tmp_path: Path) -> None:
