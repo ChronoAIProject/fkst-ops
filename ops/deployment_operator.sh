@@ -29,14 +29,15 @@
 set -uo pipefail
 
 # ---- validated deployment input ----
+PYTHON="${FKST_OPS_PYTHON:-python3}"
 _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_root="$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null || true)"
 : "${FKST_OPS_DECLARATION:?FKST_OPS_DECLARATION is required}"
 : "${FKST_OPS_MACHINE_PROFILE:?FKST_OPS_MACHINE_PROFILE is required}"
 : "${FKST_OPS_LOCK:?FKST_OPS_LOCK is required}"
-RESOLVED_DECLARATION="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" python3 -m schema.validator \
+RESOLVED_DECLARATION="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -m schema.validator \
   "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK")" || exit $?
-DEPLOYMENT_OPERATOR_DEPLOYMENTS="$(printf '%s' "$RESOLVED_DECLARATION" | python3 -c \
+DEPLOYMENT_OPERATOR_DEPLOYMENTS="$(printf '%s' "$RESOLVED_DECLARATION" | "$PYTHON" -c \
   'import json,sys; print(" ".join(item["id"] for item in json.load(sys.stdin)["deployment"]))')"
 
 # The shared devloop family = the PLATFORM (like GitHub runners + marketplace actions), loaded from the
@@ -56,7 +57,7 @@ DEVLOOP_PKGS=""
 # cfg <id> consumes only the schema validator's resolved output.
 cfg() {
   local values
-  values="$(printf '%s' "$RESOLVED_DECLARATION" | python3 -c '
+  values="$(printf '%s' "$RESOLVED_DECLARATION" | "$PYTHON" -c '
 import json,sys
 name=sys.argv[1]
 items=json.load(sys.stdin)["deployment"]
@@ -82,7 +83,7 @@ print("\t".join(fields))
 
 derive_devloop_pkgs_from_workspace() { # $1 name
   local name="$1" output
-  output="$(python3 "$_self_dir/workspace_manifest.py" platform-packages "$name" "$HOST" "$PKGSRC" "$PLATFORM_GIT_URL")" \
+  output="$("$PYTHON" "$_self_dir/workspace_manifest.py" platform-packages "$name" "$HOST" "$PKGSRC" "$PLATFORM_GIT_URL")" \
     || { printf '%s\n' "$output" >&2; return 1; }
   DEVLOOP_PKGS="$output"
 }
@@ -133,7 +134,7 @@ wait_supervise_ready() { # $1 pid, $2 log
 }
 expand() { [ "${1:-all}" = all ] && echo "$DEPLOYMENT_OPERATOR_DEPLOYMENTS" || echo "$1"; }
 
-invoke_provider() { python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }
+invoke_provider() { "$PYTHON" "$_self_dir/invoke_provider.py" "$1" "$2"; }
 
 github_write_posture() {
   case "${GITHUB_WRITE_POSTURE:-}" in
@@ -148,7 +149,7 @@ resolve_github_writer() {
     echo "error: cannot determine the active GitHub CLI account" >&2
     return 1
   }
-  resolved="$(printf '%s\n' "$auth_report" | python3 -c '
+  resolved="$(printf '%s\n' "$auth_report" | "$PYTHON" -c '
 import re, sys
 lines = sys.stdin.read().splitlines()
 accounts = []
@@ -182,7 +183,7 @@ authorize_github_writer() {
     return 1
   }
   local credential_source
-  credential_source=$(printf '%s' "$GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"])') || return 1
+  credential_source=$(printf '%s' "$GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["source"])') || return 1
   [ "$credential_source" = github-app ] || {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-source-not-github-app" >&2
     return 1
@@ -197,7 +198,7 @@ authorize_github_writer() {
   env -u GH_TOKEN -u GITHUB_TOKEN FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
     FKST_GITHUB_CREDENTIAL_SOURCE="$credential_source" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
     FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_BOT_LOGIN="$BOT" \
-    python3 "$_self_dir/github_credential_gh.py" --fkst-auth-check || return 1
+    "$PYTHON" "$_self_dir/github_credential_gh.py" --fkst-auth-check || return 1
   GITHUB_WRITER_LOGIN="$BOT"
 }
 
@@ -226,7 +227,7 @@ restore_generated_workspace_scratch() { # $1 worktree dir
   local wt="$1"
   [ -f "$wt/fkst.workspace.toml" ] || return 0
   git -C "$wt" diff --quiet -- fkst.workspace.toml 2>/dev/null && return 0
-  python3 "$_self_dir/workspace_manifest.py" is-generated-scratch "$wt" "$DEVLOOP_PKGS" "$PLATFORM_GIT_URL" >/dev/null || return 0
+  "$PYTHON" "$_self_dir/workspace_manifest.py" is-generated-scratch "$wt" "$DEVLOOP_PKGS" "$PLATFORM_GIT_URL" >/dev/null || return 0
   echo "    restoring generated fkst.workspace.toml scratch before branch sync"
   git -C "$wt" checkout -q -- fkst.workspace.toml 2>/dev/null
 }
@@ -309,7 +310,7 @@ ensure_integration_caught_up() { # $1 checkout dir
 
 engine_build_result() {
   # engine-provider-configuration: forward committed binding configuration as typed input.
-  python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' "$SUBSTRATE_SRC" "$BIN" "$INTEGRATION_BRANCH" "$ENGINE_PROVIDER_CONFIGURATION" \
+  "$PYTHON" -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' "$SUBSTRATE_SRC" "$BIN" "$INTEGRATION_BRANCH" "$ENGINE_PROVIDER_CONFIGURATION" \
     | invoke_provider "$ENGINE_PROVIDER" "$ENGINE_CONTRACT" || return $?
 }
 
@@ -322,7 +323,7 @@ require_engine_binary() {
 bin_ensure_fresh() {
   local response
   response=$(engine_build_result) || return $?
-  printf '%s\n' "$response" | python3 -c 'import json,sys; r=json.load(sys.stdin)["result"]; print("built: %s@%s" % (r["binary"],r["source_rev"][:8]))'
+  printf '%s\n' "$response" | "$PYTHON" -c 'import json,sys; r=json.load(sys.stdin)["result"]; print("built: %s@%s" % (r["binary"],r["source_rev"][:8]))'
 }
 
 cmd_board() {
@@ -332,10 +333,10 @@ cmd_board() {
     require_engine_binary || { failed=1; continue; }
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/fkst-ops-board.XXXXXX") || return 1
     github_input="$tmp/github.json"; engine_input="$tmp/engine.json"
-    python3 -c 'import json,sys; p=json.loads(sys.argv[3]); p["stale_hours"]=int(sys.argv[6] or 6); json.dump({"target_identity":sys.argv[1],"platform_checkout":sys.argv[2],"profile":p,"bot_login":sys.argv[4],"managed_bot_set":json.loads(sys.argv[5])},open(sys.argv[7],"w"))' "$REPO" "$PKGSRC" "$GITHUB_DEVLOOP_PROFILE" "$BOT" "$MANAGED_BOT_LOGINS" "${2:-}" "$github_input"
-    python3 -c 'import json,sys; json.dump({"engine_binary":sys.argv[1],"durable_root":sys.argv[2],"cache":sys.argv[3],"refresh":False,"ttl_seconds":300,"stall_seconds":900},open(sys.argv[4],"w"))' "$BIN" "$DUR" "$tmp/cache.json" "$engine_input"
+    "$PYTHON" -c 'import json,sys; p=json.loads(sys.argv[3]); p["stale_hours"]=int(sys.argv[6] or 6); json.dump({"target_identity":sys.argv[1],"platform_checkout":sys.argv[2],"profile":p,"bot_login":sys.argv[4],"managed_bot_set":json.loads(sys.argv[5])},open(sys.argv[7],"w"))' "$REPO" "$PKGSRC" "$GITHUB_DEVLOOP_PROFILE" "$BOT" "$MANAGED_BOT_LOGINS" "${2:-}" "$github_input"
+    "$PYTHON" -c 'import json,sys; json.dump({"engine_binary":sys.argv[1],"durable_root":sys.argv[2],"cache":sys.argv[3],"refresh":False,"ttl_seconds":300,"stall_seconds":900},open(sys.argv[4],"w"))' "$BIN" "$DUR" "$tmp/cache.json" "$engine_input"
     require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }
-    python3 "$_repo_root/board/board.py" --github-provider "$GITHUB_BOARD_PROVIDER" --engine-provider "$ENGINE_BOARD_PROVIDER" --github-input "$github_input" --engine-input "$engine_input" || failed=1
+    "$PYTHON" "$_repo_root/board/board.py" --github-provider "$GITHUB_BOARD_PROVIDER" --engine-provider "$ENGINE_BOARD_PROVIDER" --github-input "$github_input" --engine-input "$engine_input" || failed=1
     rm -rf "$tmp"
   done
   return "$failed"
@@ -393,7 +394,7 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
       [ -n "$writer_census" ] && printf '%s\n' "$writer_census" >&2
       continue
     fi
-    python3 "$_self_dir/dead_letter_causes.py" archive \
+    "$PYTHON" "$_self_dir/dead_letter_causes.py" archive \
       --runtime-root "$d" --output "$LOGDIR/${name}-dead-letter-facts.log" \
       || { echo "[$name] could not retain dead-letter cause facts from $d" >&2; return 1; }
     rm -rf "$d" 2>/dev/null
@@ -420,9 +421,9 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   [ "$restart" = "1" ] && args+=(--restart)
   write_posture=$(github_write_posture) || return 1
   authorize_github_writer || return 1
-  managed_bot_logins=$(printf '%s' "$MANAGED_BOT_LOGINS" | python3 -c \
+  managed_bot_logins=$(printf '%s' "$MANAGED_BOT_LOGINS" | "$PYTHON" -c \
     'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
-  authorized_logins=$(printf '%s' "$AUTHORIZED_LOGINS" | python3 -c \
+  authorized_logins=$(printf '%s' "$AUTHORIZED_LOGINS" | "$PYTHON" -c \
     'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
 
   # Own-session launch: make the supervise its OWN session/process-group leader. CONFIRMED (ps): the
@@ -433,7 +434,8 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   # is *inferred* to be such a group signal on launcher/session/background-task teardown — it was not
   # caught live. This hardens the confirmed vulnerability; it does NOT prove recurrence-elimination,
   # which must be observed after this lands.] `nohup` only blocks SIGHUP, not group signals. macOS has
-  # no setsid(1), so wrap in python3 (already required by scripts/run.sh; perl was rejected — it panics
+  # no setsid(1), so wrap in the selected Python interpreter (already required by scripts/run.sh;
+  # perl was rejected — it panics
   # under the automation env's LC_ALL=C.UTF-8 locale). `os.setsid()`+`os.execvp` is IN-PLACE, so $!
   # below stays the REAL supervise pid and the env-prefix stays scoped to the launch; a failed setsid
   # raises OSError → nonzero exit → the readiness wait reports the launch failure loud (self-verifying).
@@ -452,7 +454,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
     FKST_WORKTREE_GC_REMOVE=1 PATH="$_self_dir:$PATH" \
-    nohup python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "${args[@]}" >> "$log" 2>&1 &
+    nohup "$PYTHON" -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "${args[@]}" >> "$log" 2>&1 &
   local pid=$!
   ln -sf "$log" "$LOGDIR/${name}-sv.log"
   wait_supervise_ready "$pid" "$log"
@@ -593,7 +595,7 @@ _proc_stale() {
   derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
   git -C "$PKGSRC" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null
   pdev=$(git -C "$PKGSRC" rev-parse "origin/$INTEGRATION_BRANCH" 2>/dev/null)
-  sdev=$(engine_build_result | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["source_rev"])') || { echo engine-provider-failed; return; }
+  sdev=$(engine_build_result | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["result"]["source_rev"])') || { echo engine-provider-failed; return; }
   procpkg=$(grep -aoE "${DEVLOOP_PKGS%% *}@[a-f0-9]+" "$log" 2>/dev/null | tail -1 | cut -d@ -f2)   # any platform pkg's commit reflects the running code
   proceng=$(grep -aoE 'ENGINE_VER=[a-f0-9]+' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
   if [ -n "$proceng" ] && [ "${sdev:0:${#proceng}}" != "$proceng" ]; then echo engine-stale; return; fi

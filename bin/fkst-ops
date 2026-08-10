@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PYTHON="${FKST_OPS_PYTHON:-python3}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 usage() {
   local actions="ACTION"
@@ -44,7 +45,7 @@ deployment_root="$(cd "$deployment_root" && pwd)"
 [ -n "$lock" ] || lock="${FKST_OPS_LOCK_FILE:-$deployment_root/fkst.lock}"
 
 read_pin() {
-  python3 - "$lock" <<'PY'
+  "$PYTHON" - "$lock" <<'PY'
 import re
 import sys
 import tomllib
@@ -86,7 +87,7 @@ verify_checkout() {
 }
 
 verify_checkout_details() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  "$PYTHON" - "$1" "$2" "$3" <<'PY'
 import hashlib
 import os
 import stat
@@ -166,7 +167,7 @@ report_verification_failure() {
 }
 
 replace_pointer() {
-  python3 - "$1" "$2" <<'PY'
+  "$PYTHON" - "$1" "$2" <<'PY'
 import os
 import sys
 
@@ -255,7 +256,7 @@ source "$ROOT/ops/public_actions.sh"
 export FKST_OPS_DECLARATION="$declaration"
 export FKST_OPS_MACHINE_PROFILE="$machine"
 export FKST_OPS_LOCK="$lock"
-PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m schema.validator "$declaration" "$machine" "$lock" >/dev/null
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -m schema.validator "$declaration" "$machine" "$lock" >/dev/null
 [ "$preflight" -eq 0 ] || exit 0
 
 action="${1:-status}"
