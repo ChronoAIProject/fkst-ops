@@ -140,6 +140,31 @@ def test_round_inherits_and_never_sets_write_posture(tmp_path: Path) -> None:
     assert all(call["write"] == "1" for call in map(json.loads, calls.read_text().splitlines()))
 
 
+def test_round_propagates_its_interpreter_when_path_has_no_python(tmp_path: Path) -> None:
+    repository, profile, ledger, calls, _ = fixture(tmp_path)
+    declaration(repository / "only.toml", "only")
+    operator = tmp_path / "operator"
+    operator.write_text(
+        "#!/bin/sh\n"
+        '"$FKST_OPS_PYTHON" -c \'import sys; print(sys.executable)\'\n',
+        encoding="ascii",
+    )
+    operator.chmod(0o755)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+
+    result = run_round(
+        repository,
+        profile,
+        ledger,
+        operator,
+        {**os.environ, "PATH": str(tools), "CALLS": str(calls)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert [json.loads(line)["status_line"] for line in ledger.read_text().splitlines()] == [sys.executable]
+
+
 def test_round_consumes_only_manifest_and_rejects_cache_or_test_material(tmp_path: Path) -> None:
     repository, profile, ledger, calls, operator = fixture(tmp_path)
     declaration(repository / "adopted.toml", "adopted")

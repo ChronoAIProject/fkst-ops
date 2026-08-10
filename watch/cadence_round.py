@@ -94,6 +94,7 @@ def status_line(output: str) -> str:
 def invoke(
     entry: Path, repository: Path, declaration: Path, profile: Path, lock: Path, action: str
 ) -> subprocess.CompletedProcess[str]:
+    environment = {**os.environ, "FKST_OPS_PYTHON": sys.executable}
     return subprocess.run(
         [
             str(entry),
@@ -105,6 +106,7 @@ def invoke(
             "--lock", str(lock),
             action,
         ],
+        env=environment,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

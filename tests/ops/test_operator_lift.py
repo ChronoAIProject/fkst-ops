@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
+FKST_OPS = ROOT / "bin" / "fkst-ops"
 MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
@@ -102,7 +103,8 @@ class OperatorLiftTest(unittest.TestCase):
             self.assertEqual("[fails] failed to SIGKILL 999999999\n", result.stderr)
 
     def test_stop_reports_running_stopped_unknown_and_kill_failure_honestly(self) -> None:
-        stop_function = f'''eval "$(sed -n '/^stop_one()/,/^}}/p' "{OPERATOR}")"
+        stop_function = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^stop_one()/,/^}}/p' "{OPERATOR}")"
 cfg() {{ [ "$1" != unknown ] || {{ echo "unknown deployment: $1" >&2; return 1; }}; }}
 pidof_df() {{ printf '%s' "${{FAKE_PID:-}}"; }}
 kill() {{ [ "${{KILL_FAIL:-0}}" = 0 ]; }}
@@ -146,7 +148,8 @@ stop_one "$1"
                 encoding="ascii",
             )
             fake_git.chmod(0o755)
-            command = f'''eval "$(sed -n '/^sync_to_run_branch()/,/^}}/p' "{OPERATOR}")"
+            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^sync_to_run_branch()/,/^}}/p' "{OPERATOR}")"
 INTEGRATION_BRANCH=integration
 sync_to_run_branch /checkout
 '''
@@ -185,7 +188,8 @@ sync_to_run_branch /checkout
                 encoding="ascii",
             )
             run_script.chmod(0o755)
-            command = f'''eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
+            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^launch_one()/,/^}}/p' "{OPERATOR}")"
 _self_dir="{ROOT / 'ops'}"
@@ -267,7 +271,8 @@ cmd_sync all
             build = root / "build"
             build.write_text('#!/bin/sh\nprintf "#!/bin/sh\\nexit 0\\n" > "$1"\nchmod +x "$1"\n', encoding="ascii")
             build.chmod(0o755)
-            command = f'''_self_dir="{ROOT / 'ops'}"
+            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+_self_dir="{ROOT / 'ops'}"
 invoke_provider() {{ python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }}
 eval "$(sed -n '/^engine_build_result()/,/^}}/p' "{OPERATOR}")"
 SUBSTRATE_SRC="$1"; BIN="$2"; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=build
@@ -300,7 +305,8 @@ engine_build_result
                 encoding="ascii",
             )
             provider.chmod(0o755)
-            command = f'''_self_dir="{ROOT / 'ops'}"
+            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+_self_dir="{ROOT / 'ops'}"
 invoke_provider() {{ python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }}
 eval "$(sed -n '/^engine_build_result()/,/^}}/p' "{OPERATOR}")"
 SUBSTRATE_SRC=/engine; BIN=/engine/bin; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
@@ -321,20 +327,28 @@ bin_ensure_fresh
 
     def test_shell_is_valid_and_uses_schema_validator(self) -> None:
         subprocess.run(["bash", "-n", str(OPERATOR)], check=True)
+        subprocess.run(["bash", "-n", str(FKST_OPS)], check=True)
         source = OPERATOR.read_text(encoding="utf-8")
-        self.assertIn("python3 -m schema.validator", source)
+        entry_source = FKST_OPS.read_text(encoding="utf-8")
+        self.assertIn('\"$PYTHON\" -m schema.validator', source)
+        for shell_source in (source, entry_source):
+            self.assertEqual(
+                [line for line in shell_source.splitlines() if "python3" in line],
+                ['PYTHON="${FKST_OPS_PYTHON:-python3}"'],
+            )
         self.assertIn('rt="$RUNTIME_ROOT/${name}.${ts}"', source)
         self.assertNotIn("GH_ORG=", source)
         self.assertNotIn("GITHUB_PROXY_POLL_LABEL_PREFIX=", source)
         self.assertNotIn("  doctor)", source)
         self.assertGreaterEqual(source.count("require_engine_binary || return 1"), 3)
-        self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    python3 "$_repo_root/board/board.py"', source)
+        self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    "$PYTHON" "$_repo_root/board/board.py"', source)
         self.assertIn('require_engine_binary || return 1\n  printf \'FKST_GITHUB_WRITE=', source)
         self.assertNotIn('GH_TOKEN="$GITHUB_TOKEN_DISCOVERED"', source)
         self.assertIn('FKST_GITHUB_REAL_GH="$REAL_GH"', source)
 
     def test_restart_without_operator_environment_reproduces_declared_write_posture(self) -> None:
-        command = f'''eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
+        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
 github_write_posture
 '''
         absent = os.environ.copy()
@@ -384,7 +398,8 @@ github_write_posture
         self.assertEqual(captured["FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE"], "0")
 
     def test_launch_fails_closed_when_token_identity_differs_from_declared_bot(self) -> None:
-        command = f'''eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
+        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
 _self_dir="{ROOT / 'ops'}"
 BOT=declared-bot; REPO=example/repo; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
 authorize_github_writer
@@ -400,7 +415,8 @@ authorize_github_writer
         self.assertNotIn("fixture-secret-token", result.stdout + result.stderr)
 
     def test_gate_admits_matching_app_token_identity(self) -> None:
-        command = f'''eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
+        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
 _self_dir="{ROOT / 'ops'}"
 BOT='fkst-loning-s-macbook-m5[bot]'; REPO=example/repo; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
 authorize_github_writer
@@ -413,7 +429,8 @@ authorize_github_writer
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_active_account_resolution_fails_closed_for_ambiguous_report(self) -> None:
-        command = f'''eval "$(sed -n '/^resolve_github_writer()/,/^}}/p' "{OPERATOR}")"
+        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^resolve_github_writer()/,/^}}/p' "{OPERATOR}")"
 gh() {{ cat <<'EOF'
 github.com
   ✓ Logged in to github.com account first[bot] (GH_TOKEN)
@@ -429,7 +446,8 @@ resolve_github_writer
         self.assertIn("ambiguous or not parseable", result.stderr)
 
     def test_gate_refuses_missing_refresh_helper(self) -> None:
-        command = f'''eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
+        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
 BOT=declared-bot
 authorize_github_writer
 '''
@@ -448,7 +466,8 @@ authorize_github_writer
                 "FKST_GITHUB_CLAIM_MODE=label FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=0\n",
                 encoding="ascii",
             )
-            command = f'''eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
+            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
 cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
 pidof_df() {{ echo 123; }}; latest_log() {{ echo "$LOG"; }}
 fmt_uptime() {{ echo 1m00s; }}; engine_panic_count() {{ echo 0; }}
@@ -570,7 +589,8 @@ printf '%s\\n' '{{"login":"wrong-bot","token":"{token}"}}'
                 "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY\n",
                 encoding="ascii",
             )
-            command = f'''eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
+            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
 cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
 pidof_df() {{ echo 123; }}; latest_log() {{ echo "$LOG"; }}
 fmt_uptime() {{ echo 1m00s; }}; engine_panic_count() {{ echo 0; }}
@@ -591,7 +611,8 @@ status_one fixture
                 "FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=0\nlast event\n",
                 encoding="ascii",
             )
-            command = f'''eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
+            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
 cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$LOG"; }}
