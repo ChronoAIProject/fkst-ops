@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from schema.validator import SCHEMA_ID, ValidationError, load_and_resolve
+from schema.validator import SCHEMA_ID, ValidationError, declared_external_tools, load_and_resolve
 from bootstrap.canonical_tree import canonical_tree_sha256
 
 
@@ -210,7 +210,8 @@ def _materialise_engine(
 
 
 def _hydrate(
-    declarations: list[tuple[Path, dict[str, Any]]], lock_path: Path, machine_root: Path
+    declarations: list[tuple[Path, dict[str, Any]]], lock_path: Path, machine_root: Path,
+    tools: dict[str, str],
 ) -> None:
     lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     pins = {entry["id"]: entry for entry in lock.get("external_source", [])}
@@ -240,8 +241,11 @@ def _hydrate(
             for field in ("durable", "runtime", "logs", "rate_pool"):
                 preserved_roots.add(machine[field])
             engine_provider = providers[deployment["providers"]["engine"]]
+            command = list(engine_provider["configuration"]["build_command"])
+            if Path(command[0]).name == command[0]:
+                command[0] = tools[command[0]]
             engine_spec = (
-                machine["engine_checkout"], engine_provider["configuration"]["build_command"]
+                machine["engine_checkout"], command
             )
             binary_name = machine["engine_binary"]
             if binary_name in engine_specs and engine_specs[binary_name] != engine_spec:
@@ -305,8 +309,26 @@ def _quoted(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
-def _profile_text(declarations: list[tuple[Path, dict[str, Any]]], machine_root: Path) -> str:
+def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str, str]:
+    names = set().union(*(declared_external_tools(document) for _, document in declarations))
+    discovered: dict[str, str] = {}
+    for name in sorted(names):
+        location = shutil.which(name)
+        if location is None:
+            raise ValueError(f"declared external tool cannot be found: {name}")
+        path = Path(location).resolve()
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ValueError(f"declared external tool is not executable: {name}")
+        discovered[name] = str(path)
+    return discovered
+
+
+def _profile_text(
+    declarations: list[tuple[Path, dict[str, Any]]], machine_root: Path,
+    tools: dict[str, str] | None = None,
+) -> str:
     base = machine_root
+    tools = _discover_tools(declarations) if tools is None else tools
     roots: dict[str, str] = {}
     binaries: dict[str, str] = {}
     credentials: dict[str, str] = {}
@@ -344,7 +366,8 @@ def _profile_text(declarations: list[tuple[Path, dict[str, Any]]], machine_root:
 
     lines = ['schema = "fkst.ops.machine-profile.v1"', ""]
     for heading, values in (
-        ("roots", roots), ("binaries", binaries), ("credentials", credentials)
+        ("roots", roots), ("binaries", binaries), ("tools", tools),
+        ("credentials", credentials),
     ):
         lines.append(f"[{heading}]")
         lines.extend(f"{_quoted(key)} = {_quoted(value)}" for key, value in sorted(values.items()))
@@ -611,7 +634,8 @@ def generate(
     (machine_root / "watch").mkdir(parents=True, exist_ok=True)
     launch_agent.parent.mkdir(parents=True, exist_ok=True)
     lock = _canonical_repository_file(repository, "fkst.lock", "lock")
-    profile_text = _profile_text(declarations, machine_root)
+    tools = _discover_tools(declarations)
+    profile_text = _profile_text(declarations, machine_root, tools)
     manifest_text = json.dumps({
         "schema": "fkst.ops.declaration-set.v2",
         "repository": str(repository),
@@ -623,7 +647,7 @@ def generate(
         ],
     }, sort_keys=True, separators=(",", ":")) + "\n"
 
-    _hydrate(declarations, lock, machine_root)
+    _hydrate(declarations, lock, machine_root, tools)
     staging = Path(tempfile.mkdtemp(prefix=".control-", dir=machine_root))
     try:
         generation_name = f"generation-{os.getpid()}-{os.urandom(8).hex()}"

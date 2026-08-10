@@ -95,6 +95,8 @@ packages-logs = "{logs}"
 shared-rate-pool = "{deployment / 'rates'}"
 [binaries]
 engine = "{engine / 'fkst-framework'}"
+[tools]
+make = "{shutil.which('make')}"
 [credentials]
 github-bot = "fixture-bot"
 [sets]

@@ -11,7 +11,7 @@ import tomllib
 import pytest
 
 from bootstrap.canonical_tree import canonical_tree_sha256
-from schema.validator import load_and_resolve
+from schema.validator import ValidationError, load_and_resolve
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -148,6 +148,105 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     assert profile_argument.parent.parent.name == "generations"
     assert profile_argument.read_bytes() == profile.read_bytes()
     assert "cadence_schedule=enabled live=yes interval_seconds=300" in result.stdout
+
+
+def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    tool_name = "cargo"
+    additional_tool_name = "secondary-build"
+    tool_directory = tmp_path / "discovery-tools"
+    tool_directory.mkdir()
+    tool = tool_directory / tool_name
+    tool.write_text(
+        "#!/bin/sh\n"
+        "mkdir -p target/debug\n"
+        "printf '#!/bin/sh\\nexit 0\\n' > target/debug/engine\n"
+        "chmod +x target/debug/engine\n",
+        encoding="ascii",
+    )
+    tool.chmod(0o755)
+    additional_tool = tool_directory / additional_tool_name
+    additional_tool.write_bytes(tool.read_bytes())
+    additional_tool.chmod(0o755)
+    declaration_text = (repository / "deployment.toml").read_text(encoding="ascii")
+    declaration_text = declaration_text.replace('"./cargo", "build"', f'"{tool_name}", "build"')
+    declaration_text += (
+        "\n[[provider]]\n"
+        'id = "secondary-engine"\n'
+        'kind = "engine"\n'
+        'implementation = "engine-source:bin/build-provider"\n'
+        'contract = "fkst.ops.engine.v1"\n'
+        f'configuration = {{ build_command = ["{additional_tool_name}"] }}\n'
+    )
+    (repository / "deployment.toml").write_text(declaration_text, encoding="ascii")
+    monkeypatch.setenv("PATH", str(tool_directory) + os.pathsep + os.environ["PATH"])
+
+    result = run_generator(repository, home)
+    assert result.returncode == 0, result.stderr
+    profile = home / ".fkst" / "machine" / "profile.toml"
+    profile_data = tomllib.loads(profile.read_text(encoding="ascii"))
+    assert profile_data["tools"] == {
+        tool_name: str(tool.resolve()),
+        additional_tool_name: str(additional_tool.resolve()),
+    }
+    resolved = load_and_resolve(repository / "deployment.toml", profile, repository / "fkst.lock")
+    deployment = resolved["deployment"][0]
+    command_from_profile = deployment["providers"]["engine"]["configuration"]["build_command"]
+    assert command_from_profile[0] == str(tool.resolve())
+    git(Path(deployment["machine"]["engine_checkout"]), "branch", "--set-upstream-to=origin/integration")
+
+    invocation = {
+        "version": "fkst.ops.invocation.v1",
+        "contract": "fkst.ops.engine.v1",
+        "input": {
+            "engine_checkout": deployment["machine"]["engine_checkout"],
+            "engine_binary": deployment["machine"]["engine_binary"],
+            "expected_branch": deployment["integration"]["integration_branch"],
+            "operation": "build",
+            "build_command": command_from_profile,
+        },
+    }
+    provider = ROOT / "providers" / "engine.py"
+    provider_result = subprocess.run(
+        [sys.executable, str(provider)], input=json.dumps(invocation),
+        env={**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+        text=True, capture_output=True, check=False,
+    )
+    assert provider_result.returncode == 0, provider_result.stdout + provider_result.stderr
+
+    profile_without_tool = tmp_path / "profile-without-tool.toml"
+    profile_data["tools"].pop(additional_tool_name)
+    profile_without_tool.write_text(
+        profile.read_text(encoding="ascii").replace(
+            f'"{additional_tool_name}" = "{additional_tool.resolve()}"\n', ""
+        ),
+        encoding="ascii",
+    )
+    with pytest.raises(ValidationError, match=additional_tool_name):
+        load_and_resolve(
+            repository / "deployment.toml", profile_without_tool, repository / "fkst.lock"
+        )
+
+
+def test_generation_fails_with_unavailable_declared_tool_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    missing_tool = "unavailable-build-tool"
+    declaration = repository / "deployment.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="ascii").replace('"./cargo"', f'"{missing_tool}"'),
+        encoding="ascii",
+    )
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 2
+    assert f"declared external tool cannot be found: {missing_tool}" in result.stderr
+    assert not (home / ".fkst" / "machine" / "profile.toml").exists()
 
 
 def test_generation_activates_and_deactivates_declared_schedule(tmp_path: Path) -> None:
