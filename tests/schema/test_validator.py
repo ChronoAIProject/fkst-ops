@@ -35,6 +35,10 @@ class ValidatorTests(unittest.TestCase):
         binary.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
         binary.chmod(0o755)
         self.machine["binaries"]["engine"] = str(binary)
+        tool = root / "make"
+        tool.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        tool.chmod(0o755)
+        self.machine["tools"] = {"make": str(tool)}
         self._prepare_deployment_paths(self.declaration)
 
     def _prepare_deployment_paths(self, declaration: dict) -> None:
@@ -170,7 +174,10 @@ class ValidatorTests(unittest.TestCase):
             Path(deployment["providers"]["engine"]["executable"]),
             Path(__file__).parents[2] / "providers/engine.py",
         )
-        self.assertEqual(deployment["providers"]["engine"]["configuration"]["build_command"], ["make", "engine"])
+        self.assertEqual(
+            deployment["providers"]["engine"]["configuration"]["build_command"],
+            [self.machine["tools"]["make"], "engine"],
+        )
 
     def test_rejects_malformed_engine_build_command(self) -> None:
         self.declaration["provider"][0]["configuration"]["build_command"] = "make engine"

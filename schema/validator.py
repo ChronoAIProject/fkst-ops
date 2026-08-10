@@ -129,7 +129,7 @@ def _validate_lock(lock: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _validate_machine_profile(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    allowed = {"schema", "roots", "binaries", "credentials", "sets", "defaults"}
+    allowed = {"schema", "roots", "binaries", "tools", "credentials", "sets", "defaults"}
     _closed(profile, allowed, "machine_profile")
     if _string(profile, "schema", "machine_profile") != MACHINE_SCHEMA_ID:
         _fail("machine_profile.schema", f"must be {MACHINE_SCHEMA_ID}")
@@ -144,10 +144,49 @@ def _validate_machine_profile(profile: dict[str, Any]) -> dict[str, dict[str, An
                     _fail(f"machine_profile.{kind}.{name}", "must be a string list")
             elif not isinstance(value, str) or not value:
                 _fail(f"machine_profile.{kind}.{name}", "must be a non-empty string")
-            if kind in {"roots", "binaries"} and not os.path.isabs(value):
+            if kind in {"roots", "binaries", "tools"} and not os.path.isabs(value):
                 _fail(f"machine_profile.{kind}.{name}", "must be an absolute path")
         result[kind] = values
     return result
+
+
+def declared_external_tools(declaration: dict[str, Any]) -> set[str]:
+    """Return bare executables named by provider command configuration fields."""
+    tools: set[str] = set()
+    for provider in declaration.get("provider", []):
+        if not isinstance(provider, dict):
+            continue
+        configuration = provider.get("configuration", {})
+        if not isinstance(configuration, dict):
+            continue
+        for field, command in configuration.items():
+            if field.endswith("_command") and isinstance(command, list) and command:
+                executable = command[0]
+                if isinstance(executable, str) and executable and Path(executable).name == executable:
+                    tools.add(executable)
+    return tools
+
+
+def _resolve_provider_commands(
+    providers: dict[str, dict[str, Any]], tools: dict[str, Any]
+) -> None:
+    for provider in providers.values():
+        configuration = provider["configuration"]
+        for field, command in configuration.items():
+            if not field.endswith("_command") or not isinstance(command, list) or not command:
+                continue
+            executable = command[0]
+            if Path(executable).name != executable:
+                continue
+            if executable not in tools:
+                _fail(
+                    f"machine_profile.tools.{executable}",
+                    f"missing discovered tool location for declared executable: {executable}",
+                )
+            resolved = _require_executable(
+                tools[executable], f"machine_profile.tools.{executable}"
+            )
+            command[0] = str(resolved)
 
 
 def _resolve_machine(
@@ -291,6 +330,8 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             _fail(path + ".implementation", "entry point must be a safe relative path")
         providers[identity] = {"id": identity, "kind": kind, "implementation": implementation,
                                "contract": contract, "configuration": resolved_configuration}
+
+    _resolve_provider_commands(providers, machine_values["tools"])
 
     deployments = declaration.get("deployment")
     if not isinstance(deployments, list) or not deployments:

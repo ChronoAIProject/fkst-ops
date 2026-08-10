@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -105,6 +106,8 @@ runtime="{runtime}"
 logs="{logs}"
 [binaries]
 binary="{binary}"
+[tools]
+true="{shutil.which('true')}"
 [credentials]
 [sets]
 [defaults]
