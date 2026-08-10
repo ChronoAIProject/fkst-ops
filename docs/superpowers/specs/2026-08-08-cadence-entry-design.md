@@ -1,30 +1,38 @@
 # Cadence Entry Design
 
-The repository-owned `watch/cadence_round.py` defines one round and owns no scheduler. It discovers
-every TOML document with schema `fkst.ops.deployment.v1` below an explicitly supplied deployment
-repository, invokes the repository's `bin/fkst-ops` entry with `sync` and then `status`, and appends
-one JSON Lines record per declaration. A failed declaration does not stop later declarations and
-makes the round fail.
+**Status:** Historical design record, superseded by [SPEC.md](../../../SPEC.md)
+**Date:** 2026-08-08
 
-The round accepts the deployment repository, machine profile, ledger, and operator entry only from
-arguments or the corresponding `FKST_WATCH_*` environment variables. It passes its environment
-through unchanged and never assigns `FKST_GITHUB_WRITE`, so write posture remains machine-owned.
-Scheduling policy is deployment-owned. Every declaration carries the one positive integer
-`cadence_interval_seconds`; all declarations in one deployment repository must agree. Machine
-paths are discovered. `bin/fkst-regenerate <deployment-repository>` combines both with the
-committed launchd template and writes the generated LaunchAgent. There is no operator-selected
-plist literal.
+This record preserves the rationale for a proposed cadence entry. It does not
+define current behavior, ownership, installation instructions, or guarantees.
+`SPEC.md` is the sole normative owner and explicitly excludes scheduling,
+launchd installation, and deployment discovery from this repository's
+guarantees.
 
-The same command generates `.fkst/machine-profile.toml`. Logical root and binary names map under
-the conventional `$HOME/.fkst/machine` base, the bot login comes from exactly one active GitHub CLI
-account backed by `GH_TOKEN`, managed bot sets come from each declaration's `managed_bot_logins`,
-and integration branches remain explicit declaration parameters. It invokes the unchanged real
-validator for every declaration before it writes the LaunchAgent. User and app API endpoints are
-not identity sources: an installation token is not a user, while `/app` requires an app JWT.
+The design proposed that `watch/cadence_round.py` perform one round without
+owning a scheduler. The round would discover deployment declarations below an
+explicitly supplied deployment repository, invoke `bin/fkst-ops` with `sync`
+and then `status`, and append one JSON Lines record per declaration. It proposed
+continuing after an individual declaration failure while making the round fail.
 
-The deployment repository path is the only genuinely required input: discovery cannot know which
-of potentially many deployment repositories the operator intends to regenerate. The derived files
-are the deployment repository's `.fkst/machine-profile.toml` and
-`$HOME/Library/LaunchAgents/com.fkst.cadence.plist`, both produced by
-`watch/generate_artifacts.py`. The ledger and standard streams are runtime records created later
-by the scheduled round and launchd, not hand-authored inputs.
+The proposed interface accepted the deployment repository, machine profile,
+ledger, and operator entry through arguments or corresponding `FKST_WATCH_*`
+environment variables. It preserved the incoming environment and did not set
+`FKST_GITHUB_WRITE`. The proposal placed cadence policy in deployment data,
+required declarations in one deployment repository to agree on a positive
+interval, discovered machine paths, and generated a LaunchAgent from a
+committed template rather than an operator-authored plist.
+
+The proposal also generated `.fkst/machine-profile.toml`, mapped logical roots
+and binaries under a conventional machine base, derived authenticated identity
+from one active GitHub CLI account, and retained managed bot sets and
+integration branches as deployment parameters. Validation before artifact
+publication and the distinction between user and app authentication were part
+of the rationale.
+
+Requiring an explicit deployment repository was intended to avoid guessing
+among multiple repositories. The proposed derived artifacts were a machine
+profile and LaunchAgent plist; the ledger and standard streams were treated as
+runtime records rather than authored inputs. These statements describe the
+historical proposal only. They do not authorize generation, installation,
+loading, replacement, or reconfiguration of a current deployment.
