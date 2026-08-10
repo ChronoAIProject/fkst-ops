@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 from html import escape
 import json
@@ -523,6 +524,19 @@ def _prune_generations(control: Path, schedule: ScheduleState | None) -> None:
 def _publish_control_files(
     staged: dict[Path, Path], launch_agent: Path, enabled: bool, reconcile: bool,
     control: Path, generation_name: str | None = None,
+) -> bool | None:
+    control.mkdir(parents=True, exist_ok=True)
+    with (control / ".publish.lock").open("a+b") as lock:
+        _publication_checkpoint("lock-attempt")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _publish_control_files_locked(
+            staged, launch_agent, enabled, reconcile, control, generation_name
+        )
+
+
+def _publish_control_files_locked(
+    staged: dict[Path, Path], launch_agent: Path, enabled: bool, reconcile: bool,
+    control: Path, generation_name: str | None,
 ) -> bool | None:
     previous_schedule = _schedule_state() if reconcile else None
     previous_generation = _prepare_control_lineage(staged, control)

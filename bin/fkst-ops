@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TREE_HASHER="$ROOT/bootstrap/canonical_tree.py"
-source "$ROOT/ops/public_actions.sh"
 usage() {
-  local actions
-  actions="$(IFS='|'; echo "${FKST_OPS_PUBLIC_ACTIONS[*]}")"
+  local actions="ACTION"
+  if declare -p FKST_OPS_PUBLIC_ACTIONS >/dev/null 2>&1; then
+    actions="$(IFS='|'; echo "${FKST_OPS_PUBLIC_ACTIONS[*]}")"
+  fi
   echo "usage: fkst-ops [preflight] [--deployment-dir PATH] --declaration PATH --machine-config PATH [--lock PATH] [$actions] [args...]" >&2
   echo "stop: sends SIGKILL; 'stop all' attempts every target and exits nonzero if any target fails; recovery uses durable state" >&2
 }
@@ -82,22 +82,87 @@ PY
 }
 
 verify_checkout() {
-  local checkout="$1" revision="$2" expected_tree="$3" head actual_tree
-  head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
-  [ "$head" = "$revision" ] || return 1
-  actual_tree="$(python3 "$TREE_HASHER" "$checkout" "$revision")" || return 1
-  [ "$actual_tree" = "$expected_tree" ]
+  verify_checkout_details "$@" >/dev/null
+}
+
+verify_checkout_details() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import hashlib
+import os
+import stat
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+root, revision, expected_tree = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+git_env = {"PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1", "HOME": "/dev/null"}
+
+def git(*args: str) -> bytes:
+    return subprocess.run(
+        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
+        env=git_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    ).stdout
+
+try:
+    head_result = subprocess.run(
+        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), "rev-parse", "HEAD"],
+        env=git_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    head = head_result.stdout.decode("ascii").strip() if head_result.returncode == 0 else ""
+    if head != revision:
+        print(f"error: fkst-ops resolved.rev mismatch: expected {revision}, got {head or 'missing'}")
+        raise SystemExit(1)
+
+    entries = []
+    for raw in git("ls-tree", "-r", "-z", "--full-tree", revision).split(b"\0"):
+        if not raw:
+            continue
+        metadata, path = raw.split(b"\t", 1)
+        mode, kind, object_id = metadata.split(b" ", 2)
+        if kind != b"blob":
+            raise RuntimeError(f"tracked path {path!r} is not a blob")
+        entries.append((path, mode, object_id))
+
+    digest = hashlib.sha256()
+    drifted = []
+    for path, mode, object_id in sorted(entries):
+        blob = git("cat-file", "blob", object_id.decode("ascii"))
+        for field in (path, mode, hashlib.sha256(blob).digest()):
+            digest.update(struct.pack(">Q", len(field)))
+            digest.update(field)
+        materialised = root / os.fsdecode(path)
+        try:
+            metadata = materialised.lstat()
+            if mode == b"120000":
+                actual = os.fsencode(os.readlink(materialised))
+                valid_mode = stat.S_ISLNK(metadata.st_mode)
+            else:
+                actual = materialised.read_bytes()
+                actual_mode = b"100755" if metadata.st_mode & stat.S_IXUSR else b"100644"
+                valid_mode = stat.S_ISREG(metadata.st_mode) and actual_mode == mode
+            if not valid_mode or actual != blob:
+                drifted.append(os.fsdecode(path))
+        except OSError:
+            drifted.append(os.fsdecode(path))
+
+    actual_tree = "sha256-" + digest.hexdigest()
+    if actual_tree != expected_tree:
+        print(f"error: fkst-ops tree_sha256 mismatch: expected {expected_tree}, got {actual_tree}")
+        raise SystemExit(1)
+    if drifted:
+        print("error: fkst-ops tracked checkout differs from the pinned revision; refusing to execute:")
+        print("\n".join(sorted(set(drifted))))
+        print("Restore or replace the cached checkout so its tracked files match the pinned revision, then retry.")
+        raise SystemExit(1)
+except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError) as exc:
+    print(f"error: fkst-ops checkout verification failed: {exc}")
+    raise SystemExit(1)
+PY
 }
 
 report_verification_failure() {
-  local checkout="$1" revision="$2" expected_tree="$3" head actual_tree
-  head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
-  if [ "$head" != "$revision" ]; then
-    echo "error: fkst-ops resolved.rev mismatch: expected $revision, got ${head:-missing}" >&2
-    return
-  fi
-  actual_tree="$(python3 "$TREE_HASHER" "$checkout" "$revision" 2>/dev/null || true)"
-  echo "error: fkst-ops tree_sha256 mismatch: expected $expected_tree, got ${actual_tree:-unavailable}" >&2
+  verify_checkout_details "$@" >&2 || true
 }
 
 replace_pointer() {
@@ -186,6 +251,7 @@ if ! verify_checkout "$ROOT" "$revision" "$expected_tree"; then
   FKST_OPS_REEXEC_DEPTH=1 exec "$verified/bin/fkst-ops" "${original_argv[@]}"
 fi
 
+source "$ROOT/ops/public_actions.sh"
 export FKST_OPS_DECLARATION="$declaration"
 export FKST_OPS_MACHINE_PROFILE="$machine"
 export FKST_OPS_LOCK="$lock"
