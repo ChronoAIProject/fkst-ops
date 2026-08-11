@@ -91,6 +91,7 @@ print("\t".join(fields))
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
+  CARGO="$("$PYTHON" -c 'import json, pathlib, sys; command=json.loads(sys.argv[1])["build_command"]; print(command[0] if pathlib.Path(command[0]).name == "cargo" else "")' "$ENGINE_PROVIDER_CONFIGURATION")" || return 1
 }
 
 derive_devloop_pkgs_from_workspace() { # $1 name
@@ -462,7 +463,8 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   require_engine_binary || return 1
   printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s\n' \
     "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
-  env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
+  env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_CARGO="$CARGO" \
+    FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
     FKST_GITHUB_CREDENTIAL_SOURCE="github-app" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
     FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
     FKST_GITHUB_CLAIM_MODE="$CLAIM_MODE" FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE="$CLAIM_LABEL_EXCLUSIVE" \

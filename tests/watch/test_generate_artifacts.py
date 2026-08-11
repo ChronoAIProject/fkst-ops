@@ -157,7 +157,6 @@ def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
 ) -> None:
     repository, home, _ = prepared(tmp_path)
     tool_name = "cargo"
-    additional_tool_name = "secondary-build"
     tool_directory = tmp_path / "discovery-tools"
     tool_directory.mkdir()
     tool = tool_directory / tool_name
@@ -169,19 +168,8 @@ def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
         encoding="ascii",
     )
     tool.chmod(0o755)
-    additional_tool = tool_directory / additional_tool_name
-    additional_tool.write_bytes(tool.read_bytes())
-    additional_tool.chmod(0o755)
     declaration_text = (repository / "deployment.toml").read_text(encoding="ascii")
     declaration_text = declaration_text.replace('"./cargo", "build"', f'"{tool_name}", "build"')
-    declaration_text += (
-        "\n[[provider]]\n"
-        'id = "secondary-engine"\n'
-        'kind = "engine"\n'
-        'implementation = "engine-source:bin/build-provider"\n'
-        'contract = "fkst.ops.engine.v1"\n'
-        f'configuration = {{ build_command = ["{additional_tool_name}"] }}\n'
-    )
     (repository / "deployment.toml").write_text(declaration_text, encoding="ascii")
     monkeypatch.setenv("PATH", str(tool_directory) + os.pathsep + os.environ["PATH"])
 
@@ -190,7 +178,6 @@ def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
     profile = home / ".fkst" / "machine" / "profile.toml"
     profile_data = tomllib.loads(profile.read_text(encoding="ascii"))
     assert profile_data["tools"][tool_name] == str(tool.resolve())
-    assert profile_data["tools"][additional_tool_name] == str(additional_tool.resolve())
     assert set(MECHANISM_TOOLS) <= set(profile_data["tools"])
     resolved = load_and_resolve(repository / "deployment.toml", profile, repository / "fkst.lock")
     deployment = resolved["deployment"][0]
@@ -218,17 +205,61 @@ def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
     assert provider_result.returncode == 0, provider_result.stdout + provider_result.stderr
 
     profile_without_tool = tmp_path / "profile-without-tool.toml"
-    profile_data["tools"].pop(additional_tool_name)
     profile_without_tool.write_text(
         profile.read_text(encoding="ascii").replace(
-            f'"{additional_tool_name}" = "{additional_tool.resolve()}"\n', ""
-        ),
-        encoding="ascii",
+            f'"{tool_name}" = "{tool.resolve()}"\n', ""
+        ), encoding="ascii",
     )
-    with pytest.raises(ValidationError, match=additional_tool_name):
+    with pytest.raises(ValidationError, match=tool_name):
         load_and_resolve(
             repository / "deployment.toml", profile_without_tool, repository / "fkst.lock"
         )
+
+
+def test_operator_cfg_loads_discovered_cargo_from_generated_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    tool_directory = tmp_path / "discovery-tools"
+    tool_directory.mkdir()
+    cargo = tool_directory / "cargo"
+    cargo.write_text(
+        "#!/bin/sh\nmkdir -p target/debug\nprintf '#!/bin/sh\\nexit 0\\n' > target/debug/engine\nchmod +x target/debug/engine\n",
+        encoding="ascii",
+    )
+    cargo.chmod(0o755)
+    declaration = repository / "deployment.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="ascii").replace('"./cargo"', '"cargo"'),
+        encoding="ascii",
+    )
+    monkeypatch.setenv("PATH", str(tool_directory) + os.pathsep + os.environ["PATH"])
+    generated = run_generator(repository, home)
+    assert generated.returncode == 0, generated.stderr
+
+    operator = ROOT / "ops" / "deployment_operator.sh"
+    command = f'''set -e
+PYTHON="{sys.executable}"
+_self_dir="{ROOT / 'ops'}"
+RESOLVED_DECLARATION="$(PYTHONPATH="{ROOT}" "$PYTHON" -m schema.validator "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK")"
+eval "$(sed -n '/^cfg()/,/^}}/p' "{operator}")"
+cfg packages
+printf '%s' "$CARGO"
+'''
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={
+            **os.environ,
+            "FKST_OPS_DECLARATION": str(declaration),
+            "FKST_OPS_MACHINE_PROFILE": str(home / ".fkst" / "machine" / "profile.toml"),
+            "FKST_OPS_LOCK": str(repository / "fkst.lock"),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == str(cargo.absolute())
 
 
 def test_generation_fails_with_unavailable_declared_tool_named(
@@ -255,6 +286,7 @@ def test_generation_fails_with_unavailable_declared_tool_named(
 
     assert result.returncode == 2
     assert f"declared external tool cannot be found: {missing_tool}" in result.stderr
+    assert "deployment: packages" in result.stderr
     assert not (home / ".fkst" / "machine" / "profile.toml").exists()
 
 
@@ -276,7 +308,7 @@ def test_generation_fails_with_unavailable_required_mechanism_tool_named(
     assert not (home / ".fkst" / "machine" / "profile.toml").exists()
 
 
-def test_discovery_allows_optional_lsof_to_be_absent(
+def test_undeclared_cargo_does_not_affect_discovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tool_directory = tmp_path / "mechanism-tools"
@@ -289,9 +321,16 @@ def test_discovery_allows_optional_lsof_to_be_absent(
         str(tool_directory / name) if name in {"gh", "gh-app"} else None
     ))
 
-    tools = _discover_tools([])
+    repository, _, _ = prepared(tmp_path)
+    declaration = tomllib.loads((repository / "deployment.toml").read_text(encoding="ascii"))
+    declaration["provider"][0]["configuration"]["build_command"][0] = "./cargo"
+    tools = _discover_tools([(repository / "deployment.toml", declaration)])
 
-    assert tools == {name: str(tool_directory / name) for name in ("gh", "gh-app")}
+    assert tools == {
+        name: str(tool_directory / name)
+        for name, tool in MECHANISM_TOOLS.items()
+        if tool.required
+    }
 
 
 def test_generation_activates_and_deactivates_declared_schedule(tmp_path: Path) -> None:

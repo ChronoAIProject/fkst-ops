@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from schema.validator import SCHEMA_ID, ValidationError, declared_external_tools, load_and_resolve
+from schema.validator import SCHEMA_ID, ValidationError, load_and_resolve
 from schema.mechanism_tools import MECHANISM_TOOLS
 from bootstrap.canonical_tree import canonical_tree_sha256
 
@@ -310,10 +310,27 @@ def _quoted(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
+def _declared_tool_deployments(
+    declarations: list[tuple[Path, dict[str, Any]]],
+) -> dict[str, set[str]]:
+    uses: dict[str, set[str]] = {}
+    for _, declaration in declarations:
+        providers = {provider["id"]: provider for provider in declaration["provider"]}
+        for deployment in declaration["deployment"]:
+            for provider_id in deployment["providers"].values():
+                configuration = providers[provider_id]["configuration"]
+                for field, command in configuration.items():
+                    if not field.endswith("_command") or not isinstance(command, list) or not command:
+                        continue
+                    executable = command[0]
+                    if Path(executable).name == executable:
+                        uses.setdefault(executable, set()).add(deployment["id"])
+    return uses
+
+
 def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str, str]:
-    declared_names = set().union(
-        *(declared_external_tools(document) for _, document in declarations)
-    )
+    declared_uses = _declared_tool_deployments(declarations)
+    declared_names = set(declared_uses)
     names = declared_names | set(MECHANISM_TOOLS)
     discovered: dict[str, str] = {}
     for name in sorted(names):
@@ -322,15 +339,25 @@ def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str
             mechanism_tool = MECHANISM_TOOLS.get(name)
             if mechanism_tool is not None and not mechanism_tool.required:
                 continue
-            kind = "mechanism" if mechanism_tool is not None else "declared external"
-            raise ValueError(f"{kind} tool cannot be found: {name}")
+            if mechanism_tool is not None:
+                raise ValueError(f"mechanism tool cannot be found: {name}")
+            deployments = ", ".join(sorted(declared_uses[name]))
+            raise ValueError(
+                f"declared external tool cannot be found: {name} "
+                f"(deployment: {deployments})"
+            )
         # Record the entry point as found, without resolving symlinks. Toolchain
         # shims such as rustup's `cargo` dispatch on argv[0]; resolving the link
         # rewrites that name and the shim stops knowing which tool it is.
         path = Path(location).absolute()
         if not path.is_file() or not os.access(path, os.X_OK):
-            kind = "mechanism" if name in MECHANISM_TOOLS else "declared external"
-            raise ValueError(f"{kind} tool is not executable: {name}")
+            if name in MECHANISM_TOOLS:
+                raise ValueError(f"mechanism tool is not executable: {name}")
+            deployments = ", ".join(sorted(declared_uses[name]))
+            raise ValueError(
+                f"declared external tool is not executable: {name} "
+                f"(deployment: {deployments})"
+            )
         discovered[name] = str(path)
     return discovered
 
