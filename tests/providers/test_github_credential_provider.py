@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -96,3 +97,18 @@ def test_token_is_absent_from_output_errors_artifacts_and_arguments() -> None:
                 observable += artifact.read_text(encoding="ascii")
     assert result.returncode != 0
     assert TOKEN not in observable
+
+
+def test_resolver_stderr_reaches_failure_with_command_and_origin() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        resolver, gh, _ = make_tools(root)
+        message = "distinctive resolver stderr, unchanged"
+        resolver.write_text(f"#!/bin/sh\nprintf '%s' '{message}' >&2\nexit 19\n", encoding="ascii")
+        result = invoke(resolver, gh, "declared-bot[bot]")
+    assert message in result.stderr
+    assert f"command={resolver} token --target {TARGET}" in result.stderr
+    match = re.search(r"origin=providers/github_credential_gh.py:(\d+)", result.stderr)
+    assert match
+    source_lines = PROVIDER.read_text(encoding="utf-8").splitlines()
+    assert 'fail("github-app-token-mint-failed"' in source_lines[int(match.group(1)) - 1]
