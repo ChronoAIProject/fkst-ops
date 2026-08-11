@@ -607,12 +607,28 @@ status_one() {
 # _proc_stale <name> -> freshness verdict of the RUNNING process vs origin/dev. Authoritative =
 # the code the process loaded at startup (logged code_provenance PKG_VERS/ENGINE_VER), NOT the
 # worktree/BIN file (those can be updated without reloading the process — only a restart reloads).
-# Echoes: stopped | current | skew (dev moved, non-package files only) | pkg-stale | engine-stale.
+# Echoes: stopped | current | skew (dev moved, declared non-executed files only) |
+# pkg-stale (platform code may have changed) | engine-stale.
 # PKG freshness is vs PKGSRC origin/$INTEGRATION_BRANCH (the run branch the deployment loads);
 # ENGINE freshness is the revision returned by the declared engine build provider.
+platform_paths_require_restart() {
+  local path
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      .github/*) ;; # CI-only configuration is not read by a running supervise.
+      scripts/*_test.*) ;; # Test-only scripts run under verification, not supervise.
+      scripts/check_repo*) ;; # Repository checker and lint scripts inspect source outside supervise.
+      docs/*|.claude/skills/*|AGENTS.md|CLAUDE.md|CONTRIBUTING.md|README.md|SECURITY.md|LICENSE) ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 _proc_stale() {
   cfg "$1" || { echo unknown; return; }
-  local p log procpkg proceng pdev sdev; p=$(pidof_df); log=$(latest_log "$1")
+  local p log procpkg proceng pdev sdev changed_paths; p=$(pidof_df); log=$(latest_log "$1")
   [ -z "$p" ] && { echo stopped; return; }
   derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
   git -C "$PKGSRC" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null
@@ -622,7 +638,9 @@ _proc_stale() {
   proceng=$(grep -aoE 'ENGINE_VER=[a-f0-9]+' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
   if [ -n "$proceng" ] && [ "${sdev:0:${#proceng}}" != "$proceng" ]; then echo engine-stale; return; fi
   if [ -n "$procpkg" ] && [ "${pdev:0:${#procpkg}}" != "$procpkg" ]; then
-    if [ -n "$(git -C "$PKGSRC" diff "$procpkg" "$pdev" -- packages/ 2>/dev/null)" ]; then echo pkg-stale; else echo skew; fi
+    changed_paths=$(git -C "$PKGSRC" diff --name-only "$procpkg" "$pdev" -- 2>/dev/null) \
+      || { echo pkg-stale; return; }
+    if platform_paths_require_restart <<<"$changed_paths"; then echo pkg-stale; else echo skew; fi
     return
   fi
   echo current
@@ -630,8 +648,8 @@ _proc_stale() {
 
 # cmd_sync: keep deployment-owned sources current in one call. The mechanism checkout is immutable:
 # its version is the deployment lock pin. Advance target/platform run branches, update and rebuild
-# each declared engine through its provider, then AUTO-RESTART only supervises whose RUNNING code is a real package or
-# engine change (pkg-stale/engine-stale). Skill/docs-only skew and already-current processes are
+# each declared engine through its provider, then AUTO-RESTART only supervises whose RUNNING code may have changed
+# (pkg-stale/engine-stale). Skill/docs-only skew and already-current processes are
 # left running — a restart would only churn in-flight codex for no code change.
 cmd_sync() {
   local n st failed=0
