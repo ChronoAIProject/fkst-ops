@@ -88,7 +88,12 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
                         },
                         "github_devloop_profile": {},
                         "providers": {
-                            key: {"executable": "/provider", "contract": "v1", "configuration": {}}
+                            key: {
+                                "executable": "/provider",
+                                "contract": "v1",
+                                "configuration": {"build_command": ["/bin/true"]}
+                                if key == "engine" else {},
+                            }
                             for key in (
                                 "github_credential", "engine", "board_engine_durable",
                                 "board_github_control",
@@ -234,7 +239,7 @@ sync_to_run_branch /checkout
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json, os, time\n"
-                "keys = ['FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
+                "keys = ['FKST_CARGO', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps({key: os.environ.get(key) for key in keys}))\n"
                 "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
                 "print('MSG=event runtime running', flush=True)\n"
@@ -257,6 +262,7 @@ wait_supervise_ready() {{
 clean_stale_runtime_worktrees() {{ :; }}
 engine_panic_count() {{ echo 0; }}
 REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
+CARGO=/fixture/resolved/cargo
 DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
 RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","peer-bot"]'
 AUTHORIZED_LOGINS='["trusted-author","second-author"]'; AUTHORIZE_ORG_MEMBERS=1; AUTHORIZE_REPO_COLLABORATORS=0
@@ -451,6 +457,10 @@ github_write_posture
         captured = self._capture_launch_environment(None)
         self.assertEqual(captured["FKST_GITHUB_CLAIM_MODE"], "label")
         self.assertEqual(captured["FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE"], "0")
+
+    def test_resolved_cargo_reaches_launched_process(self) -> None:
+        captured = self._capture_launch_environment(None)
+        self.assertEqual(captured["FKST_CARGO"], "/fixture/resolved/cargo")
 
     def test_launch_fails_closed_when_token_identity_differs_from_declared_bot(self) -> None:
         command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
