@@ -108,6 +108,8 @@ logs="{logs}"
 binary="{binary}"
 [tools]
 true="{shutil.which('true')}"
+gh="{shutil.which('true')}"
+gh-app="{shutil.which('true')}"
 [credentials]
 [sets]
 [defaults]
