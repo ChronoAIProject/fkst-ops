@@ -263,10 +263,11 @@ sync_to_run_branch /checkout
             fake_python.chmod(0o755)
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
-                "import json, os, shutil, time\n"
+                "import json, os, shutil, sys, time, tomllib\n"
                 "keys = ['PATH', 'FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_CREDENTIAL_RESOLVER', 'FKST_GITHUB_REAL_GH', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
                 "captured = {key: os.environ.get(key) for key in keys}\n"
                 "captured['codex'] = shutil.which('codex')\n"
+                "captured['python3'], captured['python3_executable'] = shutil.which('python3'), sys.executable\n"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps(captured))\n"
                 "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
                 "print('MSG=event runtime running', flush=True)\n"
@@ -502,8 +503,10 @@ github_write_posture
         path = captured["PATH"].split(os.pathsep)
         self.assertEqual(path[0], str(ROOT / "ops"))
         self.assertEqual(Path(captured["codex"]), Path(path[1]) / "codex")
+        self.assertEqual((captured["python3_executable"], captured["python3"]), (sys.executable, sys.executable))
         standard_path = os.confstr("CS_PATH") or os.defpath
-        self.assertEqual(path[2:], os.get_exec_path({"PATH": standard_path}))
+        expected_tail = [str(Path(sys.executable).parent), *os.get_exec_path({"PATH": standard_path})]
+        self.assertEqual(path[2:], list(dict.fromkeys(expected_tail)))
         self.assertNotIn("ambient-only", captured["PATH"])
 
     def test_bare_python_fallback_resolves_the_executable_it_actually_runs(self) -> None:
@@ -893,6 +896,4 @@ ensure_run_checkout "$1" "$2"
             self.assertEqual((checkout / "tracked").read_text(encoding="ascii"), "restored\n")
             self.assertTrue(list(root.glob("run.corrupt.*")))
 
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == "__main__": unittest.main()
