@@ -75,6 +75,33 @@ def _verified_checkout(root: Path, revision: str, tree: str, branch: str | None 
         return False
 
 
+def _verify_mechanism_root(lock_path: Path, root: Path = ROOT) -> None:
+    lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+    matches = [entry for entry in lock.get("external_source", []) if entry.get("id") == "fkst-ops"]
+    if len(matches) != 1:
+        raise ValueError("lock must contain exactly one fkst-ops mechanism pin")
+    pin = matches[0]
+    try:
+        if pin["checkout_role"] != "mechanism":
+            raise ValueError("fkst-ops lock entry must have checkout_role mechanism")
+        revision = pin["resolved"]["rev"]
+        tree = pin["resolved"]["tree_sha256"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("fkst-ops lock entry has no complete mechanism pin") from exc
+    if _verified_checkout(root, revision, tree):
+        return
+    try:
+        observed = _run_git(root, "rev-parse", "HEAD")
+        dirty = bool(_run_git(root, "status", "--porcelain", "--untracked-files=no"))
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(f"cannot inspect fkst-ops mechanism root {root}: {exc}") from exc
+    state = "dirty" if dirty else "clean"
+    raise ValueError(
+        f"fkst-ops mechanism root does not match its lock pin: "
+        f"current revision {observed}, lock revision {revision}, working tree {state}"
+    )
+
+
 def _verified_deployment_checkout(
     root: Path, revision: str, tree: str, branch: str
 ) -> bool:
@@ -666,13 +693,15 @@ def generate(
     if not isinstance(enabled, bool):
         raise ValueError("cadence_enabled must be a boolean")
 
+    lock = _canonical_repository_file(repository, "fkst.lock", "lock")
+    _verify_mechanism_root(lock)
+
     profile = machine_root / "profile.toml"
     manifest = machine_root / "declarations.json"
     launch_agent = machine_root / "LaunchAgents" / "com.fkst.cadence.plist"
     profile.parent.mkdir(parents=True, exist_ok=True)
     (machine_root / "watch").mkdir(parents=True, exist_ok=True)
     launch_agent.parent.mkdir(parents=True, exist_ok=True)
-    lock = _canonical_repository_file(repository, "fkst.lock", "lock")
     tools = _discover_tools(declarations)
     profile_text = _profile_text(declarations, machine_root, tools)
     manifest_text = json.dumps({

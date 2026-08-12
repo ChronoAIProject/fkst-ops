@@ -19,11 +19,13 @@ from watch.generate_artifacts import _discover_tools
 ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = ROOT / "watch" / "generate_artifacts.py"
 FIXTURES = ROOT / "tests" / "schema" / "fixtures"
+GIT = shutil.which("git")
+assert GIT is not None
 
 
 def git(root: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(root), *args], text=True, capture_output=True, check=True
+        [GIT, "-C", str(root), *args], text=True, capture_output=True, check=True
     ).stdout.strip()
 
 
@@ -90,6 +92,40 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
 def run_generator(
     repository: Path, home: Path, machine_root: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
+    mechanism = home / "mechanism"
+    if not mechanism.exists():
+        shutil.copytree(ROOT, mechanism, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        git(mechanism, "init", "-q")
+        git(mechanism, "config", "user.email", "test@example.invalid")
+        git(mechanism, "config", "user.name", "test")
+        git(mechanism, "add", ".")
+        git(mechanism, "commit", "-qm", "fixture mechanism")
+        revision = git(mechanism, "rev-parse", "HEAD")
+        environment = os.environ.copy()
+        environment["PATH"] = str(Path(GIT).parent)
+        prior_path = os.environ.get("PATH")
+        os.environ["PATH"] = environment["PATH"]
+        try:
+            tree = canonical_tree_sha256(mechanism, revision)
+        finally:
+            if prior_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = prior_path
+        lock_path = repository / "fkst.lock"
+        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+        for entry in lock["external_source"]:
+            if entry["id"] == "fkst-ops":
+                entry["resolved"] = {"rev": revision, "tree_sha256": tree}
+        lines = []
+        for entry in lock["external_source"]:
+            lines.extend([
+                "[[external_source]]", f'id = "{entry["id"]}"',
+                f'git = "{entry["git"]}"', f'checkout_role = "{entry["checkout_role"]}"',
+                "[external_source.resolved]", f'rev = "{entry["resolved"]["rev"]}"',
+                f'tree_sha256 = "{entry["resolved"]["tree_sha256"]}"', "",
+            ])
+        lock_path.write_text("\n".join(lines), encoding="ascii")
     launchctl = home / "fake-launchctl"
     if not launchctl.exists():
         launchctl.write_text(
@@ -108,13 +144,14 @@ def run_generator(
         )
         launchctl.chmod(0o755)
     environment = {**os.environ, "HOME": str(home)}
+    environment["PATH"] = os.pathsep.join((environment.get("PATH", ""), str(Path(GIT).parent)))
     environment.pop("GH_TOKEN", None)
     environment.update({
         "FKST_LAUNCHCTL": str(launchctl),
         "LAUNCHCTL_STATE": str(home / "launchctl.state"),
         "LAUNCHCTL_CALLS": str(home / "launchctl.calls"),
     })
-    command = [sys.executable, str(GENERATOR), str(repository)]
+    command = [sys.executable, str(mechanism / "watch" / "generate_artifacts.py"), str(repository)]
     if machine_root is not None:
         command.extend(["--machine-state-root", str(machine_root)])
     return subprocess.run(
