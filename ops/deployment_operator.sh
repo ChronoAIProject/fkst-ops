@@ -59,9 +59,10 @@ for name, tool in MECHANISM_TOOLS.items():
     if tool.child_path and value:
         child_path.append(str(Path(value).parent))
 standard_path = os.confstr("CS_PATH") or os.defpath
+child_path.append(str(Path(sys.argv[3]).parent))
 child_path.extend(os.get_exec_path({"PATH": standard_path}))
 print(f"DEPLOYMENT_CHILD_PATH={shlex.quote(os.pathsep.join(dict.fromkeys(child_path)))}")
-' "$FKST_OPS_MACHINE_PROFILE" "$_self_dir")" || exit $?
+' "$FKST_OPS_MACHINE_PROFILE" "$_self_dir" "$DEPLOYMENT_PYTHON")" || exit $?
 eval "$MECHANISM_TOOL_ASSIGNMENTS"
 DEPLOYMENT_OPERATOR_DEPLOYMENTS="$(printf '%s' "$RESOLVED_DECLARATION" | "$PYTHON" -c \
   'import json,sys; print(" ".join(item["id"] for item in json.load(sys.stdin)["deployment"]))')"
