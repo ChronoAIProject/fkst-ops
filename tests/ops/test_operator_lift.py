@@ -223,7 +223,9 @@ sync_to_run_branch /checkout
                 self.assertEqual(result.returncode, status, result.stdout + result.stderr)
                 self.assertIn(marker, result.stdout)
 
-    def _capture_launch_environment(self, write: str | None) -> dict[str, str]:
+    def _capture_launch_environment(
+        self, write: str | None, deployment_python: str = "/fixture/resolved/python"
+    ) -> dict[str, str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             platform = root / "platform"
@@ -239,7 +241,7 @@ sync_to_run_branch /checkout
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json, os, time\n"
-                "keys = ['FKST_CARGO', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
+                "keys = ['FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps({key: os.environ.get(key) for key in keys}))\n"
                 "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
                 "print('MSG=event runtime running', flush=True)\n"
@@ -263,6 +265,7 @@ clean_stale_runtime_worktrees() {{ :; }}
 engine_panic_count() {{ echo 0; }}
 REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
 CARGO=/fixture/resolved/cargo
+DEPLOYMENT_PYTHON={deployment_python!s}
 DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
 RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","peer-bot"]'
 AUTHORIZED_LOGINS='["trusted-author","second-author"]'; AUTHORIZE_ORG_MEMBERS=1; AUTHORIZE_REPO_COLLABORATORS=0
@@ -461,6 +464,28 @@ github_write_posture
     def test_resolved_cargo_reaches_launched_process(self) -> None:
         captured = self._capture_launch_environment(None)
         self.assertEqual(captured["FKST_CARGO"], "/fixture/resolved/cargo")
+
+    def test_resolved_python_reaches_launched_process(self) -> None:
+        captured = self._capture_launch_environment(None)
+        self.assertEqual(captured["FKST_PYTHON"], "/fixture/resolved/python")
+
+    def test_bare_python_fallback_resolves_the_executable_it_actually_runs(self) -> None:
+        function = next(
+            line for line in OPERATOR.read_text(encoding="utf-8").splitlines()
+            if line.startswith("resolve_deployment_python()")
+        )
+        command = f'''PYTHON=python3
+{function}
+resolve_deployment_python
+'''
+        result = subprocess.run(
+            ["bash", "-c", command], text=True, capture_output=True, check=False,
+        )
+        expected = subprocess.run(
+            ["python3", "-c", "import sys; print(sys.executable)"],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertEqual((result.returncode, result.stdout), (0, expected))
 
     def test_launch_fails_closed_when_token_identity_differs_from_declared_bot(self) -> None:
         command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
