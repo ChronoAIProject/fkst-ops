@@ -30,6 +30,10 @@ set -uo pipefail
 
 # ---- validated deployment input ----
 PYTHON="${FKST_OPS_PYTHON:-python3}"
+# Python bootstraps profile parsing, so the interpreter that actually started is the authority for
+# the child contract; it cannot be selected from the profile the operator has not parsed yet.
+resolve_deployment_python() { "$PYTHON" -c 'import sys; print(sys.executable)'; }
+DEPLOYMENT_PYTHON="$(resolve_deployment_python)" || exit $?
 _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_root="$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null || true)"
 : "${FKST_OPS_DECLARATION:?FKST_OPS_DECLARATION is required}"
@@ -463,7 +467,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   require_engine_binary || return 1
   printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s\n' \
     "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
-  env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_CARGO="$CARGO" \
+  env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_CARGO="$CARGO" FKST_PYTHON="$DEPLOYMENT_PYTHON" \
     FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
     FKST_GITHUB_CREDENTIAL_SOURCE="github-app" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
     FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
