@@ -333,9 +333,10 @@ def test_generation_fails_with_unavailable_required_mechanism_tool_named(
     repository, home, _ = prepared(tmp_path)
     tool_directory = tmp_path / "mechanism-tools"
     tool_directory.mkdir()
-    resolver = tool_directory / "gh-app"
-    resolver.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
-    resolver.chmod(0o755)
+    for name in ("codex", "gh-app"):
+        executable = tool_directory / name
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        executable.chmod(0o755)
     monkeypatch.setenv("PATH", str(tool_directory))
 
     result = run_generator(repository, home)
@@ -345,17 +346,36 @@ def test_generation_fails_with_unavailable_required_mechanism_tool_named(
     assert not (home / ".fkst" / "machine" / "profile.toml").exists()
 
 
-def test_undeclared_cargo_does_not_affect_discovery(
+def test_generation_requires_codex_as_a_path_delivered_mechanism_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    repository, home, _ = prepared(tmp_path)
     tool_directory = tmp_path / "mechanism-tools"
     tool_directory.mkdir()
     for name in ("gh", "gh-app"):
         executable = tool_directory / name
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
         executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tool_directory))
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 2
+    assert "mechanism tool cannot be found: codex" in result.stderr
+    assert not (home / ".fkst" / "machine" / "profile.toml").exists()
+
+
+def test_undeclared_cargo_does_not_affect_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool_directory = tmp_path / "mechanism-tools"
+    tool_directory.mkdir()
+    for name in ("codex", "gh", "gh-app"):
+        executable = tool_directory / name
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        executable.chmod(0o755)
     monkeypatch.setattr(shutil, "which", lambda name: (
-        str(tool_directory / name) if name in {"gh", "gh-app"} else None
+        str(tool_directory / name) if name in {"codex", "gh", "gh-app"} else None
     ))
 
     repository, _, _ = prepared(tmp_path)

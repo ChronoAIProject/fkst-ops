@@ -13,12 +13,10 @@ from pathlib import Path
 
 from schema.mechanism_tools import MECHANISM_TOOLS
 
-
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
 FKST_OPS = ROOT / "bin" / "fkst-ops"
 MANIFEST = ROOT / "ops" / "workspace_manifest.py"
-
 
 class OperatorLiftTest(unittest.TestCase):
     def test_every_enumerated_mechanism_tool_is_loaded_from_profile(self) -> None:
@@ -30,8 +28,9 @@ class OperatorLiftTest(unittest.TestCase):
         for name, tool in MECHANISM_TOOLS.items():
             with self.subTest(name=name):
                 self.assertIn(f'"{name}"', (ROOT / "schema" / "mechanism_tools.py").read_text())
-                self.assertIn(f'"{tool.shell_variable}"',
-                              (ROOT / "schema" / "mechanism_tools.py").read_text())
+                if tool.shell_variable is not None:
+                    self.assertIn(f'"{tool.shell_variable}"',
+                                  (ROOT / "schema" / "mechanism_tools.py").read_text())
 
     def test_mechanism_tools_have_no_runtime_path_lookup(self) -> None:
         source = OPERATOR.read_text(encoding="utf-8")
@@ -123,7 +122,8 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
             resolved_fixture = tools / "resolved.json"
             resolved_fixture.write_text(json.dumps(resolved), encoding="ascii")
             (tools / "machine.toml").write_text(
-                '[tools]\ngh = "/usr/bin/true"\ngh-app = "/usr/bin/true"\n',
+                '[tools]\ncodex = "/usr/bin/true"\ngh = "/usr/bin/true"\n'
+                'gh-app = "/usr/bin/true"\n',
                 encoding="ascii",
             )
             fake_python = tools / "python3"
@@ -238,22 +238,43 @@ sync_to_run_branch /checkout
                 encoding="ascii",
             )
             helper.chmod(0o755)
+            codex_directory = root / "codex-bin"
+            codex_directory.mkdir()
+            codex = codex_directory / "codex"
+            codex.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+            codex.chmod(0o755)
+            machine_profile = root / "machine.toml"
+            machine_profile.write_text(
+                f'[tools]\ngh = "/usr/bin/true"\ngh-app = "/usr/bin/true"\n'
+                f'codex = "{codex}"\n',
+                encoding="ascii",
+            )
+            resolved_fixture = root / "resolved.json"
+            resolved_fixture.write_text('{"deployment": []}\n', encoding="ascii")
+            fake_python = root / "python"
+            fake_python.write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = -m ] && [ "$2" = schema.validator ]; then\n'
+                '  exec cat "$RESOLVED_FIXTURE"\n'
+                "fi\n"
+                f'exec "{sys.executable}" "$@"\n',
+                encoding="ascii",
+            )
+            fake_python.chmod(0o755)
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
-                "import json, os, time\n"
-                "keys = ['FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
-                "open(os.environ['CAPTURE'], 'w').write(json.dumps({key: os.environ.get(key) for key in keys}))\n"
+                "import json, os, shutil, time\n"
+                "keys = ['PATH', 'FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_CREDENTIAL_RESOLVER', 'FKST_GITHUB_REAL_GH', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
+                "captured = {key: os.environ.get(key) for key in keys}\n"
+                "captured['codex'] = shutil.which('codex')\n"
+                "open(os.environ['CAPTURE'], 'w').write(json.dumps(captured))\n"
                 "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
                 "print('MSG=event runtime running', flush=True)\n"
                 "time.sleep(4)\n",
                 encoding="ascii",
             )
             run_script.chmod(0o755)
-            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
-eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
-eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
-eval "$(sed -n '/^launch_one()/,/^}}/p' "{OPERATOR}")"
-_self_dir="{ROOT / 'ops'}"
+            command = f'''source "{OPERATOR}"
 require_engine_binary() {{ :; }}
 derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=pkg; }}
 wait_supervise_ready() {{
@@ -275,11 +296,19 @@ LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURA
 mkdir -p "$HOST" "$DUR" "$RUNTIME_ROOT" "$LOGDIR"
 launch_one fixture 0
 '''
+            ambient_only = root / "ambient-only"
+            ambient_only.mkdir()
             env = os.environ.copy()
+            env["PATH"] = os.pathsep.join((str(ambient_only), env["PATH"]))
             env["CAPTURE"] = str(capture)
+            env["FKST_OPS_DECLARATION"] = str(root / "declaration.toml")
+            env["FKST_OPS_LOCK"] = str(root / "fkst.lock")
+            env["FKST_OPS_MACHINE_PROFILE"] = str(machine_profile)
+            env["FKST_OPS_PYTHON"] = str(fake_python)
             env["GITHUB_CREDENTIAL_PROVIDER"] = str(helper)
             env["FKST_GITHUB_REAL_GH"] = "/usr/bin/true"
             env["FKST_GITHUB_CREDENTIAL_RESOLVER"] = "/usr/bin/true"
+            env["RESOLVED_FIXTURE"] = str(resolved_fixture)
             env.pop("FKST_GITHUB_WRITE", None)
             command = command.replace(
                 "CLAIM_MODE=label;", f"GITHUB_WRITE_POSTURE={write or '0'}; CLAIM_MODE=label;"
@@ -449,6 +478,8 @@ github_write_posture
         self.assertTrue(captured["FKST_RATE_POOL_ROOT"].endswith("/rates"))
         self.assertEqual(captured["FKST_GITHUB_BOT_LOGIN"], "resolved-bot")
         self.assertEqual(captured["FKST_DEVLOOP_MANAGED_BOT_LOGINS"], "resolved-bot,peer-bot")
+        self.assertEqual(captured["FKST_GITHUB_REAL_GH"], "/usr/bin/true")
+        self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_RESOLVER"], "/usr/bin/true")
 
     def test_declared_author_authorization_reaches_launched_process(self) -> None:
         captured = self._capture_launch_environment(None)
@@ -465,9 +496,15 @@ github_write_posture
         captured = self._capture_launch_environment(None)
         self.assertEqual(captured["FKST_CARGO"], "/fixture/resolved/cargo")
 
-    def test_resolved_python_reaches_launched_process(self) -> None:
+    def test_resolved_python_and_generated_path_reach_launched_process(self) -> None:
         captured = self._capture_launch_environment(None)
         self.assertEqual(captured["FKST_PYTHON"], "/fixture/resolved/python")
+        path = captured["PATH"].split(os.pathsep)
+        self.assertEqual(path[0], str(ROOT / "ops"))
+        self.assertEqual(Path(captured["codex"]), Path(path[1]) / "codex")
+        standard_path = os.confstr("CS_PATH") or os.defpath
+        self.assertEqual(path[2:], os.get_exec_path({"PATH": standard_path}))
+        self.assertNotIn("ambient-only", captured["PATH"])
 
     def test_bare_python_fallback_resolves_the_executable_it_actually_runs(self) -> None:
         function = next(
