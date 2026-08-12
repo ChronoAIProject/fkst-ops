@@ -43,15 +43,25 @@ RESOLVED_DECLARATION="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PY
   "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK")" || exit $?
 MECHANISM_TOOL_ASSIGNMENTS="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -c '
 import os, shlex, sys, tomllib
+from pathlib import Path
 from schema.mechanism_tools import MECHANISM_TOOLS
 with open(sys.argv[1], "rb") as stream:
     profile_tools = tomllib.load(stream).get("tools", {})
+child_path = [sys.argv[2]]
 for name, tool in MECHANISM_TOOLS.items():
-    value = os.environ.get(tool.environment) or profile_tools.get(name, "")
+    value = (
+        os.environ.get(tool.environment, "") if tool.environment is not None else ""
+    ) or profile_tools.get(name, "")
     if tool.required and not value:
         raise SystemExit(f"error: machine profile has no carried mechanism tool: {name}")
-    print(f"{tool.shell_variable}={shlex.quote(value)}")
-' "$FKST_OPS_MACHINE_PROFILE")" || exit $?
+    if tool.shell_variable is not None:
+        print(f"{tool.shell_variable}={shlex.quote(value)}")
+    if tool.child_path and value:
+        child_path.append(str(Path(value).parent))
+standard_path = os.confstr("CS_PATH") or os.defpath
+child_path.extend(os.get_exec_path({"PATH": standard_path}))
+print(f"DEPLOYMENT_CHILD_PATH={shlex.quote(os.pathsep.join(dict.fromkeys(child_path)))}")
+' "$FKST_OPS_MACHINE_PROFILE" "$_self_dir")" || exit $?
 eval "$MECHANISM_TOOL_ASSIGNMENTS"
 DEPLOYMENT_OPERATOR_DEPLOYMENTS="$(printf '%s' "$RESOLVED_DECLARATION" | "$PYTHON" -c \
   'import json,sys; print(" ".join(item["id"] for item in json.load(sys.stdin)["deployment"]))')"
@@ -479,7 +489,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS="$AUTHORIZE_REPO_COLLABORATORS" \
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
-    FKST_WORKTREE_GC_REMOVE=1 PATH="$_self_dir:$PATH" \
+    FKST_WORKTREE_GC_REMOVE=1 PATH="$DEPLOYMENT_CHILD_PATH" \
     nohup "$PYTHON" -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "${args[@]}" >> "$log" 2>&1 &
   local pid=$!
   ln -sf "$log" "$LOGDIR/${name}-sv.log"

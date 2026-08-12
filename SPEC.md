@@ -73,6 +73,14 @@ using `os.setsid()` followed by in-place `exec`. Readiness is accepted only
 after the process stays alive and emits the startup readiness evidence; the
 operator then checks and reports whether `PGID == PID`.
 
+Artifact generation discovers required mechanism executables before publication.
+`codex` is required because a supervisor that cannot spawn it cannot execute its
+departments. The engine has no executable override for this consumer, so the
+supervisor child receives a deterministic `PATH`: the mechanism entry directory,
+the directories of discovered tools explicitly declared for path delivery, and
+the platform default executable path, with duplicates removed. The generator's
+or operator's ambient `PATH` is not inherited by the child.
+
 This direct topology is deliberate policy. A separate shipped process root
 would add no process-group isolation because the supervisor already owns its
 session and process group. More importantly, replacement sends `SIGKILL` only

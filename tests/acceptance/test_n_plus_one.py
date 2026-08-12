@@ -95,9 +95,10 @@ packages-logs = "{logs}"
 shared-rate-pool = "{deployment / 'rates'}"
 [binaries]
 engine = "{engine / 'fkst-framework'}"
-[tools]
-    make = "{shutil.which('make')}"
-    gh = "{shutil.which('gh')}"
+    [tools]
+        make = "{shutil.which('make')}"
+        codex = "{shutil.which('codex')}"
+        gh = "{shutil.which('gh')}"
     gh-app = "{shutil.which('gh-app')}"
 [credentials]
 github-bot = "fixture-bot"

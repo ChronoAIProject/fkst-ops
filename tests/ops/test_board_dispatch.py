@@ -108,6 +108,7 @@ logs="{logs}"
 binary="{binary}"
 [tools]
 true="{shutil.which('true')}"
+codex="{shutil.which('codex')}"
 gh="{shutil.which('true')}"
 gh-app="{shutil.which('true')}"
 [credentials]
@@ -148,7 +149,7 @@ tree_sha256="{tree}"
 ''', encoding="utf-8")
     result = subprocess.run([str(ROOT / "bin" / "fkst-ops"), "--declaration", str(declaration),
                              "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],
-                            text=True, capture_output=True)
+                            cwd=tmp_path, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert "github-control through operator" in result.stdout
     assert "engine-durable through operator" in result.stdout
@@ -160,7 +161,7 @@ tree_sha256="{tree}"
     unavailable = subprocess.run(
         [str(ROOT / "bin" / "fkst-ops"), "--declaration", str(declaration),
          "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],
-        text=True, capture_output=True, env=env,
+        cwd=tmp_path, text=True, capture_output=True, env=env,
     )
     assert unavailable.returncode != 0
     assert "ENGINE_BINARY_UNAVAILABLE" in unavailable.stderr
