@@ -73,10 +73,14 @@ def main() -> int:
         return fail("CONTRACT_MISSING", f"cannot inspect engine checkout: {exc}", 2)
     if branch.returncode != 0:
         return fail("CONTRACT_MISSING", f"cannot inspect engine branch: {diagnostic(branch)}", 2)
-    if branch.stdout.strip() != value["expected_branch"]:
-        return fail("WRONG_BRANCH", f"expected branch {value['expected_branch']}, found {branch.stdout.strip()}", 1)
+    expected_branch = value["expected_branch"]
+    if branch.stdout.strip() != expected_branch:
+        return fail("WRONG_BRANCH", f"expected branch {expected_branch}, found {branch.stdout.strip()}", 1)
 
-    update = run_git(checkout, "pull", "--ff-only")
+    remote_ref = f"refs/remotes/origin/{expected_branch}"
+    update = run_git(checkout, "fetch", "origin", f"+refs/heads/{expected_branch}:{remote_ref}")
+    if update.returncode == 0:
+        update = run_git(checkout, "merge", "--ff-only", remote_ref)
     if update.returncode != 0:
         return fail("UPDATE_FAILED", diagnostic(update), 1)
     try:
