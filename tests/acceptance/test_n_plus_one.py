@@ -27,6 +27,8 @@ def public_actions(root: Path) -> tuple[str, ...]:
 def byte_tree(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(root.rglob("*")):
+        if "__pycache__" in path.parts:
+            continue
         relative = path.relative_to(root).as_posix().encode()
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
@@ -102,8 +104,6 @@ engine = "{engine / 'fkst-framework'}"
     gh-app = "{shutil.which('gh-app')}"
 [credentials]
 github-bot = "fkst-bot"
-[sets]
-    managed-bots = ["fkst-bot"]
 [defaults]
 integration-branch = "integration"
 ''', encoding="utf-8")

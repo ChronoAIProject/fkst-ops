@@ -34,18 +34,20 @@ That actor must be a member of every operated deployment's declared
 This is the one-machine/one-bot-app cardinality contract, not a per-deployment
 multi-actor facility.
 
-The platform has two distinct login-normalization domains, and fkst-ops does
-not attempt to make them agree:
+The platform has two distinct managed-bot classifiers, and fkst-ops does not
+attempt to make them agree:
 
-- Domain A is case-insensitive. `fkst-packages/libraries/forge/github/content_filter.lua:370-380`
-  trims, lowercases, and removes a trailing literal `[bot]`; its authorization
-  path is `content_filter.is_authorized:421` into
+- Domain A is case-insensitive. `libraries/devloop/github_author_policy.lua:29`
+  supplies `managed_bot_logins` and `:41` supplies `is_managed_bot_login`; both
+  use the `devloop/base.lua:153` trim/lower/strip normalization. Its separate
+  authorization path is `fkst-packages/libraries/forge/github/content_filter.lua:370-380`
+  through `content_filter.is_authorized:421` into
   `libraries/devloop/github_author_policy.is_authorized:87`. The consensus,
-  liveness-scan, and loop departments consume this path.
+  liveness-scan, and loop departments consume that path.
 - Domain B is case-sensitive. `packages/github-devloop-workflow/tools/workflow_board_fact.py:71-74`
-  removes only the trailing `[bot]`, preserving case; the
-  `github-external-pr-intake` package uses the same case-sensitive contract, as
-  fixed by `packages/github-external-pr-intake/tests/pr_origin_observation_characterization_test.lua:367`.
+  removes only the trailing `[bot]`, preserving case. The
+  `libraries/forge/github/strings.lua:6` classifier is consumed by both
+  `github-external-pr-intake` and `github-ratchet-migration-slicer`.
 
 The mechanism aligns its comparison and membership behavior with Domain B. Its
 additional fail-closed guarantee is narrower: each mechanism-approved
@@ -56,16 +58,28 @@ Domain B comparison or membership semantics. The local `bot_login` must retain
 the existing Domain B membership rule, and is also rejected when it aliases a
 different roster entry under Domain A.
 
-An irreducible platform residual risk remains: an inbound author can be
-authorized after Domain A case folding while not being recognized as a managed
-bot under Domain B. The mechanism cannot close this gap without changing the
-platform consumers, which is outside fkst-ops ownership. Operators must
-therefore treat authorization facts and managed-bot facts as domain-specific:
-audit both normalized forms, expect the same inbound login to produce different
-department decisions, and expect an author admitted by the Domain A policy to
-still be classified by Domain B consumers as unmanaged or emitted as an
-external-intake candidate. Such disagreements require investigation; an
-authorization result does not prove managed-bot identity.
+Irreducible platform residual risk remains because the two managed-bot
+classifiers can disagree, and an inbound author can be authorized after Domain
+A case folding while not being recognized as a managed bot under Domain B. The
+mechanism cannot close these gaps without changing platform consumers, which is
+outside fkst-ops ownership. Operators must therefore treat authorization and
+managed-bot facts as domain-specific: audit both normalized forms, expect the
+same login to produce different department decisions, and expect an author
+admitted by the Domain A policy to still be classified by Domain B consumers as
+unmanaged or emitted as an external-intake candidate. Such disagreements
+require investigation; an authorization result does not prove managed-bot
+identity.
+
+Two additional premises are operational assertions rather than mechanically
+verifiable identity proofs. The machine actor is now supplied explicitly, but
+`providers/github_credential_gh.py` reports
+`identity_proof = "target-access-only;bot-login-not-mechanically-proven"`.
+Also, the roster is merged into Domain A's trusted-author allowlist by
+`libraries/devloop/github_author_policy.lua:69-74`. Because the membership rule
+structurally treats the roster as the complete-fleet union, `actor in roster`
+can be satisfied by a peer's login. That invariant proves only that the
+declaration did not omit this machine; it does not prove that the process is
+running as this machine's own identity.
 
 Every entry in either list is one non-empty platform token. A token must contain
 no comma, no character Python recognizes as whitespace (including Unicode
@@ -304,6 +318,9 @@ This repository does not guarantee:
 - successful mutation when a checkout is dirty/diverged, a provider fails, a
   pin or tree does not verify, readiness is absent, or required machine facts
   are unavailable.
+- that an explicitly declared `bot_login` is mechanically proven to be the
+  identity used by the credential provider; or that roster membership proves
+  the local process is not using a peer's login.
 
 The executable behavior remains the final evidence for implementation defects;
 changes to the guarantees above require changing this specification and the

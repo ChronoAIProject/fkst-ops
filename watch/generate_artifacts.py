@@ -397,7 +397,7 @@ def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str
 
 def _profile_text(
     declarations: list[tuple[Path, dict[str, Any]]], machine_root: Path,
-    tools: dict[str, str] | None = None, *, bot_login: str | None = None,
+    tools: dict[str, str] | None = None, *, bot_login: str,
 ) -> str:
     base = machine_root
     tools = _discover_tools(declarations) if tools is None else tools
@@ -405,8 +405,7 @@ def _profile_text(
     binaries: dict[str, str] = {}
     credentials: dict[str, str] = {}
 
-    if bot_login is not None:
-        validate_platform_login(bot_login, "--bot-login")
+    validate_platform_login(bot_login, "--bot-login")
 
     for declaration_path, declaration in declarations:
         for index, deployment in enumerate(declaration["deployment"]):
@@ -418,8 +417,6 @@ def _profile_text(
                     f"declaration {declaration_path} deployment[{index}].managed_bot_logins "
                     "must be a non-empty string list"
                 )
-            if bot_login is None:
-                raise ValueError("bot login must be provided explicitly")
             for login_index, login in enumerate(logins):
                 validate_platform_login(
                     login,
@@ -452,10 +449,6 @@ def _profile_text(
                     "is required for artifact generation"
                 )
             credential_name = machine["bot_login"]
-            if credential_name in credentials and normalized_login(
-                credentials[credential_name]
-            ) != normalized_login(bot_login):
-                raise ValueError(f"conflicting declarations for bot login {credential_name}")
             credentials[credential_name] = bot_login
 
     lines = ['schema = "fkst.ops.machine-profile.v1"', ""]
@@ -700,7 +693,6 @@ def _publish_control_files_locked(
 def generate(
     repository: Path, home: Path, bot_login: str, machine_root: Path | None = None
 ) -> tuple[Path, Path, bool | None, int]:
-    validate_platform_login(bot_login, "--bot-login")
     repository = repository.resolve()
     home = home.resolve()
     machine_root = (machine_root or home / ".fkst" / "machine").expanduser().resolve()

@@ -88,7 +88,10 @@ def _generated_child_path(
 ) -> tuple[dict[str, str], list[str], Path]:
     discovered = _discover_fixture_tools(tmp_path, monkeypatch, *declared)
     profile = tmp_path / "profile.toml"
-    profile.write_text(_profile_text([], tmp_path, discovered), encoding="ascii")
+    profile.write_text(
+        _profile_text([], tmp_path, discovered, bot_login="fkst-test-bot"),
+        encoding="ascii",
+    )
     launcher = tmp_path / "launcher-only"
     launcher.mkdir()
     return discovered, _load_child_path(profile, str(launcher)), launcher

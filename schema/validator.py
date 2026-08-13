@@ -107,7 +107,7 @@ def validate_platform_login(login: Any, path: str) -> str:
             path,
             "must be a single platform token without commas, whitespace, or NUL characters",
         )
-    if not normalized_login(login):
+    if not normalized_login(login) or not domain_a_normalized_login(login):
         _fail(path, "must not normalize to an empty identity")
     return login
 
@@ -287,8 +287,7 @@ def _require_no_domain_a_collapse(values: list[str], path: str) -> None:
             _fail(
                 path,
                 "cross-domain collapse under domain A: entries "
-                f"[{previous}] and [{index}] both normalize to {identity!r} "
-                "(duplicate normalized identity)",
+                f"[{previous}] and [{index}] both normalize to {identity!r}",
             )
         seen[identity] = index
 

@@ -150,8 +150,11 @@ class ValidatorTests(unittest.TestCase):
         self.reject("resolved bot login must belong to deployment.managed_bot_logins")
 
     def test_bot_roster_uniqueness_uses_normalized_case_sensitive_login(self) -> None:
-        self.declaration["deployment"][0]["managed_bot_logins"] = ["X", "X[bot]"]
-        self.reject("cross-domain collapse under domain A")
+        self.declaration["deployment"][0]["managed_bot_logins"] = [
+            "Y[BOT]",
+            "Y[BOT][bot]",
+        ]
+        self.reject("duplicate normalized identity")
 
         self.declaration["deployment"][0]["managed_bot_logins"] = ["X", "x-bot[bot]"]
         self.machine["credentials"]["github-bot"] = "X[bot]"
@@ -181,11 +184,22 @@ class ValidatorTests(unittest.TestCase):
 
     def test_machine_actor_rejects_domain_a_alias_to_non_self_roster_entry(self) -> None:
         self.declaration["deployment"][0]["managed_bot_logins"] = [
-            "Managed-Bot",
-            "managed-bot",
+            "Y[BOT][bot]",
+            "y",
         ]
-        self.machine["credentials"]["github-bot"] = "Managed-Bot"
-        self.reject(r"cross-domain collapse under domain A: entries \[0\] and \[1\]")
+        self.machine["credentials"]["github-bot"] = "Y[BOT]"
+        self.reject(
+            r"bot_login 'Y\[BOT\]' aliases non-self roster entry \[1\] 'y' as 'y'"
+        )
+
+    def test_machine_actor_can_match_its_own_domain_a_shaped_roster_entry(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = [
+            "Y[BOT]",
+            "peer-bot",
+        ]
+        self.machine["credentials"]["github-bot"] = "Y[BOT]"
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(result["deployment"][0]["machine"]["bot_login"], "Y[BOT]")
 
     def test_approved_roster_is_unique_in_domain_a_but_domains_can_disagree(self) -> None:
         self.declaration["deployment"][0]["managed_bot_logins"] = ["Managed-Bot"]
@@ -263,6 +277,23 @@ class ValidatorTests(unittest.TestCase):
         self.machine["credentials"]["github-bot"] = "[bot]"
         self.reject(
             r"declaration.deployment\[0\].machine.bot_login: "
+            "must not normalize to an empty identity"
+        )
+
+    def test_domain_a_empty_normalized_identity_is_rejected_everywhere(self) -> None:
+        for field, table in (
+            ("managed_bot_logins", self.declaration["deployment"][0]),
+            ("authorized_logins", self.declaration["deployment"][0]["author_authorization"]),
+        ):
+            with self.subTest(field=field):
+                table[field] = ["[BOT]"]
+                with self.assertRaisesRegex(ValidationError, "must not normalize to an empty identity"):
+                    validate_and_resolve(self.declaration, self.machine, self.lock)
+            table[field] = ["fkst-bot"] if field == "managed_bot_logins" else []
+
+        self.machine["credentials"]["github-bot"] = "[BOT]"
+        self.reject(
+            r"declaration\.deployment\[0\]\.machine\.bot_login: "
             "must not normalize to an empty identity"
         )
 
