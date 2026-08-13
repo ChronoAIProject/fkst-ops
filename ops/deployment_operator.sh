@@ -468,11 +468,10 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   # is *inferred* to be such a group signal on launcher/session/background-task teardown — it was not
   # caught live. This hardens the confirmed vulnerability; it does NOT prove recurrence-elimination,
   # which must be observed after this lands.] `nohup` only blocks SIGHUP, not group signals. macOS has
-  # no setsid(1), so wrap in the selected Python interpreter (already required by scripts/run.sh;
-  # perl was rejected — it panics
-  # under the automation env's LC_ALL=C.UTF-8 locale). `os.setsid()`+`os.execvp` is IN-PLACE, so $!
-  # below stays the REAL supervise pid and the env-prefix stays scoped to the launch; a failed setsid
-  # raises OSError → nonzero exit → the readiness wait reports the launch failure loud (self-verifying).
+  # no setsid(1), so the selected Python interpreter runs launch_child.py. The loader also states and
+  # verifies the deployment's open-file requirement before its in-place `os.setsid()` + `os.execvp`.
+  # In-place exec means $! below stays the REAL supervise pid and the env-prefix stays scoped to the
+  # launch. A loader failure exits nonzero, so readiness reports the launch failure loud.
   require_engine_binary || return 1
   printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s\n' \
     "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
@@ -489,7 +488,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
     FKST_WORKTREE_GC_REMOVE=1 PATH="$DEPLOYMENT_CHILD_PATH" \
-    nohup "$PYTHON" -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "${args[@]}" >> "$log" 2>&1 &
+    nohup "$PYTHON" "$_self_dir/launch_child.py" "${args[@]}" >> "$log" 2>&1 &
   local pid=$!
   ln -sf "$log" "$LOGDIR/${name}-sv.log"
   wait_supervise_ready "$pid" "$log"
