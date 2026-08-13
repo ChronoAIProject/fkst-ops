@@ -73,6 +73,18 @@ using `os.setsid()` followed by in-place `exec`. Readiness is accepted only
 after the process stays alive and emits the startup readiness evidence; the
 operator then checks and reports whether `PGID == PID`.
 
+Before that exec, the launch loader must set the supervisor's soft open-file
+limit to the host kernel's `kern.maxfilesperproc` value and verify the value from
+the process's own resource-limit state. The requirement cannot be expressed as
+a smaller application constant: consensus runs five seats, but each seat starts
+a general Codex process whose descriptor use is neither bounded nor owned by
+this repository. Thus `5 * unbounded seat use + framework use + headroom` has no
+finite source-derived sum, and the required limit is the kernel's declared
+per-process maximum. Failure to read, set, or verify that value must stop the
+launch before the supervisor starts. Consensus is load-bearing, so reporting a
+deployment healthy when its required process resources are unavailable would be
+a false healthy state.
+
 Artifact generation discovers required mechanism executables before publication.
 `codex` is required because a supervisor that cannot spawn it cannot execute its
 departments. The engine has no executable override for this consumer, so the
