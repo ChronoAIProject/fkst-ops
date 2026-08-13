@@ -345,7 +345,7 @@ cmd_sync all
             tools = root / "tools"
             tools.mkdir()
             git = tools / "git"
-            git.write_text('#!/bin/sh\ncase "$1" in branch) echo build;; pull) :;; rev-parse) printf "%040d\\n" 0;; *) exit 1;; esac\n', encoding="ascii")
+            git.write_text('#!/bin/sh\ncase "$1" in branch) echo build;; fetch|merge) :;; rev-parse) printf "%040d\\n" 0;; *) exit 1;; esac\n', encoding="ascii")
             git.chmod(0o755)
             build = root / "build"
             build.write_text('#!/bin/sh\nprintf "#!/bin/sh\\nexit 0\\n" > "$1"\nchmod +x "$1"\n', encoding="ascii")

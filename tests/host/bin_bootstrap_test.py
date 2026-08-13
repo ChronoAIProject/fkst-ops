@@ -46,7 +46,7 @@ def test_total_miss_invokes_declared_engine_provider(tmp_path):
     binary = tmp_path / "engine"
     tools = tmp_path / "tools"; tools.mkdir()
     executable(tools / "git", '''#!/bin/sh
-case "$1" in branch) echo build;; pull) :;; rev-parse) printf '%040d\n' 0;; *) exit 1;; esac
+case "$1" in branch) echo build;; fetch|merge) :;; rev-parse) printf '%040d\n' 0;; *) exit 1;; esac
 ''')
     build = executable(tmp_path / "build", '''#!/bin/sh
 printf '#!/bin/sh\nexit 0\n' > "$1"
