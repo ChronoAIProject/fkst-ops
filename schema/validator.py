@@ -138,6 +138,25 @@ def _logical(value: str, path: str) -> None:
         _fail(path, "must be a logical name, not a path")
 
 
+def machine_default_reference(value: str, path: str) -> str | None:
+    """Return and validate a logical ``machine:`` defaults reference, if present."""
+    if not value.startswith("machine:"):
+        return None
+    logical = value.removeprefix("machine:")
+    _logical(logical, path)
+    return logical
+
+
+def resolve_machine_default(value: str, defaults: dict[str, str], path: str) -> str:
+    """Resolve one declaration value through a machine profile's defaults table."""
+    logical = machine_default_reference(value, path)
+    if logical is None:
+        return value
+    if logical not in defaults:
+        _fail(path, f"unresolved logical defaults reference: {logical}")
+    return defaults[logical]
+
+
 def _validate_lock(lock: dict[str, Any]) -> dict[str, dict[str, Any]]:
     _closed(lock, {"external_source"}, "lock")
     entries = lock.get("external_source")
@@ -515,13 +534,10 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
         integration = _table(dep.get("integration"), path + ".integration")
         _closed(integration, {"upstream_branch", "integration_branch", "rollup_merge"}, path + ".integration")
         resolved_integration = {name: _string(integration, name, path + ".integration") for name in ("upstream_branch", "integration_branch", "rollup_merge")}
-        branch = resolved_integration["integration_branch"]
-        if branch.startswith("machine:"):
-            logical = branch.removeprefix("machine:")
-            _logical(logical, path + ".integration.integration_branch")
-            if logical not in machine_values["defaults"]:
-                _fail(path + ".integration.integration_branch", f"unresolved logical defaults reference: {logical}")
-            resolved_integration["integration_branch"] = machine_values["defaults"][logical]
+        resolved_integration["integration_branch"] = resolve_machine_default(
+            resolved_integration["integration_branch"], machine_values["defaults"],
+            path + ".integration.integration_branch",
+        )
 
         bindings = _table(dep.get("providers"), path + ".providers")
         _closed(bindings, set(PROVIDER_FIELDS), path + ".providers")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 from pathlib import Path
 import plistlib
@@ -178,6 +179,8 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     resolved = load_and_resolve(repository / "deployment.toml", profile, repository / "fkst.lock")
     assert resolved["deployment"][0]["machine"]["bot_login"] == "fkst-bot"
     assert resolved["deployment"][0]["managed_bot_logins"] == ["fkst-bot"]
+    assert resolved["deployment"][0]["integration"]["integration_branch"] == "integration"
+    assert profile_data["defaults"] == {}
     assert "sets" not in profile_data
 
     plist_path = home / ".fkst" / "machine" / "LaunchAgents" / "com.fkst.cadence.plist"
@@ -191,6 +194,43 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     assert profile_argument.parent.parent.name == "generations"
     assert profile_argument.read_bytes() == profile.read_bytes()
     assert "cadence_schedule=enabled live=yes interval_seconds=300" in result.stdout
+
+
+def test_machine_integration_reference_generates_resolves_and_hydrates_branch(
+    tmp_path: Path,
+) -> None:
+    repository, home, declaration = prepared(tmp_path)
+    logical = "release-track"
+    bot_login = "Managed-Bot[bot]"
+    concrete_branch = "integration-Managed-Bot"
+    declaration_path = repository / "deployment.toml"
+    declaration_path.write_text(
+        declaration_path.read_text(encoding="ascii")
+        .replace(
+            'managed_bot_logins = ["fkst-bot"]',
+            'managed_bot_logins = ["Managed-Bot"]',
+        )
+        .replace(
+            'integration_branch = "integration"',
+            f'integration_branch = "machine:{logical}"',
+        ),
+        encoding="ascii",
+    )
+    for source_root in (tmp_path / "target-source", tmp_path / "engine-source"):
+        git(source_root, "branch", concrete_branch)
+
+    result = run_generator(repository, home, bot_login=bot_login)
+
+    assert result.returncode == 0, result.stderr
+    profile = home / ".fkst" / "machine" / "profile.toml"
+    profile_data = tomllib.loads(profile.read_text(encoding="ascii"))
+    assert profile_data["defaults"] == {logical: concrete_branch}
+    resolved = load_and_resolve(declaration_path, profile, repository / "fkst.lock")
+    assert resolved["deployment"][0]["integration"]["integration_branch"] == concrete_branch
+    machine = declaration["deployment"][0]["machine"]
+    for checkout_name in {machine["target_checkout"], machine["engine_checkout"]}:
+        checkout = home / ".fkst" / "machine" / "roots" / checkout_name
+        assert git(checkout, "branch", "--show-current") == concrete_branch
 
 
 def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
@@ -882,6 +922,28 @@ def test_profile_uses_explicit_bot_login_and_does_not_write_managed_bot_set(
 
     assert profile["credentials"] == {"github-bot": "bot-b"}
     assert "sets" not in profile
+
+
+def test_profile_populates_every_referenced_machine_default(tmp_path: Path) -> None:
+    declaration = tomllib.loads((FIXTURES / "packages.toml").read_text())
+    deployment = declaration["deployment"][0]
+    deployment["integration"]["integration_branch"] = "machine:first-branch"
+    second = copy.deepcopy(deployment)
+    second["integration"]["integration_branch"] = "machine:second-branch"
+    declaration["deployment"].append(second)
+    from watch.generate_artifacts import _profile_text
+
+    profile = tomllib.loads(_profile_text(
+        [(tmp_path / "declaration.toml", declaration)],
+        tmp_path,
+        {},
+        bot_login="fkst-bot[bot]",
+    ))
+
+    assert profile["defaults"] == {
+        "first-branch": "integration-fkst-bot",
+        "second-branch": "integration-fkst-bot",
+    }
 
 
 def test_generator_requires_explicit_bot_login_cli_argument(tmp_path: Path) -> None:
