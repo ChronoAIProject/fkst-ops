@@ -23,6 +23,7 @@ contract = "fkst.ops.board.github-control.v1"
 [[deployment]]
 id = "<deployment-id>"
 target_identity = "<target-identity>"
+managed_bot_logins = ["<this-machine-bot-login>", "<peer-machine-bot-login>"]
 
 [deployment.sources.target]
 lock_ref = "<target-source-lock-id>"
@@ -52,7 +53,6 @@ runtime = "<runtime-root>"
 logs = "<logs-root>"
 rate_pool = "<rate-pool-root>"
 bot_login = "<bot-login>"
-managed_bot_set = "<managed-bot-set>"
 
 [deployment.providers]
 engine = "<engine-provider-id>"

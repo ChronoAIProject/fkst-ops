@@ -225,6 +225,71 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(revision, (self.cache / "current").resolve().name)
         self.assertEqual(["status", "status"], self.log.read_text(encoding="utf-8").splitlines())
 
+    def test_matching_declaration_pin_pairs_pass_and_crossed_pairs_fail_closed_after_reexec(self):
+        validator = self.source / "schema" / "validator.py"
+        validator.write_text(
+            "import sys, tomllib\n"
+            "from pathlib import Path\n"
+            "deployment = tomllib.loads(Path(sys.argv[1]).read_text())['deployment'][0]\n"
+            "machine = deployment['machine']\n"
+            "roster = deployment['managed_bot_logins']\n"
+            "if 'managed_bot_set' not in machine or len(roster) != 1: raise SystemExit(2)\n",
+            encoding="ascii",
+        )
+        run("git", "add", "schema/validator.py", cwd=self.source)
+        run("git", "commit", "-qm", "old declaration shape", cwd=self.source)
+        old_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
+        old_tree = run(
+            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), old_revision,
+            cwd=self.root,
+        ).stdout.strip()
+
+        validator.write_text(
+            "import sys, tomllib\n"
+            "from pathlib import Path\n"
+            "deployment = tomllib.loads(Path(sys.argv[1]).read_text())['deployment'][0]\n"
+            "machine = deployment['machine']\n"
+            "roster = deployment['managed_bot_logins']\n"
+            "if 'managed_bot_set' in machine or len(roster) < 2: raise SystemExit(2)\n",
+            encoding="ascii",
+        )
+        run("git", "add", "schema/validator.py", cwd=self.source)
+        run("git", "commit", "-qm", "new declaration shape", cwd=self.source)
+        new_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
+        new_tree = run(
+            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), new_revision,
+            cwd=self.root,
+        ).stdout.strip()
+
+        old_declaration = '''[[deployment]]
+managed_bot_logins = ["bot-a"]
+[deployment.machine]
+bot_login = "github-bot"
+managed_bot_set = "managed-bots"
+'''
+        new_declaration = '''[[deployment]]
+managed_bot_logins = ["bot-a", "bot-b"]
+[deployment.machine]
+bot_login = "github-bot"
+'''
+        (self.deployment / "machine.toml").write_text("", encoding="ascii")
+
+        # This exercises the real pin/re-exec boundary, but only proves this
+        # four-cell compatibility matrix. Concurrent cross-repository delivery
+        # races and downstream engine/package semantics are outside its scope.
+        combinations = (
+            ("old declaration with old mechanism", old_declaration, old_revision, old_tree, True),
+            ("new declaration with new mechanism", new_declaration, new_revision, new_tree, True),
+            ("new declaration with old mechanism", new_declaration, old_revision, old_tree, False),
+            ("old declaration with new mechanism", old_declaration, new_revision, new_tree, False),
+        )
+        for label, declaration, revision, tree, accepted in combinations:
+            with self.subTest(label=label):
+                (self.deployment / "deployment.toml").write_text(declaration, encoding="ascii")
+                self.write_lock(revision, tree)
+                result = self.invoke_action("status")
+                self.assertEqual(accepted, result.returncode == 0, result.stderr)
+
     def test_hydration_reexec_preserves_action_argv(self):
         trailing = ["", "two words", "*.toml", "--option-like", "last", ""]
         self.install_nul_argv_recorder()

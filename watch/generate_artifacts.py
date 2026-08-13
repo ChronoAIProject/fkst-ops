@@ -23,7 +23,13 @@ from urllib.parse import urlsplit
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from schema.validator import SCHEMA_ID, ValidationError, load_and_resolve
+from schema.validator import (
+    SCHEMA_ID,
+    ValidationError,
+    load_and_resolve,
+    normalized_login,
+    validate_platform_login,
+)
 from schema.mechanism_tools import MECHANISM_TOOLS
 from bootstrap.canonical_tree import canonical_tree_sha256
 
@@ -391,24 +397,44 @@ def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str
 
 def _profile_text(
     declarations: list[tuple[Path, dict[str, Any]]], machine_root: Path,
-    tools: dict[str, str] | None = None,
+    tools: dict[str, str] | None = None, *, bot_login: str | None = None,
 ) -> str:
     base = machine_root
     tools = _discover_tools(declarations) if tools is None else tools
     roots: dict[str, str] = {}
     binaries: dict[str, str] = {}
     credentials: dict[str, str] = {}
-    sets: dict[str, list[str]] = {}
+
+    if bot_login is not None:
+        validate_platform_login(bot_login, "--bot-login")
 
     for declaration_path, declaration in declarations:
         for index, deployment in enumerate(declaration["deployment"]):
             logins = deployment.get("managed_bot_logins")
-            if not isinstance(logins, list) or len(logins) != 1 or not isinstance(logins[0], str) or not logins[0]:
+            if not isinstance(logins, list) or not logins or any(
+                not isinstance(login, str) or not login for login in logins
+            ):
                 raise ValueError(
                     f"declaration {declaration_path} deployment[{index}].managed_bot_logins "
-                    "must declare exactly one bot login"
+                    "must be a non-empty string list"
                 )
-            login = logins[0]
+            if bot_login is None:
+                raise ValueError("bot login must be provided explicitly")
+            for login_index, login in enumerate(logins):
+                validate_platform_login(
+                    login,
+                    f"declaration {declaration_path} deployment[{index}]"
+                    f".managed_bot_logins[{login_index}]",
+                )
+            # Match the platform comparison in
+            # packages/github-devloop-workflow/tools/workflow_board_fact.py:normalized_login.
+            if normalized_login(bot_login) not in {
+                normalized_login(login) for login in logins
+            }:
+                raise ValueError(
+                    f"bot login {bot_login} is not in declaration {declaration_path} "
+                    f"deployment[{index}].managed_bot_logins"
+                )
             machine = deployment["machine"]
             for field in (
                 "target_checkout", "platform_checkout", "engine_checkout",
@@ -420,15 +446,17 @@ def _profile_text(
             binaries.setdefault(
                 machine["engine_binary"], str(base / "bin" / machine["engine_binary"])
             )
+            if "bot_login" not in machine:
+                raise ValueError(
+                    f"declaration {declaration_path} deployment[{index}].machine.bot_login "
+                    "is required for artifact generation"
+                )
             credential_name = machine["bot_login"]
-            if credential_name in credentials and credentials[credential_name] != login:
+            if credential_name in credentials and normalized_login(
+                credentials[credential_name]
+            ) != normalized_login(bot_login):
                 raise ValueError(f"conflicting declarations for bot login {credential_name}")
-            credentials[credential_name] = login
-            set_name = machine["managed_bot_set"]
-            value = deployment["managed_bot_logins"]
-            if set_name in sets and sets[set_name] != value:
-                raise ValueError(f"conflicting declarations for managed bot set {set_name}")
-            sets[set_name] = value
+            credentials[credential_name] = bot_login
 
     lines = ['schema = "fkst.ops.machine-profile.v1"', ""]
     for heading, values in (
@@ -438,10 +466,7 @@ def _profile_text(
         lines.append(f"[{heading}]")
         lines.extend(f"{_quoted(key)} = {_quoted(value)}" for key, value in sorted(values.items()))
         lines.append("")
-    lines.append("[sets]")
-    for key, values in sorted(sets.items()):
-        lines.append(f"{_quoted(key)} = [{', '.join(_quoted(item) for item in values)}]")
-    lines.extend(("", "[defaults]", ""))
+    lines.extend(("[defaults]", ""))
     return "\n".join(lines)
 
 
@@ -673,8 +698,9 @@ def _publish_control_files_locked(
 
 
 def generate(
-    repository: Path, home: Path, machine_root: Path | None = None
+    repository: Path, home: Path, bot_login: str, machine_root: Path | None = None
 ) -> tuple[Path, Path, bool | None, int]:
+    validate_platform_login(bot_login, "--bot-login")
     repository = repository.resolve()
     home = home.resolve()
     machine_root = (machine_root or home / ".fkst" / "machine").expanduser().resolve()
@@ -703,7 +729,7 @@ def generate(
     (machine_root / "watch").mkdir(parents=True, exist_ok=True)
     launch_agent.parent.mkdir(parents=True, exist_ok=True)
     tools = _discover_tools(declarations)
-    profile_text = _profile_text(declarations, machine_root, tools)
+    profile_text = _profile_text(declarations, machine_root, tools, bot_login=bot_login)
     manifest_text = json.dumps({
         "schema": "fkst.ops.declaration-set.v2",
         "repository": str(repository),
@@ -754,11 +780,12 @@ def generate(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("deployment_repository", type=Path)
+    parser.add_argument("--bot-login", required=True)
     parser.add_argument("--machine-state-root", type=Path)
     args = parser.parse_args(argv)
     try:
         profile, launch_agent, live, interval = generate(
-            args.deployment_repository, Path.home(), args.machine_state_root
+            args.deployment_repository, Path.home(), args.bot_login, args.machine_state_root
         )
     except (OSError, ValueError, ValidationError) as exc:
         print(f"artifact generation failed: {exc}", file=sys.stderr)

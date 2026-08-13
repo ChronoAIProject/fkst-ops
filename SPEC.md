@@ -14,10 +14,69 @@ dependency constraint requires a deliberate revision of this specification.
 
 `fkst-deployments` owns deployment parameters and composition: source bindings
 and pins, package selection, integration policy, target identity, logical
-runtime/durable/log identities, provider selection, its bootstrap, and its
-lock. A machine profile supplies discovered machine facts such as absolute
-paths, credentials, authenticated identity, and locally available binaries.
-Declarations refer to machine facts by logical name.
+runtime/durable/log identities, the complete cross-machine managed-bot roster,
+provider selection, its bootstrap, and its lock. A machine profile supplies
+discovered machine facts such as absolute paths, credentials, the local machine
+actor (`bot_login`), and locally available binaries. Declarations refer to
+machine facts by logical name.
+
+The validator selects `bot_login` membership in the declaration-owned roster as
+an fkst-ops invariant; this is not derived from platform behavior. Platform
+consumers tolerate a peers-only list because they separately receive the local
+actor, but fkst-ops treats the declared roster as the complete fleet and fails
+closed when it omits that actor. The explicit cost is rejection of peers-only
+rosters.
+
+Artifact generation accepts exactly one explicit local actor (`--bot-login`)
+per invocation and uses it for every declaration selected in that generation.
+That actor must be a member of every operated deployment's declared
+`managed_bot_logins` roster; generation fails closed if any roster omits it.
+This is the one-machine/one-bot-app cardinality contract, not a per-deployment
+multi-actor facility.
+
+The platform has two distinct login-normalization domains, and fkst-ops does
+not attempt to make them agree:
+
+- Domain A is case-insensitive. `fkst-packages/libraries/forge/github/content_filter.lua:370-380`
+  trims, lowercases, and removes a trailing literal `[bot]`; its authorization
+  path is `content_filter.is_authorized:421` into
+  `libraries/devloop/github_author_policy.is_authorized:87`. The consensus,
+  liveness-scan, and loop departments consume this path.
+- Domain B is case-sensitive. `packages/github-devloop-workflow/tools/workflow_board_fact.py:71-74`
+  removes only the trailing `[bot]`, preserving case; the
+  `github-external-pr-intake` package uses the same case-sensitive contract, as
+  fixed by `packages/github-external-pr-intake/tests/pr_origin_observation_characterization_test.lua:367`.
+
+The mechanism aligns its comparison and membership behavior with Domain B. Its
+additional fail-closed guarantee is narrower: each mechanism-approved
+`managed_bot_logins` and `author_authorization.authorized_logins` list must not
+self-collapse in the coarser Domain A (diagnostics identify both colliding
+indices). This is a list-internal safety invariant only; it does not change
+Domain B comparison or membership semantics. The local `bot_login` must retain
+the existing Domain B membership rule, and is also rejected when it aliases a
+different roster entry under Domain A.
+
+An irreducible platform residual risk remains: an inbound author can be
+authorized after Domain A case folding while not being recognized as a managed
+bot under Domain B. The mechanism cannot close this gap without changing the
+platform consumers, which is outside fkst-ops ownership. Operators must
+therefore treat authorization facts and managed-bot facts as domain-specific:
+audit both normalized forms, expect the same inbound login to produce different
+department decisions, and expect an author admitted by the Domain A policy to
+still be classified by Domain B consumers as unmanaged or emitted as an
+external-intake candidate. Such disagreements require investigation; an
+authorization result does not prove managed-bot identity.
+
+Every entry in either list is one non-empty platform token. A token must contain
+no comma, no character Python recognizes as whitespace (including Unicode
+whitespace), and no NUL. These exclusions preserve one-entry/one-token
+semantics at the platform consumers and reject line terminators that Bash
+command substitution can strip from its output; NUL is also excluded because
+that substitution silently removes it. Domain B normalization removes one
+trailing literal `[bot]`; the remaining case-sensitive identity must be
+non-empty. The resolved machine `bot_login` and artifact generator's
+`--bot-login` obey the same transport and non-empty-normalized-identity rules.
+No broader GitHub-login grammar is implied.
 
 Package producers own the meaning of their facts. Engine behavior and
 guarantees belong to the engine repository. This repository consumes the
@@ -47,6 +106,24 @@ This verification does not inspect the checkout's current tracked-file
 contents. Modified or deleted tracked working-tree files can therefore pass
 when `HEAD` and the named commit tree match the lock. Verification of the
 actual executable contents is a required invariant that is not implemented.
+
+## Cross-repository adoption order
+
+The mechanism/schema change is adopted in this order:
+
+1. Publish the mechanism revision first, while no deployment lock refers to it.
+2. Then use one `fkst-deployments` commit to carry both the declaration-shape
+   change (expand each roster to the complete fleet and remove
+   `machine.managed_bot_set`) and the new mechanism `rev` plus `tree_sha256`.
+
+This ordering avoids a declaration/pin incompatibility in either repository
+history because the entry self-pins from the `fkst.lock` in the same deployment
+commit. An old deployment commit therefore uses the old mechanism that explains
+its old declaration, while the new deployment commit atomically carries both
+the new schema-shaped declaration and the mechanism pin that explains it. This
+does not guarantee a race-free window for concurrent cross-repository delivery,
+and it proves no downstream engine or package adoption semantics; those remain
+explicitly excluded below.
 
 ## Public action surface
 
@@ -213,6 +290,12 @@ This repository does not guarantee:
   `SIGTERM`;
 - scheduling, launchd installation, deployment discovery, concrete deployment
   declarations, machine paths, credentials, pins, or pin advancement;
+- a race-free window for concurrent cross-repository delivery of a declaration
+  and its mechanism pin; the tested old/new compatibility matrix proves only
+  that matching pairs pass and crossed pairs fail closed at the real pinned
+  re-exec boundary;
+- downstream engine or package adoption semantics inferred from that pin/re-exec
+  compatibility matrix;
 - conforming replacement when two replacement invocations overlap in the
   current implementation, or atomic serialization of cache publication,
   old-generation pruning, or rollback;

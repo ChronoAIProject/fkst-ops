@@ -101,7 +101,7 @@ engine = "{engine / 'fkst-framework'}"
         gh = "{shutil.which('gh')}"
     gh-app = "{shutil.which('gh-app')}"
 [credentials]
-github-bot = "fixture-bot"
+github-bot = "fkst-bot"
 [sets]
     managed-bots = ["fkst-bot"]
 [defaults]

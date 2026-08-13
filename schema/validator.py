@@ -42,9 +42,8 @@ MACHINE_KINDS = {
     "logs": "roots",
     "rate_pool": "roots",
     "bot_login": "credentials",
-    "managed_bot_set": "sets",
 }
-PROFILE_MACHINE_FIELDS = {"rate_pool", "bot_login", "managed_bot_set"}
+PROFILE_MACHINE_FIELDS = {"rate_pool", "bot_login"}
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _TREE_SHA = re.compile(r"^sha256-[0-9a-f]{64}$")
 
@@ -83,6 +82,46 @@ def _string_list(table: dict[str, Any], field: str, path: str, *, nonempty: bool
     if any(not isinstance(item, str) or not item for item in value):
         _fail(f"{path}.{field}", "must contain only non-empty strings")
     return value
+
+
+def normalized_login(login: str) -> str:
+    """Match workflow_board_fact.py's case-sensitive managed-login identity."""
+    # Keep this exactly aligned with
+    # packages/github-devloop-workflow/tools/workflow_board_fact.py:normalized_login.
+    return login[:-5] if login.endswith("[bot]") else login
+
+
+def domain_a_normalized_login(login: str) -> str:
+    """Match content_filter.lua's case-insensitive authorization identity."""
+    # Keep this aligned with fkst-packages/libraries/forge/github/content_filter.lua:370-380.
+    value = login.strip().lower()
+    return value[:-5] if value.endswith("[bot]") else value
+
+
+def validate_platform_login(login: Any, path: str) -> str:
+    """Validate one identity across the shell and platform-tokenizer boundary."""
+    if not isinstance(login, str) or not login:
+        _fail(path, "must be a non-empty string")
+    if re.search(r"[,\s\x00]", login):
+        _fail(
+            path,
+            "must be a single platform token without commas, whitespace, or NUL characters",
+        )
+    if not normalized_login(login):
+        _fail(path, "must not normalize to an empty identity")
+    return login
+
+
+def _platform_login_list(
+    table: dict[str, Any], field: str, path: str, *, nonempty: bool
+) -> list[str]:
+    logins = _string_list(table, field, path, nonempty=nonempty)
+    # Keep this trust boundary aligned with the shell transport and platform tokenizers in
+    # packages/github-devloop-workflow/tools/workflow_board_fact.py:79 and
+    # packages/github-external-pr-intake/core.lua:64.
+    for index, login in enumerate(logins):
+        validate_platform_login(login, f"{path}.{field}[{index}]")
+    return logins
 
 
 def _positive_integer(table: dict[str, Any], field: str, path: str) -> int:
@@ -202,6 +241,8 @@ def _resolve_machine(
         if name not in profile[kind]:
             _fail(f"{path}.{field}", f"unresolved logical {kind} reference: {name}")
         resolved[field] = copy.deepcopy(profile[kind][name])
+        if field == "bot_login":
+            validate_platform_login(resolved[field], f"{path}.{field}")
     return resolved
 
 
@@ -225,6 +266,50 @@ def _require_unique(values: list[str], path: str) -> None:
         if value in seen:
             _fail(path, f"duplicate identity: {value}")
         seen.add(value)
+
+
+def _require_unique_logins(values: list[str], path: str) -> None:
+    seen: set[str] = set()
+    for value in values:
+        identity = normalized_login(value)
+        if identity in seen:
+            _fail(path, f"duplicate normalized identity: {value}")
+        seen.add(identity)
+
+
+def _require_no_domain_a_collapse(values: list[str], path: str) -> None:
+    """Reject roster entries that collapse in the platform's coarsest domain."""
+    seen: dict[str, int] = {}
+    for index, value in enumerate(values):
+        identity = domain_a_normalized_login(value)
+        previous = seen.get(identity)
+        if previous is not None:
+            _fail(
+                path,
+                "cross-domain collapse under domain A: entries "
+                f"[{previous}] and [{index}] both normalize to {identity!r} "
+                "(duplicate normalized identity)",
+            )
+        seen[identity] = index
+
+
+def _require_actor_no_domain_a_collapse(
+    bot_login: str, roster: list[str], path: str
+) -> None:
+    """Reject an actor that aliases a different roster member in domain A."""
+    actor_domain_b = normalized_login(bot_login)
+    actor_domain_a = domain_a_normalized_login(bot_login)
+    for index, value in enumerate(roster):
+        # Domain-B membership defines which roster entry represents this actor.
+        if normalized_login(value) == actor_domain_b:
+            continue
+        if domain_a_normalized_login(value) == actor_domain_a:
+            _fail(
+                path,
+                "cross-domain collapse under domain A: bot_login "
+                f"{bot_login!r} aliases non-self roster entry [{index}] "
+                f"{value!r} as {actor_domain_a!r}",
+            )
 
 
 def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str, dict[str, Any]]) -> None:
@@ -359,12 +444,13 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             _fail(claim_path + ".label_exclusive", "must be a boolean")
         managed_bot_logins: list[str] = []
         if "managed_bot_logins" in dep:
-            managed_bot_logins = _string_list(
+            managed_bot_logins = _platform_login_list(
                 dep, "managed_bot_logins", path, nonempty=True
             )
-            if len(managed_bot_logins) != 1:
-                _fail(path + ".managed_bot_logins", "must contain exactly one bot login")
-            _require_unique(managed_bot_logins, path + ".managed_bot_logins")
+            _require_no_domain_a_collapse(
+                managed_bot_logins, path + ".managed_bot_logins"
+            )
+            _require_unique_logins(managed_bot_logins, path + ".managed_bot_logins")
         elif "github_devloop_profile" in dep:
             _fail(path + ".managed_bot_logins", "must be a non-empty string list")
         author_authorization_path = path + ".author_authorization"
@@ -375,9 +461,15 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             {"authorized_logins", "authorize_org_members", "authorize_repo_collaborators"},
             author_authorization_path,
         )
-        authorized_logins = _string_list(
+        authorized_logins = _platform_login_list(
             author_authorization, "authorized_logins", author_authorization_path, nonempty=False
         ) if "authorized_logins" in author_authorization else []
+        _require_no_domain_a_collapse(
+            authorized_logins,
+            author_authorization_path + ".authorized_logins",
+        )
+        # Preserve the existing authorized-login uniqueness semantics; the
+        # domain-A check above is an additional cross-domain invariant only.
         _require_unique(authorized_logins, author_authorization_path + ".authorized_logins")
         authorize_org_members = author_authorization.get("authorize_org_members", False)
         if not isinstance(authorize_org_members, bool):
@@ -453,6 +545,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             "target_identity": target,
             "github_write_enabled": github_write_enabled,
             "claim_posture": {"mode": claim_mode, "label_exclusive": claim_label_exclusive},
+            "managed_bot_logins": copy.deepcopy(managed_bot_logins),
             "author_authorization": {
                 "authorized_logins": authorized_logins,
                 "authorize_org_members": authorize_org_members,
@@ -477,10 +570,22 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                          "machine": _resolve_machine(_table(dep.get("machine"), path + ".machine"), machine_values,
                                                      path + ".machine", profile_present=profile_block is not None),
                          "providers": resolved_bindings})
-        if "managed_bot_set" in resolved["machine"] and resolved["machine"]["managed_bot_set"] != managed_bot_logins:
+        bot_login = resolved["machine"].get("bot_login")
+        # This membership rule is selected, not derived from platform consumer
+        # semantics: both consumers tolerate a roster that omits this machine.
+        # A committed cross-machine roster is treated as the complete fleet so a
+        # machine cannot run against a declaration that excludes itself. The
+        # explicit cost of that fail-closed choice is rejecting peers-only rosters.
+        if bot_login is not None and normalized_login(bot_login) not in {
+            normalized_login(login) for login in managed_bot_logins
+        }:
             _fail(
-                path + ".machine.managed_bot_set",
-                "resolved set must equal deployment.managed_bot_logins",
+                path + ".machine.bot_login",
+                "resolved bot login must belong to deployment.managed_bot_logins",
+            )
+        if bot_login is not None:
+            _require_actor_no_domain_a_collapse(
+                bot_login, managed_bot_logins, path + ".machine.bot_login"
             )
         _validate_resolved_paths(resolved, path, pins)
         resolved_deployments.append(resolved)

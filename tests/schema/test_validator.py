@@ -8,7 +8,13 @@ import tempfile
 import tomllib
 import unittest
 
-from schema.validator import ValidationError, load_and_resolve, validate_and_resolve
+from schema.validator import (
+    ValidationError,
+    domain_a_normalized_login,
+    load_and_resolve,
+    normalized_login,
+    validate_and_resolve,
+)
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -114,9 +120,155 @@ class ValidatorTests(unittest.TestCase):
         del self.declaration["deployment"][0]["claim_posture"]["label_exclusive"]
         self.reject("claim_posture.label_exclusive.*boolean")
 
-    def test_managed_bots_are_deployment_policy(self) -> None:
-        self.declaration["deployment"][0]["managed_bot_logins"] = ["another-bot"]
-        self.reject("resolved set must equal deployment.managed_bot_logins")
+    def test_two_bot_roster_accepts_each_member_as_machine_actor(self) -> None:
+        roster = ["bot-a", "bot-b"]
+        self.declaration["deployment"][0]["managed_bot_logins"] = roster
+        for actor in roster:
+            with self.subTest(actor=actor):
+                machine = copy.deepcopy(self.machine)
+                machine["credentials"]["github-bot"] = actor
+                resolved = validate_and_resolve(self.declaration, machine, self.lock)
+                deployment = resolved["deployment"][0]
+                self.assertEqual(deployment["machine"]["bot_login"], actor)
+                self.assertEqual(deployment["managed_bot_logins"], roster)
+
+    def test_nonmember_machine_actor_fails_closed(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = ["bot-a", "bot-b"]
+        self.machine["credentials"]["github-bot"] = "bot-c"
+        self.reject("resolved bot login must belong to deployment.managed_bot_logins")
+
+    def test_bot_membership_strips_bot_suffix_without_changing_case(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = ["Managed-Bot"]
+        self.machine["credentials"]["github-bot"] = "Managed-Bot[bot]"
+        resolved = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(
+            resolved["deployment"][0]["machine"]["bot_login"],
+            "Managed-Bot[bot]",
+        )
+
+        self.machine["credentials"]["github-bot"] = "managed-bot[bot]"
+        self.reject("resolved bot login must belong to deployment.managed_bot_logins")
+
+    def test_bot_roster_uniqueness_uses_normalized_case_sensitive_login(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = ["X", "X[bot]"]
+        self.reject("cross-domain collapse under domain A")
+
+        self.declaration["deployment"][0]["managed_bot_logins"] = ["X", "x-bot[bot]"]
+        self.machine["credentials"]["github-bot"] = "X[bot]"
+        resolved = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(
+            resolved["deployment"][0]["managed_bot_logins"], ["X", "x-bot[bot]"]
+        )
+
+    def test_bot_roster_rejects_domain_a_case_fold_collapse_with_indices(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = [
+            "Local-Bot",
+            "local-bot",
+        ]
+        self.reject(
+            r"managed_bot_logins: cross-domain collapse under domain A: entries "
+            r"\[0\] and \[1\]"
+        )
+
+    def test_authorized_logins_rejects_domain_a_case_fold_collapse_with_indices(self) -> None:
+        self.declaration["deployment"][0]["author_authorization"][
+            "authorized_logins"
+        ] = ["Trusted-Author", "trusted-author[bot]"]
+        self.reject(
+            r"authorized_logins: cross-domain collapse under domain A: entries "
+            r"\[0\] and \[1\]"
+        )
+
+    def test_machine_actor_rejects_domain_a_alias_to_non_self_roster_entry(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = [
+            "Managed-Bot",
+            "managed-bot",
+        ]
+        self.machine["credentials"]["github-bot"] = "Managed-Bot"
+        self.reject(r"cross-domain collapse under domain A: entries \[0\] and \[1\]")
+
+    def test_approved_roster_is_unique_in_domain_a_but_domains_can_disagree(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = ["Managed-Bot"]
+        self.machine["credentials"]["github-bot"] = "Managed-Bot"
+        resolved = validate_and_resolve(self.declaration, self.machine, self.lock)
+        approved = resolved["deployment"][0]["managed_bot_logins"]
+        self.assertEqual(
+            len({domain_a_normalized_login(login) for login in approved}),
+            len(approved),
+        )
+        inbound_author = "managed-bot[bot]"
+        self.assertIn(
+            domain_a_normalized_login(inbound_author),
+            {domain_a_normalized_login(login) for login in approved},
+        )
+        self.assertNotIn(
+            normalized_login(inbound_author),
+            {normalized_login(login) for login in approved},
+        )
+
+    def test_selected_complete_fleet_invariant_rejects_peers_only_roster(self) -> None:
+        self.declaration["deployment"][0]["managed_bot_logins"] = ["peer-bot"]
+        self.machine["credentials"]["github-bot"] = "local-bot"
+        self.reject("resolved bot login must belong to deployment.managed_bot_logins")
+
+    def test_platform_login_lists_reject_tokenizer_delimiters_with_item_path(self) -> None:
+        cases = (
+            ("comma", "trusted,attacker"),
+            ("space", "trusted attacker"),
+            ("tab", "trusted\tattacker"),
+            ("newline", "trusted\nattacker"),
+            ("carriage-return", "trusted\rattacker"),
+            ("vertical-tab", "trusted\vattacker"),
+            ("form-feed", "trusted\fattacker"),
+            ("unicode-whitespace", "trusted\u00a0attacker"),
+            ("nul", "trusted\x00attacker"),
+        )
+        fields = (
+            ("managed_bot_logins", self.declaration["deployment"][0]),
+            (
+                "authorized_logins",
+                self.declaration["deployment"][0]["author_authorization"],
+            ),
+        )
+        for field, table in fields:
+            for delimiter, login in cases:
+                with self.subTest(field=field, delimiter=delimiter):
+                    table[field] = [login]
+                    with self.assertRaises(ValidationError) as raised:
+                        validate_and_resolve(self.declaration, self.machine, self.lock)
+                    self.assertIn(f".{field}[0]:", str(raised.exception))
+                    self.assertIn(
+                        "without commas, whitespace, or NUL", str(raised.exception)
+                    )
+            table[field] = ["fkst-bot"] if field == "managed_bot_logins" else []
+
+    def test_platform_login_lists_reject_empty_normalized_identity_with_item_path(self) -> None:
+        fields = (
+            ("managed_bot_logins", self.declaration["deployment"][0]),
+            (
+                "authorized_logins",
+                self.declaration["deployment"][0]["author_authorization"],
+            ),
+        )
+        for field, table in fields:
+            with self.subTest(field=field):
+                table[field] = ["[bot]"]
+                with self.assertRaises(ValidationError) as raised:
+                    validate_and_resolve(self.declaration, self.machine, self.lock)
+                self.assertIn(f".{field}[0]:", str(raised.exception))
+                self.assertIn("must not normalize to an empty identity", str(raised.exception))
+            table[field] = ["fkst-bot"] if field == "managed_bot_logins" else []
+
+    def test_resolved_machine_actor_rejects_empty_normalized_identity(self) -> None:
+        self.machine["credentials"]["github-bot"] = "[bot]"
+        self.reject(
+            r"declaration.deployment\[0\].machine.bot_login: "
+            "must not normalize to an empty identity"
+        )
+
+    def test_legacy_machine_managed_bot_set_fails_closed_as_unknown(self) -> None:
+        self.declaration["deployment"][0]["machine"]["managed_bot_set"] = "managed-bots"
+        self.reject("unknown field: managed_bot_set")
 
     def test_author_authorization_resolves_declared_policy(self) -> None:
         self.declaration["deployment"][0]["author_authorization"] = {
@@ -209,10 +361,11 @@ class ValidatorTests(unittest.TestCase):
 
     def test_profile_machine_references_are_optional_without_profile(self) -> None:
         del self.declaration["deployment"][0]["github_devloop_profile"]
-        for field in ("rate_pool", "bot_login", "managed_bot_set"):
+        for field in ("rate_pool", "bot_login"):
             del self.declaration["deployment"][0]["machine"][field]
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
         self.assertNotIn("rate_pool", result["deployment"][0]["machine"])
+        self.assertNotIn("bot_login", result["deployment"][0]["machine"])
 
     def test_profile_requires_its_machine_references(self) -> None:
         del self.declaration["deployment"][0]["machine"]["bot_login"]
