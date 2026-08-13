@@ -47,7 +47,8 @@ from pathlib import Path
 from schema.mechanism_tools import MECHANISM_TOOLS
 with open(sys.argv[1], "rb") as stream:
     profile_tools = tomllib.load(stream).get("tools", {})
-child_path = [sys.argv[2]]
+child_path = [sys.argv[2], str(Path(sys.argv[3]).parent)]
+child_path.extend(str(Path(value).parent) for value in profile_tools.values() if value)
 for name, tool in MECHANISM_TOOLS.items():
     value = (
         os.environ.get(tool.environment, "") if tool.environment is not None else ""
@@ -56,10 +57,7 @@ for name, tool in MECHANISM_TOOLS.items():
         raise SystemExit(f"error: machine profile has no carried mechanism tool: {name}")
     if tool.shell_variable is not None:
         print(f"{tool.shell_variable}={shlex.quote(value)}")
-    if tool.child_path and value:
-        child_path.append(str(Path(value).parent))
 standard_path = os.confstr("CS_PATH") or os.defpath
-child_path.append(str(Path(sys.argv[3]).parent))
 child_path.extend(os.get_exec_path({"PATH": standard_path}))
 print(f"DEPLOYMENT_CHILD_PATH={shlex.quote(os.pathsep.join(dict.fromkeys(child_path)))}")
 ' "$FKST_OPS_MACHINE_PROFILE" "$_self_dir" "$DEPLOYMENT_PYTHON")" || exit $?

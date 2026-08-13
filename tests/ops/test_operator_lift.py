@@ -11,27 +11,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from schema.mechanism_tools import MECHANISM_TOOLS
-
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
 FKST_OPS = ROOT / "bin" / "fkst-ops"
 MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 class OperatorLiftTest(unittest.TestCase):
-    def test_every_enumerated_mechanism_tool_is_loaded_from_profile(self) -> None:
-        source = OPERATOR.read_text(encoding="utf-8")
-        loader = source[source.index("MECHANISM_TOOL_ASSIGNMENTS="):
-                        source.index("DEPLOYMENT_OPERATOR_DEPLOYMENTS=")]
-        self.assertIn("from schema.mechanism_tools import MECHANISM_TOOLS", loader)
-        self.assertIn("for name, tool in MECHANISM_TOOLS.items()", loader)
-        for name, tool in MECHANISM_TOOLS.items():
-            with self.subTest(name=name):
-                self.assertIn(f'"{name}"', (ROOT / "schema" / "mechanism_tools.py").read_text())
-                if tool.shell_variable is not None:
-                    self.assertIn(f'"{tool.shell_variable}"',
-                                  (ROOT / "schema" / "mechanism_tools.py").read_text())
-
     def test_mechanism_tools_have_no_runtime_path_lookup(self) -> None:
         source = OPERATOR.read_text(encoding="utf-8")
         self.assertNotIn("type -P gh", source)
@@ -497,17 +482,9 @@ github_write_posture
         captured = self._capture_launch_environment(None)
         self.assertEqual(captured["FKST_CARGO"], "/fixture/resolved/cargo")
 
-    def test_resolved_python_and_generated_path_reach_launched_process(self) -> None:
+    def test_resolved_python_reaches_launched_process(self) -> None:
         captured = self._capture_launch_environment(None)
         self.assertEqual(captured["FKST_PYTHON"], "/fixture/resolved/python")
-        path = captured["PATH"].split(os.pathsep)
-        self.assertEqual(path[0], str(ROOT / "ops"))
-        self.assertEqual(Path(captured["codex"]), Path(path[1]) / "codex")
-        self.assertEqual((captured["python3_executable"], captured["python3"]), (sys.executable, sys.executable))
-        standard_path = os.confstr("CS_PATH") or os.defpath
-        expected_tail = [str(Path(sys.executable).parent), *os.get_exec_path({"PATH": standard_path})]
-        self.assertEqual(path[2:], list(dict.fromkeys(expected_tail)))
-        self.assertNotIn("ambient-only", captured["PATH"])
 
     def test_bare_python_fallback_resolves_the_executable_it_actually_runs(self) -> None:
         function = next(

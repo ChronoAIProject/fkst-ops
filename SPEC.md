@@ -77,10 +77,10 @@ Artifact generation discovers required mechanism executables before publication.
 `codex` is required because a supervisor that cannot spawn it cannot execute its
 departments. The engine has no executable override for this consumer, so the
 supervisor child receives a deterministic `PATH`: the mechanism entry directory,
-the directories of discovered tools explicitly declared for path delivery, the
-directory of the interpreter that resolved the operator, and the platform
-default executable path, with duplicates removed. The generator's or operator's
-ambient `PATH` is not inherited by the child.
+the directory of the interpreter that resolved the operator, the directories of
+every tool in the generated machine profile, and the platform default executable
+path, with duplicates removed. The generator's or operator's ambient `PATH` is
+not inherited by the child.
 
 This direct topology is deliberate policy. A separate shipped process root
 would add no process-group isolation because the supervisor already owns its
