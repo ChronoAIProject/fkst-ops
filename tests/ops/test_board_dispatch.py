@@ -13,7 +13,26 @@ def executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def test_dispatcher_runs_operator_board_action(tmp_path):
+def test_board_dispatch_contract_carries_validator_actor_and_complete_roster(tmp_path):
+    mechanism = tmp_path / "mechanism"
+    shutil.copytree(
+        ROOT,
+        mechanism,
+        ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"),
+    )
+    subprocess.run(["git", "init", "-q", str(mechanism)], check=True)
+    subprocess.run(
+        ["git", "-C", str(mechanism), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(mechanism), "config", "user.name", "test"], check=True,
+    )
+    subprocess.run(["git", "-C", str(mechanism), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(mechanism), "commit", "-qm", "fixture mechanism"],
+        check=True,
+    )
     source = tmp_path / "source"; engine = tmp_path / "engine"
     durable = tmp_path / "durable"; runtime = tmp_path / "runtime"; logs = tmp_path / "logs"
     for path in (source, engine, durable, runtime, logs): path.mkdir()
@@ -27,6 +46,9 @@ import json,os,sys
 if os.environ.get("PROVIDER_CALL_MARKER"):
     open(os.environ["PROVIDER_CALL_MARKER"], "a").close()
 r=json.load(sys.stdin); view="engine-durable" if "engine-durable" in r["contract"] else "github-control"
+if view=="github-control":
+    assert r["input"]["bot_login"] == "Local-Bot[bot]"
+    assert r["input"]["managed_bot_set"] == ["Local-Bot", "peer-bot[bot]"]
 result={"view":view,"rows":[{"key":view,"classification":"fixture","fields":{"text":view+" through operator"}}]}
 if view=="engine-durable": result["health"]={"status":"healthy","anomalies":[]}
 print(json.dumps({"version":"fkst.ops.invocation.v1","ok":True,"result":result}))
@@ -41,7 +63,7 @@ cadence_interval_seconds=300
 id="fixture"
 target_identity="owner/target"
 github_write_enabled=false
-managed_bot_logins=["bot"]
+managed_bot_logins=["Local-Bot", "peer-bot[bot]"]
 [deployment.claim_posture]
 mode="assignee"
 label_exclusive=false
@@ -66,6 +88,7 @@ engine_binary="binary"
 durable="durable"
 runtime="runtime"
 logs="logs"
+bot_login="github-bot"
 [deployment.providers]
 github_credential="github-credential"
 engine="engine"
@@ -112,22 +135,23 @@ codex="{shutil.which('codex')}"
 gh="{shutil.which('true')}"
 gh-app="{shutil.which('true')}"
 [credentials]
+github-bot="Local-Bot[bot]"
 [sets]
 [defaults]
 ''', encoding="utf-8")
     lock = tmp_path / "fkst.lock"
     pin = '0' * 40; tree = 'sha256-' + '0' * 64
     mechanism_rev = subprocess.run(
-        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        ["git", "-C", str(mechanism), "rev-parse", "HEAD"],
         check=True, text=True, capture_output=True,
     ).stdout.strip()
     mechanism_tree = subprocess.run(
-        ["python3", str(ROOT / "bootstrap" / "canonical_tree.py"), str(ROOT), mechanism_rev],
+        ["python3", str(mechanism / "bootstrap" / "canonical_tree.py"), str(mechanism), mechanism_rev],
         check=True, text=True, capture_output=True,
     ).stdout.strip()
     lock.write_text(f'''[[external_source]]
 id="fkst-ops"
-git="{ROOT}"
+git="{mechanism}"
 checkout_role="mechanism"
 [external_source.resolved]
 rev="{mechanism_rev}"
@@ -147,7 +171,7 @@ checkout_role="deployment-operated"
 rev="{pin}"
 tree_sha256="{tree}"
 ''', encoding="utf-8")
-    result = subprocess.run([str(ROOT / "bin" / "fkst-ops"), "--declaration", str(declaration),
+    result = subprocess.run([str(mechanism / "bin" / "fkst-ops"), "--declaration", str(declaration),
                              "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],
                             cwd=tmp_path, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -159,7 +183,7 @@ tree_sha256="{tree}"
     env = os.environ.copy()
     env["PROVIDER_CALL_MARKER"] = str(marker)
     unavailable = subprocess.run(
-        [str(ROOT / "bin" / "fkst-ops"), "--declaration", str(declaration),
+        [str(mechanism / "bin" / "fkst-ops"), "--declaration", str(declaration),
          "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],
         cwd=tmp_path, text=True, capture_output=True, env=env,
     )

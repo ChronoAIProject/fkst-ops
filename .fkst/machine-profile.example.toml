@@ -26,10 +26,6 @@ schema = "fkst.ops.machine-profile.v1"
 # Machine-local login or credential selector used by the control provider.
 "<bot-login>" = "<machine-local-bot-login>"
 
-[sets]
-# Complete set of machine-local bot identities managed by this deployment.
-"<managed-bot-set>" = ["<machine-local-bot-identity>"]
-
 [defaults]
 # Concrete integration branch selected by the declaration's machine reference.
 "<integration-branch>" = "<integration-branch-name>"

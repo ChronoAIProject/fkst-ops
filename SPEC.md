@@ -14,10 +14,83 @@ dependency constraint requires a deliberate revision of this specification.
 
 `fkst-deployments` owns deployment parameters and composition: source bindings
 and pins, package selection, integration policy, target identity, logical
-runtime/durable/log identities, provider selection, its bootstrap, and its
-lock. A machine profile supplies discovered machine facts such as absolute
-paths, credentials, authenticated identity, and locally available binaries.
-Declarations refer to machine facts by logical name.
+runtime/durable/log identities, the complete cross-machine managed-bot roster,
+provider selection, its bootstrap, and its lock. A machine profile supplies
+discovered machine facts such as absolute paths, credentials, the local machine
+actor (`bot_login`), and locally available binaries. Declarations refer to
+machine facts by logical name.
+
+The validator selects `bot_login` membership in the declaration-owned roster as
+an fkst-ops invariant; this is not derived from platform behavior. Platform
+consumers tolerate a peers-only list because they separately receive the local
+actor, but fkst-ops treats the declared roster as the complete fleet and fails
+closed when it omits that actor. The explicit cost is rejection of peers-only
+rosters.
+
+Artifact generation accepts exactly one explicit local actor (`--bot-login`)
+per invocation and uses it for every declaration selected in that generation.
+That actor must be a member of every operated deployment's declared
+`managed_bot_logins` roster; generation fails closed if any roster omits it.
+This is the one-machine/one-bot-app cardinality contract, not a per-deployment
+multi-actor facility.
+
+The platform has two distinct managed-bot classifiers, and fkst-ops does not
+attempt to make them agree:
+
+- Domain A is case-insensitive. `libraries/devloop/github_author_policy.lua:29`
+  supplies `managed_bot_logins` and `:41` supplies `is_managed_bot_login`; both
+  use the `devloop/base.lua:153` trim/lower/strip normalization. Its separate
+  authorization path is `fkst-packages/libraries/forge/github/content_filter.lua:370-380`
+  through `content_filter.is_authorized:421` into
+  `libraries/devloop/github_author_policy.is_authorized:87`. The consensus,
+  liveness-scan, and loop departments consume that path.
+- Domain B is case-sensitive. `packages/github-devloop-workflow/tools/workflow_board_fact.py:71-74`
+  removes only the trailing `[bot]`, preserving case. The
+  `libraries/forge/github/strings.lua:6` classifier is consumed by both
+  `github-external-pr-intake` and `github-ratchet-migration-slicer`.
+
+The mechanism aligns its comparison and membership behavior with Domain B. Its
+additional fail-closed guarantee is narrower: each mechanism-approved
+`managed_bot_logins` and `author_authorization.authorized_logins` list must not
+self-collapse in the coarser Domain A (diagnostics identify both colliding
+indices). This is a list-internal safety invariant only; it does not change
+Domain B comparison or membership semantics. The local `bot_login` must retain
+the existing Domain B membership rule, and is also rejected when it aliases a
+different roster entry under Domain A.
+
+Irreducible platform residual risk remains because the two managed-bot
+classifiers can disagree, and an inbound author can be authorized after Domain
+A case folding while not being recognized as a managed bot under Domain B. The
+mechanism cannot close these gaps without changing platform consumers, which is
+outside fkst-ops ownership. Operators must therefore treat authorization and
+managed-bot facts as domain-specific: audit both normalized forms, expect the
+same login to produce different department decisions, and expect an author
+admitted by the Domain A policy to still be classified by Domain B consumers as
+unmanaged or emitted as an external-intake candidate. Such disagreements
+require investigation; an authorization result does not prove managed-bot
+identity.
+
+Two additional premises are operational assertions rather than mechanically
+verifiable identity proofs. The machine actor is now supplied explicitly, but
+`providers/github_credential_gh.py` reports
+`identity_proof = "target-access-only;bot-login-not-mechanically-proven"`.
+Also, the roster is merged into Domain A's trusted-author allowlist by
+`libraries/devloop/github_author_policy.lua:69-74`. Because the membership rule
+structurally treats the roster as the complete-fleet union, `actor in roster`
+can be satisfied by a peer's login. That invariant proves only that the
+declaration did not omit this machine; it does not prove that the process is
+running as this machine's own identity.
+
+Every entry in either list is one non-empty platform token. A token must contain
+no comma, no character Python recognizes as whitespace (including Unicode
+whitespace), and no NUL. These exclusions preserve one-entry/one-token
+semantics at the platform consumers and reject line terminators that Bash
+command substitution can strip from its output; NUL is also excluded because
+that substitution silently removes it. Domain B normalization removes one
+trailing literal `[bot]`; the remaining case-sensitive identity must be
+non-empty. The resolved machine `bot_login` and artifact generator's
+`--bot-login` obey the same transport and non-empty-normalized-identity rules.
+No broader GitHub-login grammar is implied.
 
 Package producers own the meaning of their facts. Engine behavior and
 guarantees belong to the engine repository. This repository consumes the
@@ -47,6 +120,24 @@ This verification does not inspect the checkout's current tracked-file
 contents. Modified or deleted tracked working-tree files can therefore pass
 when `HEAD` and the named commit tree match the lock. Verification of the
 actual executable contents is a required invariant that is not implemented.
+
+## Cross-repository adoption order
+
+The mechanism/schema change is adopted in this order:
+
+1. Publish the mechanism revision first, while no deployment lock refers to it.
+2. Then use one `fkst-deployments` commit to carry both the declaration-shape
+   change (expand each roster to the complete fleet and remove
+   `machine.managed_bot_set`) and the new mechanism `rev` plus `tree_sha256`.
+
+This ordering avoids a declaration/pin incompatibility in either repository
+history because the entry self-pins from the `fkst.lock` in the same deployment
+commit. An old deployment commit therefore uses the old mechanism that explains
+its old declaration, while the new deployment commit atomically carries both
+the new schema-shaped declaration and the mechanism pin that explains it. This
+does not guarantee a race-free window for concurrent cross-repository delivery,
+and it proves no downstream engine or package adoption semantics; those remain
+explicitly excluded below.
 
 ## Public action surface
 
@@ -213,6 +304,12 @@ This repository does not guarantee:
   `SIGTERM`;
 - scheduling, launchd installation, deployment discovery, concrete deployment
   declarations, machine paths, credentials, pins, or pin advancement;
+- a race-free window for concurrent cross-repository delivery of a declaration
+  and its mechanism pin; the tested old/new compatibility matrix proves only
+  that matching pairs pass and crossed pairs fail closed at the real pinned
+  re-exec boundary;
+- downstream engine or package adoption semantics inferred from that pin/re-exec
+  compatibility matrix;
 - conforming replacement when two replacement invocations overlap in the
   current implementation, or atomic serialization of cache publication,
   old-generation pruning, or rollback;
@@ -221,6 +318,9 @@ This repository does not guarantee:
 - successful mutation when a checkout is dirty/diverged, a provider fails, a
   pin or tree does not verify, readiness is absent, or required machine facts
   are unavailable.
+- that an explicitly declared `bot_login` is mechanically proven to be the
+  identity used by the credential provider; or that roster membership proves
+  the local process is not using a peer's login.
 
 The executable behavior remains the final evidence for implementation defects;
 changes to the guarantees above require changing this specification and the

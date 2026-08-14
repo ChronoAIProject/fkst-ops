@@ -61,6 +61,7 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
                     {
                         "id": name,
                         "target_identity": name,
+                        "managed_bot_logins": ["bot"],
                         "machine": {
                             "target_checkout": f"/{name}",
                             "platform_checkout": f"/{name}",
@@ -169,6 +170,81 @@ stop_one "$1"
                 self.assertEqual(status, result.returncode)
                 self.assertEqual(stdout, result.stdout)
                 self.assertEqual(stderr, result.stderr)
+
+    def test_two_runtime_configs_receive_the_same_resolved_declaration_roster(self) -> None:
+        roster = ["bot-a", "bot-b"]
+
+        def deployment(name: str, actor: str) -> dict[str, object]:
+            providers = {
+                field: {
+                    "executable": "/provider",
+                    "contract": "v1",
+                    "configuration": {"build_command": ["/bin/true"]}
+                    if field == "engine" else {},
+                }
+                for field in (
+                    "github_credential", "engine", "board_engine_durable",
+                    "board_github_control",
+                )
+            }
+            return {
+                "id": name,
+                "target_identity": f"example/{name}",
+                "managed_bot_logins": roster,
+                "machine": {
+                    "target_checkout": f"/{name}/target",
+                    "platform_checkout": f"/{name}/platform",
+                    "engine_checkout": "/engine",
+                    "engine_binary": "/engine/bin",
+                    "durable": f"/{name}/durable",
+                    "runtime": f"/{name}/runtime",
+                    "logs": f"/{name}/logs",
+                    "bot_login": actor,
+                },
+                "github_devloop_profile": {},
+                "providers": providers,
+                "claim_posture": {"mode": "label", "label_exclusive": False},
+                "author_authorization": {
+                    "authorized_logins": [],
+                    "authorize_org_members": False,
+                    "authorize_repo_collaborators": False,
+                },
+                "integration": {
+                    "upstream_branch": "dev",
+                    "integration_branch": "integration",
+                    "rollup_merge": "enabled",
+                },
+                "github_write_enabled": False,
+                "packages": {"host": []},
+                "sources": {
+                    "target": {"git": "target"},
+                    "platform": {"git": "platform"},
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            resolved = Path(directory) / "resolved.json"
+            resolved.write_text(json.dumps({
+                "deployment": [deployment("runtime-a", "bot-a"), deployment("runtime-b", "bot-b")]
+            }), encoding="ascii")
+            command = f'''PYTHON="{sys.executable}"
+RESOLVED_DECLARATION="$(cat "$1")"
+eval "$(sed -n '/^cfg()/,/^}}/p' "{OPERATOR}")"
+for name in runtime-a runtime-b; do
+  cfg "$name" || exit
+  printf '%s\t%s\n' "$BOT" "$MANAGED_BOT_LOGINS"
+done
+'''
+            result = subprocess.run(
+                ["/bin/bash", "-c", command, "test", str(resolved)],
+                text=True, capture_output=True, check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ['bot-a\t["bot-a","bot-b"]', 'bot-b\t["bot-a","bot-b"]'],
+        )
 
     def test_sync_to_run_branch_propagates_fetch_and_checkout_failures(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -448,13 +524,13 @@ github_write_posture
         self.assertEqual(self._capture_launch_environment(None)["FKST_GITHUB_WRITE"], "0")
         self.assertEqual(self._capture_launch_environment("1")["FKST_GITHUB_WRITE"], "1")
 
-    def test_launch_exports_every_resolved_profile_machine_value(self) -> None:
+    def test_launch_exports_resolved_machine_values_and_declaration_roster(self) -> None:
         source = OPERATOR.read_text(encoding="utf-8")
         launch = source[source.index("launch_one() {") : source.index("launch_with_lock_retry() {")]
         expected = {
             'FKST_RATE_POOL_ROOT="$RATE_POOL"': "rate_pool",
             'FKST_GITHUB_BOT_LOGIN="$BOT"': "bot_login",
-            'FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins"': "managed_bot_set",
+            'FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins"': "managed_bot_logins",
         }
         for export, machine_value in expected.items():
             with self.subTest(machine_value=machine_value):

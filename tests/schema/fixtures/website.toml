@@ -34,7 +34,6 @@ runtime = "website-runtime"
 logs = "website-logs"
 rate_pool = "shared-rate-pool"
 bot_login = "github-bot"
-managed_bot_set = "managed-bots"
 [deployment.providers]
 github_credential = "github-credential"
 engine = "engine"

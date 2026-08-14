@@ -33,7 +33,6 @@ runtime = "substrate-runtime"
 logs = "substrate-logs"
 rate_pool = "shared-rate-pool"
 bot_login = "github-bot"
-managed_bot_set = "managed-bots"
 [deployment.providers]
 github_credential = "github-credential"
 engine = "engine"
