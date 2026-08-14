@@ -42,8 +42,8 @@ is `bin/fkst-ops` and stays the only invocation surface.
   introduced `integration_branch = "machine:<logical>"` alone passed validation and
   made the repository impossible to install, because that reference had no
   generator-side implementation at the pinned revision.
-- **`fkst-deployments` must never contain scripts, programs, or executable files.**
-  Policy there is declarative fields only. Mechanism belongs here.
+- **Follow the authoritative policy in `fkst-deployments`.** This repository does
+  not restate that policy; consult `fkst-deployments/README.md`.
 - **Do not add a second scheduler.** launchd `StartInterval` plus the cadence round
   is the fleet's own timing, and the cadence guard is its own recovery. A
   session-bound loop is not a monitoring mechanism — see "Where /loop belongs".
@@ -101,7 +101,9 @@ Do all four. Any one alone has been misleading in practice.
 The cadence round runs `sync`, then `status`, then appends its record, and only
 then may recover. `guard_restart_attempt_limit` is declared policy: a non-negative
 integer, required, no default held by the mechanism, and zero disables the guard
-entirely — same calls, same ledger fields, same order as without it.
+entirely. With a zero limit, it writes one record per declaration without
+`deployment_id` or `guard`, and never calls `restart`; with a positive limit, it
+writes one record per deployment identity.
 
 Two properties matter when reading its behaviour:
 
@@ -132,3 +134,5 @@ reintroduce the coupling and give the fleet two schedulers whose failures look
 different.
 
 Use `/loop` to investigate. Let launchd and the cadence guard do the monitoring.
+
+Mechanism-claim evidence index: [SPEC.md](SPEC.md).
