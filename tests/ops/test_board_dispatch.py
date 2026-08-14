@@ -59,6 +59,7 @@ print(json.dumps({"version":"fkst.ops.invocation.v1","ok":True,"result":result})
     declaration.write_text('''schema="fkst.ops.deployment.v1"
 cadence_enabled=true
 cadence_interval_seconds=300
+guard_restart_attempt_limit=3
 [[deployment]]
 id="fixture"
 target_identity="owner/target"

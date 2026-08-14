@@ -16,6 +16,8 @@
     <string>__DECLARATION_MANIFEST__</string>
     <string>--ledger</string>
     <string>__LEDGER__</string>
+    <string>--guard-restart-attempt-limit</string>
+    <string>__GUARD_RESTART_ATTEMPT_LIMIT__</string>
     <string>--operator-entry</string>
     <string>__FKST_OPS_CHECKOUT__/bin/fkst-ops</string>
   </array>

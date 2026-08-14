@@ -131,6 +131,13 @@ def _positive_integer(table: dict[str, Any], field: str, path: str) -> int:
     return value
 
 
+def _nonnegative_integer(table: dict[str, Any], field: str, path: str) -> int:
+    value = table.get(field)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        _fail(f"{path}.{field}", "must be a non-negative integer")
+    return value
+
+
 def _logical(value: str, path: str) -> None:
     if os.path.isabs(value) or PurePosixPath(value).is_absolute():
         _fail(path, "absolute machine value is forbidden; use a logical name")
@@ -376,11 +383,25 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
 def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str, Any], lock: dict[str, Any]) -> dict[str, Any]:
     """Validate all inputs and return a newly allocated resolved declaration."""
     declaration = _table(declaration, "declaration")
-    _closed(declaration, {"schema", "cadence_enabled", "cadence_interval_seconds", "deployment", "provider"}, "declaration")
+    _closed(
+        declaration,
+        {
+            "schema",
+            "cadence_enabled",
+            "cadence_interval_seconds",
+            "guard_restart_attempt_limit",
+            "deployment",
+            "provider",
+        },
+        "declaration",
+    )
     if _string(declaration, "schema", "declaration") != SCHEMA_ID:
         _fail("declaration.schema", f"must be {SCHEMA_ID}")
     cadence_interval_seconds = _positive_integer(
         declaration, "cadence_interval_seconds", "declaration"
+    )
+    guard_restart_attempt_limit = _nonnegative_integer(
+        declaration, "guard_restart_attempt_limit", "declaration"
     )
     cadence_enabled = declaration.get("cadence_enabled")
     if not isinstance(cadence_enabled, bool):
@@ -608,6 +629,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
         "schema": SCHEMA_ID,
         "cadence_enabled": cadence_enabled,
         "cadence_interval_seconds": cadence_interval_seconds,
+        "guard_restart_attempt_limit": guard_restart_attempt_limit,
         "deployment": resolved_deployments,
     }
 

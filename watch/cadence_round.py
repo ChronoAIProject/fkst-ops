@@ -13,8 +13,10 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -25,6 +27,10 @@ ENVIRONMENT_ARGUMENTS = {
     "ledger": "FKST_WATCH_LEDGER",
     "operator_entry": "FKST_WATCH_OPERATOR_ENTRY",
 }
+STATUS_PATTERN = re.compile(r"^\[([^]]+)]\s+(\S+)(?:\s|$)")
+RUNNING = "RUNNING"
+STOPPED = "STOPPED"
+UNKNOWN = "UNKNOWN"
 
 
 def required_path(argument: str | None, environment_name: str, label: str) -> Path:
@@ -91,21 +97,98 @@ def status_line(output: str) -> str:
     return lines[-1] if lines else ""
 
 
+def deployment_status(output: str, deployment_id: str) -> tuple[str, str]:
+    matching: list[tuple[str, str]] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        match = STATUS_PATTERN.match(line)
+        if match is not None and match.group(1) == deployment_id:
+            matching.append((match.group(2), line))
+    if len(matching) != 1:
+        return UNKNOWN, ""
+    state, line = matching[0]
+    return (state, line) if state in {RUNNING, STOPPED} else (UNKNOWN, line)
+
+
+def deployment_ids(declaration: Path) -> list[str]:
+    try:
+        with declaration.open("rb") as handle:
+            document = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"cannot read deployment identities from {declaration}: {exc}") from exc
+    deployments = document.get("deployment")
+    if not isinstance(deployments, list) or not deployments:
+        raise ValueError(f"declaration has no deployments: {declaration}")
+    identities: list[str] = []
+    for item in deployments:
+        identity = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(identity, str) or not identity:
+            raise ValueError(f"declaration has an invalid deployment id: {declaration}")
+        identities.append(identity)
+    if len(set(identities)) != len(identities):
+        raise ValueError(f"declaration has duplicate deployment ids: {declaration}")
+    return identities
+
+
+def ledger_records(ledger: Path) -> list[dict[str, object]]:
+    if not ledger.exists():
+        return []
+    records: list[dict[str, object]] = []
+    try:
+        for number, line in enumerate(ledger.read_text(encoding="utf-8").splitlines(), 1):
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError(f"ledger line {number} is not an object")
+            records.append(record)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read guard state from ledger: {exc}") from exc
+    return records
+
+
+def prior_stopped_streak(
+    records: list[dict[str, object]], declaration: str, deployment_id: str
+) -> int:
+    streak = 0
+    for record in reversed(records):
+        if record.get("deployment") != declaration:
+            continue
+        recorded_id = record.get("deployment_id")
+        if recorded_id is not None and recorded_id != deployment_id:
+            continue
+        recorded_line = record.get("status_line")
+        state = (
+            deployment_status(recorded_line, deployment_id)[0]
+            if isinstance(recorded_line, str)
+            else UNKNOWN
+        )
+        if state != STOPPED:
+            break
+        streak += 1
+    return streak
+
+
 def invoke(
-    entry: Path, repository: Path, declaration: Path, profile: Path, lock: Path, action: str
+    entry: Path,
+    repository: Path,
+    declaration: Path,
+    profile: Path,
+    lock: Path,
+    action: str,
+    deployment_id: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = {**os.environ, "FKST_OPS_PYTHON": sys.executable}
+    command = [
+        str(entry),
+        "--deployment-dir", str(repository),
+        "--declaration", str(declaration),
+        "--machine-profile", str(profile),
+        "--lock", str(lock),
+        action,
+    ]
+    if deployment_id is not None:
+        command.append(deployment_id)
     return subprocess.run(
-        [
-            str(entry),
-            "--deployment-dir", str(repository),
-            "--declaration",
-            str(declaration),
-            "--machine-profile",
-            str(profile),
-            "--lock", str(lock),
-            action,
-        ],
+        command,
         env=environment,
         text=True,
         stdout=subprocess.PIPE,
@@ -130,6 +213,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--machine-profile")
     parser.add_argument("--declaration-manifest")
     parser.add_argument("--ledger")
+    parser.add_argument("--guard-restart-attempt-limit", type=int, required=True)
     parser.add_argument("--operator-entry")
     return parser.parse_args()
 
@@ -151,6 +235,8 @@ def main() -> int:
         manifest = Path(manifest_value).expanduser().resolve()
         ledger = required_path(args.ledger, ENVIRONMENT_ARGUMENTS["ledger"], "ledger")
         entry = required_path(args.operator_entry, ENVIRONMENT_ARGUMENTS["operator_entry"], "operator entry")
+        if args.guard_restart_attempt_limit < 0:
+            raise ValueError("guard restart attempt limit must be non-negative")
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -161,6 +247,7 @@ def main() -> int:
 
     try:
         discovered, lock = declarations(repository, manifest)
+        history = ledger_records(ledger) if args.guard_restart_attempt_limit > 0 else []
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -169,13 +256,65 @@ def main() -> int:
     for declaration in discovered:
         sync = invoke(entry, repository, declaration, profile, lock, "sync")
         status = invoke(entry, repository, declaration, profile, lock, "status")
-        record = {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-            "deployment": str(declaration.relative_to(repository)),
-            "sync_exit_status": sync.returncode,
-            "status_line": status_line(status.stdout),
-        }
-        append_record(ledger, record)
+        relative_declaration = str(declaration.relative_to(repository))
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        if args.guard_restart_attempt_limit == 0:
+            append_record(
+                ledger,
+                {
+                    "timestamp": timestamp,
+                    "deployment": relative_declaration,
+                    "sync_exit_status": sync.returncode,
+                    "status_line": status_line(status.stdout),
+                },
+            )
+        else:
+            try:
+                identities = deployment_ids(declaration)
+            except ValueError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                failed = True
+                identities = []
+            for identity in identities:
+                observed_state, observed_line = (
+                    deployment_status(status.stdout, identity)
+                    if sync.returncode == 0 and status.returncode == 0
+                    else (UNKNOWN, "")
+                )
+                record: dict[str, object] = {
+                    "timestamp": timestamp,
+                    "deployment": relative_declaration,
+                    "deployment_id": identity,
+                    "sync_exit_status": sync.returncode,
+                    "status_line": observed_line,
+                }
+                guard = None
+                if observed_state == STOPPED:
+                    prior_streak = prior_stopped_streak(
+                        history, relative_declaration, identity
+                    )
+                    guard = (
+                        "attempted"
+                        if prior_streak < args.guard_restart_attempt_limit
+                        else "open"
+                    )
+                    record["guard"] = guard
+                append_record(ledger, record)
+                history.append(record)
+                if guard == "attempted":
+                    restart = invoke(
+                        entry,
+                        repository,
+                        declaration,
+                        profile,
+                        lock,
+                        "restart",
+                        identity,
+                    )
+                    if restart.returncode != 0:
+                        failed = True
+                    if restart.stderr:
+                        sys.stderr.write(restart.stderr)
         if sync.returncode != 0 or status.returncode != 0:
             failed = True
         if sync.stderr:
