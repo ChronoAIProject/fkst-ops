@@ -112,9 +112,14 @@ def test_one_round_writes_one_ledger_line_per_declaration(tmp_path: Path) -> Non
     repository, profile, ledger, calls, operator = fixture(tmp_path)
     declaration(repository / "first.toml", "first")
     declaration(repository / "second.toml", "second")
+    manifest(repository, ["first.toml", "second.toml"])
+    calls.touch()
+    files_before_round = {path for path in tmp_path.rglob("*") if path.is_file()}
     result = run_round(repository, profile, ledger, operator, {**os.environ, "CALLS": str(calls)})
 
     assert result.returncode == 0, result.stderr
+    files_after_round = {path for path in tmp_path.rglob("*") if path.is_file()}
+    assert files_after_round - files_before_round == {ledger}
     records = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert [record["deployment"] for record in records] == ["first.toml", "second.toml"]
     assert [record["sync_exit_status"] for record in records] == [0, 0]
