@@ -479,7 +479,12 @@ def _profile_text(
 
 
 def _plist_text(
-    repository: Path, profile: Path, manifest: Path, machine_root: Path, interval: int
+    repository: Path,
+    profile: Path,
+    manifest: Path,
+    machine_root: Path,
+    interval: int,
+    guard_restart_attempt_limit: int,
 ) -> str:
     values = {
         "__PYTHON3__": sys.executable,
@@ -489,6 +494,7 @@ def _plist_text(
         "__DECLARATION_MANIFEST__": str(manifest),
         "__LEDGER__": str(machine_root / "watch" / "cadence.jsonl"),
         "__INTERVAL_SECONDS__": str(interval),
+        "__GUARD_RESTART_ATTEMPT_LIMIT__": str(guard_restart_attempt_limit),
         "__STANDARD_OUT_LOG__": str(machine_root / "watch" / "cadence.stdout.log"),
         "__STANDARD_ERROR_LOG__": str(machine_root / "watch" / "cadence.stderr.log"),
     }
@@ -725,6 +731,20 @@ def generate(
     enabled = enablements.pop()
     if not isinstance(enabled, bool):
         raise ValueError("cadence_enabled must be a boolean")
+    guard_limits = {
+        document.get("guard_restart_attempt_limit") for _, document in declarations
+    }
+    if len(guard_limits) != 1:
+        raise ValueError(
+            "all deployment declarations must use one guard_restart_attempt_limit"
+        )
+    guard_restart_attempt_limit = guard_limits.pop()
+    if (
+        not isinstance(guard_restart_attempt_limit, int)
+        or isinstance(guard_restart_attempt_limit, bool)
+        or guard_restart_attempt_limit < 0
+    ):
+        raise ValueError("guard_restart_attempt_limit must be a non-negative integer")
 
     lock = _canonical_repository_file(repository, "fkst.lock", "lock")
     _verify_mechanism_root(lock)
@@ -765,6 +785,7 @@ def generate(
             _plist_text(
                 repository, generation_root / "profile.toml",
                 generation_root / "declarations.json", machine_root, interval,
+                guard_restart_attempt_limit,
             ),
             encoding="utf-8",
         )

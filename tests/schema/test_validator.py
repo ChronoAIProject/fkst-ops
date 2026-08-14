@@ -101,6 +101,21 @@ class ValidatorTests(unittest.TestCase):
         del self.declaration["cadence_enabled"]
         self.reject("cadence_enabled.*boolean")
 
+    def test_guard_restart_attempt_limit_is_required_without_a_default(self) -> None:
+        del self.declaration["guard_restart_attempt_limit"]
+        self.reject("guard_restart_attempt_limit.*non-negative integer")
+
+    def test_guard_restart_attempt_limit_accepts_zero_and_resolves(self) -> None:
+        self.declaration["guard_restart_attempt_limit"] = 0
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(result["guard_restart_attempt_limit"], 0)
+
+    def test_guard_restart_attempt_limit_rejects_nonintegers_and_negative_values(self) -> None:
+        for value in (-1, True, 1.5, "3"):
+            with self.subTest(value=value):
+                self.declaration["guard_restart_attempt_limit"] = value
+                self.reject("guard_restart_attempt_limit.*non-negative integer")
+
     def test_github_write_posture_is_required_without_a_default(self) -> None:
         del self.declaration["deployment"][0]["github_write_enabled"]
         self.reject("github_write_enabled.*boolean")

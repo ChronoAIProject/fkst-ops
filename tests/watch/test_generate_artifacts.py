@@ -188,6 +188,7 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
         plist = plistlib.load(stream)
     assert plist["StartInterval"] == 300
     arguments = plist["ProgramArguments"]
+    assert arguments[arguments.index("--guard-restart-attempt-limit") + 1] == "3"
     profile_argument = Path(arguments[arguments.index("--machine-profile") + 1])
     manifest_argument = Path(arguments[arguments.index("--declaration-manifest") + 1])
     assert profile_argument.parent == manifest_argument.parent
@@ -467,6 +468,36 @@ def test_schedule_parameters_are_required_declaration_values(tmp_path: Path) -> 
     assert "cadence_enabled must be a boolean" in result.stderr
 
 
+def test_guard_restart_attempt_limit_must_match_across_declarations(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    first = repository / "deployment.toml"
+    second = repository / "second.toml"
+    second.write_text(
+        first.read_text(encoding="ascii").replace(
+            "guard_restart_attempt_limit = 3",
+            "guard_restart_attempt_limit = 4",
+        ),
+        encoding="ascii",
+    )
+    (repository / "deployment-set.json").write_text(
+        json.dumps({
+            "schema": "fkst.ops.declaration-input.v1",
+            "declarations": ["deployment.toml", "second.toml"],
+        }),
+        encoding="ascii",
+    )
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 2
+    assert (
+        "all deployment declarations must use one guard_restart_attempt_limit"
+        in result.stderr
+    )
+
+
 def test_dirty_checkout_is_refused_without_destroying_work(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
     assert run_generator(repository, home).returncode == 0
@@ -636,6 +667,7 @@ def test_hydration_failure_preserves_coherent_live_control_state(tmp_path: Path)
             "--machine-profile", str(profile),
             "--declaration-manifest", str(manifest),
             "--ledger", str(tmp_path / "ledger.jsonl"),
+            "--guard-restart-attempt-limit", "0",
             "--operator-entry", str(operator),
         ],
         env=environment, text=True, capture_output=True, check=False,
