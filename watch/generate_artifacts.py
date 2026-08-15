@@ -24,6 +24,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from schema.validator import (
+    GITHUB_CREDENTIAL_SOURCES,
     SCHEMA_ID,
     ValidationError,
     load_and_resolve,
@@ -403,6 +404,7 @@ def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str
 def _profile_text(
     declarations: list[tuple[Path, dict[str, Any]]], machine_root: Path,
     tools: dict[str, str] | None = None, *, bot_login: str,
+    github_credential_source: str | None = None,
 ) -> str:
     base = machine_root
     tools = _discover_tools(declarations) if tools is None else tools
@@ -412,9 +414,36 @@ def _profile_text(
     defaults: dict[str, str] = {}
 
     validate_platform_login(bot_login, "--bot-login")
+    if (
+        github_credential_source is not None
+        and github_credential_source not in GITHUB_CREDENTIAL_SOURCES
+    ):
+        raise ValueError(
+            "--github-credential-source must be github-app or github-cli-user"
+        )
     integration_branch = f"integration-{normalized_login(bot_login)}"
 
     for declaration_path, declaration in declarations:
+        for provider_index, provider in enumerate(declaration.get("provider", [])):
+            if provider.get("kind") != "credential.github":
+                continue
+            configuration = provider.get("configuration")
+            if not isinstance(configuration, dict):
+                continue
+            source = configuration.get("source")
+            if not isinstance(source, str):
+                continue
+            logical = machine_default_reference(
+                source,
+                f"declaration.provider[{provider_index}].configuration.source",
+            )
+            if logical is None:
+                continue
+            if github_credential_source is None:
+                raise ValueError(
+                    "--github-credential-source is required for machine credential source references"
+                )
+            defaults[logical] = github_credential_source
         for index, deployment in enumerate(declaration["deployment"]):
             logins = deployment.get("managed_bot_logins")
             if not isinstance(logins, list) or not logins or any(
@@ -712,7 +741,8 @@ def _publish_control_files_locked(
 
 
 def generate(
-    repository: Path, home: Path, bot_login: str, machine_root: Path | None = None
+    repository: Path, home: Path, bot_login: str, machine_root: Path | None = None,
+    github_credential_source: str | None = None,
 ) -> tuple[Path, Path, bool | None, int]:
     repository = repository.resolve()
     home = home.resolve()
@@ -756,7 +786,10 @@ def generate(
     (machine_root / "watch").mkdir(parents=True, exist_ok=True)
     launch_agent.parent.mkdir(parents=True, exist_ok=True)
     tools = _discover_tools(declarations)
-    profile_text = _profile_text(declarations, machine_root, tools, bot_login=bot_login)
+    profile_text = _profile_text(
+        declarations, machine_root, tools, bot_login=bot_login,
+        github_credential_source=github_credential_source,
+    )
     machine_defaults = tomllib.loads(profile_text)["defaults"]
     manifest_text = json.dumps({
         "schema": "fkst.ops.declaration-set.v2",
@@ -810,11 +843,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("deployment_repository", type=Path)
     parser.add_argument("--bot-login", required=True)
+    parser.add_argument("--github-credential-source")
     parser.add_argument("--machine-state-root", type=Path)
     args = parser.parse_args(argv)
     try:
         profile, launch_agent, live, interval = generate(
-            args.deployment_repository, Path.home(), args.bot_login, args.machine_state_root
+            args.deployment_repository, Path.home(), args.bot_login, args.machine_state_root,
+            args.github_credential_source,
         )
     except (OSError, ValueError, ValidationError) as exc:
         print(f"artifact generation failed: {exc}", file=sys.stderr)

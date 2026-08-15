@@ -70,11 +70,24 @@ unmanaged or emitted as an external-intake candidate. Such disagreements
 require investigation; an authorization result does not prove managed-bot
 identity.
 
-Two additional premises are operational assertions rather than mechanically
-verifiable identity proofs. The machine actor is now supplied explicitly, but
-`providers/github_credential_gh.py` reports
-`identity_proof = "target-access-only;bot-login-not-mechanically-proven"`.
-Also, the roster is merged into Domain A's trusted-author allowlist by
+The two GitHub credential sources provide deliberately different evidence:
+
+- `github-app` mints an installation token for the declared target and verifies
+  that target against `/installation/repositories`. Its proof remains
+  `target-access-only;bot-login-not-mechanically-proven`: it proves installation
+  access to the target, but installation tokens do not resolve through `/user`,
+  so it does not prove that the declared login is the token's principal.
+- `github-cli-user` obtains the GitHub CLI's stored credential for the declared
+  account, compares that token's `/user` login exactly with the declared login,
+  and checks that GitHub reports the declared target's `permissions.push` as
+  exactly `true` at each refresh. This performs no write and proves neither
+  future access nor the effects of branch protection, rulesets, later
+  revocation, or SSO changes. The credential is account-wide; the target check
+  does not make it repository-scoped. Its proof is
+  `login-verified;token-scope-account-wide-not-repository-scoped`.
+
+The roster remains an operational assertion rather than an identity proof. It
+is merged into Domain A's trusted-author allowlist by
 `libraries/devloop/github_author_policy.lua:69-74`. Because the membership rule
 structurally treats the roster as the complete-fleet union, `actor in roster`
 can be satisfied by a peer's login. That invariant proves only that the
@@ -155,7 +168,9 @@ deployment action. Internal commands and functions are not public API.
 | `stop` | Yes: sends `SIGKILL` to one PID. | Common entry validation; resolves the declared deployment and reads its durable PID file. `stop all` attempts every selected deployment and returns nonzero if any attempt fails. |
 | `doctor` | Conditionally: guarded leaked-test reaping and stale-receipt cleanup. | Common entry validation; each repair independently checks process identity, parent/orphan and age guards, or receipt identity and age. Findings and failures remain visible. |
 
-`preflight` runs the common entry validation without dispatching an action.
+`preflight` runs the common entry validation without dispatching an action. It
+validates credential configuration only; it does not authenticate, mint a
+credential, or perform either source's refresh checks.
 
 ## Selected process topology
 
@@ -255,6 +270,14 @@ deployment binds exactly one provider of each required kind:
 `credential.github`, `engine`, `board.engine-durable`, and
 `board.github-control`. Each binding selects the closed contract for its kind.
 
+The `credential.github` configuration is closed to `source`. Its concrete
+source set is exactly `github-app` and `github-cli-user`. A declaration may use
+one of those literals or a `machine:<logical-name>` reference; validation
+resolves such a reference through the machine profile's logical defaults before
+checking the closed set and stores only the concrete value. The same resolved
+value propagates to both the authorization check and the supervised process, so
+launch authorization and later refreshes cannot announce different sources.
+
 `provider.implementation` has the form
 `<pinned-source-id>:<safe-relative-entry>`. The source must be one of the
 deployment's bound target, platform, or engine sources, or its declared
@@ -318,9 +341,10 @@ This repository does not guarantee:
 - successful mutation when a checkout is dirty/diverged, a provider fails, a
   pin or tree does not verify, readiness is absent, or required machine facts
   are unavailable.
-- that an explicitly declared `bot_login` is mechanically proven to be the
-  identity used by the credential provider; or that roster membership proves
-  the local process is not using a peer's login.
+- for `github-app`, that an explicitly declared `bot_login` is mechanically
+  proven to be the identity used by the credential provider; or for either
+  source, that roster membership proves the local process is not using a peer's
+  login.
 
 The executable behavior remains the final evidence for implementation defects;
 changes to the guarantees above require changing this specification and the

@@ -32,6 +32,7 @@ PROVIDER_FIELDS = {
     "board_engine_durable": "board.engine-durable",
     "board_github_control": "board.github-control",
 }
+GITHUB_CREDENTIAL_SOURCES = ("github-app", "github-cli-user")
 MACHINE_KINDS = {
     "target_checkout": "roots",
     "platform_checkout": "roots",
@@ -438,9 +439,14 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             }
         elif kind == "credential.github":
             _closed(configuration, {"source"}, path + ".configuration")
-            source = _string(configuration, "source", path + ".configuration")
-            if source != "github-app":
-                _fail(path + ".configuration.source", "must be github-app")
+            source_path = path + ".configuration.source"
+            source = resolve_machine_default(
+                _string(configuration, "source", path + ".configuration"),
+                machine_values["defaults"],
+                source_path,
+            )
+            if source not in GITHUB_CREDENTIAL_SOURCES:
+                _fail(source_path, "must be github-app or github-cli-user")
             resolved_configuration = {"source": source}
         else:
             _closed(configuration, set(), path + ".configuration")

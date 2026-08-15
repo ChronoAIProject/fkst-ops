@@ -213,19 +213,21 @@ authorize_github_writer() {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-helper-unavailable" >&2
     return 1
   }
-  local credential_source
   credential_source=$(printf '%s' "$GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["source"])') || return 1
-  [ "$credential_source" = github-app ] || {
-    echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-source-not-github-app" >&2
-    return 1
-  }
+  case "$credential_source" in
+    github-app|github-cli-user) ;;
+    *)
+      echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-source-unsupported" >&2
+      return 1
+      ;;
+  esac
   REAL_GH="${FKST_GITHUB_REAL_GH:-${REAL_GH:-}}"
   GITHUB_CREDENTIAL_RESOLVER="${FKST_GITHUB_CREDENTIAL_RESOLVER:-${GITHUB_CREDENTIAL_RESOLVER:-}}"
   [ -n "$REAL_GH" ] || {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=real-gh-unavailable" >&2
     return 1
   }
-  [ -n "$GITHUB_CREDENTIAL_RESOLVER" ] || {
+  [ "$credential_source" != github-app ] || [ -n "$GITHUB_CREDENTIAL_RESOLVER" ] || {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=github-app-resolver-unavailable" >&2
     return 1
   }
@@ -477,7 +479,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
   env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_CARGO="$CARGO" FKST_PYTHON="$DEPLOYMENT_PYTHON" \
     FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
-    FKST_GITHUB_CREDENTIAL_SOURCE="github-app" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
+    FKST_GITHUB_CREDENTIAL_SOURCE="$credential_source" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
     FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
     FKST_GITHUB_CLAIM_MODE="$CLAIM_MODE" FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE="$CLAIM_LABEL_EXCLUSIVE" \
     FKST_RATE_POOL_ROOT="$RATE_POOL" FKST_GITHUB_BOT_LOGIN="$BOT" \
