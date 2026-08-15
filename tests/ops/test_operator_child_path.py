@@ -129,7 +129,9 @@ def test_child_path_contains_every_discovered_tool_and_not_launcher(
     assert {str(Path(location).parent) for location in discovered.values()} <= set(child_path)
     composed = os.pathsep.join(child_path)
     assert SYSTEM_WHICH("codex", path=composed) == discovered["codex"]
-    assert SYSTEM_WHICH("python3", path=composed) == sys.executable
+    resolved_python3 = SYSTEM_WHICH("python3", path=composed)
+    assert resolved_python3 is not None
+    assert os.path.samefile(resolved_python3, sys.executable)
     assert SYSTEM_WHICH("gh", path=composed) == str(ROOT / "ops" / "gh")
 
 
