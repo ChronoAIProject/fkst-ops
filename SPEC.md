@@ -78,12 +78,28 @@ The two GitHub credential sources provide deliberately different evidence:
   access to the target, but installation tokens do not resolve through `/user`,
   so it does not prove that the declared login is the token's principal.
 - `github-cli-user` obtains the GitHub CLI's stored credential for the declared
-  account, compares that token's `/user` login exactly with the declared login,
-  and checks that GitHub reports the declared target's `permissions.push` as
-  exactly `true` at each refresh. This performs no write and proves neither
-  future access nor the effects of branch protection, rulesets, later
-  revocation, or SSO changes. The credential is account-wide; the target check
-  does not make it repository-scoped. Its proof is
+  account. Live API reads compare that token's `/user` login exactly with the
+  declared login and check that GitHub reports the declared target's
+  `permissions.push` as exactly `true`; those facts may then be reused for at
+  most 60 seconds, measured only by `CLOCK_MONOTONIC` within one boot session.
+  The attestation records `kern.bootsessionuuid`; a changed boot session is a
+  miss, and inability to establish either that identity or the monotonic clock
+  disables attestation use. Runtime generation paths normally differ between
+  launches, but path freshness is not a safety requirement: the explicit
+  boot-session binding prevents attestation reuse across boots even when a
+  generation path is retained or reused. The locally held token is retrieved
+  on every invocation. If that retrieval
+  observes a changed SHA-256 fingerprint, the attestation is invalidated on
+  that invocation before the credential is emitted. Failed verification is
+  never cached, and the launch-time authorization check always verifies live
+  without reading or publishing attestation state. Concurrent misses wait at
+  most 250 milliseconds for single-flight verification; a caller that cannot
+  acquire the guard in that interval verifies independently and does not
+  publish its result, so duplicate remote reads are permitted instead of
+  extending the caller's lock wait. The live check performs no GitHub write and
+  proves neither future access nor the effects of branch protection, rulesets,
+  later revocation, or SSO changes. The credential is account-wide; the target
+  check does not make it repository-scoped. Its proof is
   `login-verified;token-scope-account-wide-not-repository-scoped`.
 
 The roster remains an operational assertion rather than an identity proof. It
