@@ -34,6 +34,9 @@ def credential() -> tuple[str, str] | None:
         fail("credential-helper-unavailable", f"credential helper is not executable: {helper!r}")
         return None
     helper_command = [helper]
+    if (os.environ.get("FKST_GITHUB_CREDENTIAL_SOURCE") == "github-cli-user"
+            and sys.argv[1:] == ["--fkst-auth-check"]):
+        helper_command.append("--fkst-auth-check")
     try:
         issued = subprocess.run(
             helper_command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
