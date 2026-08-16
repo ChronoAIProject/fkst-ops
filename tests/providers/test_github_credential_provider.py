@@ -39,15 +39,85 @@ def make_tools(root: Path, app_slug: str = "declared-bot") -> tuple[Path, Path, 
     return resolver, gh, resolver_args
 
 
-def invoke(resolver: Path, gh: Path, expected: str, **extra: str) -> subprocess.CompletedProcess[str]:
+def invoke(
+    resolver: Path, gh: Path, expected: str, *, source: str = "github-app", **extra: str
+) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ, "FKST_GITHUB_CREDENTIAL_RESOLVER": str(resolver),
         "FKST_GITHUB_REAL_GH": str(gh), "FKST_GITHUB_BOT_LOGIN": expected,
-        "FKST_GITHUB_REPO": TARGET, "FKST_GITHUB_CREDENTIAL_SOURCE": "github-app",
+        "FKST_GITHUB_REPO": TARGET, "FKST_GITHUB_CREDENTIAL_SOURCE": source,
         **extra,
     }
     return subprocess.run([sys.executable, str(PROVIDER)], env=env, text=True,
                           capture_output=True, check=False)
+
+
+def make_github_cli_user_gh(
+    root: Path, *, login: str = "declared-user", push: str = "true",
+    require_github_com_environment: bool = False, fail_call: str = "",
+) -> tuple[Path, Path]:
+    calls = root / "gh-args"
+    gh = root / "gh"
+    environment_checks = (
+        "[ \"${GH_HOST:-}\" = github.com ] || exit 43\n"
+        "[ -z \"${GH_ENTERPRISE_TOKEN:-}\" ] || exit 44\n"
+        "[ -z \"${GITHUB_ENTERPRISE_TOKEN:-}\" ] || exit 45\n"
+        if require_github_com_environment else ""
+    )
+    source = (
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$@\" >> '{calls}'\n"
+        "[ -z \"${GITHUB_TOKEN:-}\" ] || exit 40\n"
+        "if [ \"$1 $2 $3 $4 $5 $6 $7\" = "
+        "'auth token --hostname github.com --user declared-user ' ]; then\n"
+        "  [ -z \"${GH_TOKEN:-}\" ] || exit 41\n"
+        f"  if [ '{fail_call}' = 'mint' ]; then\n"
+        f"    printf '%s\\n' '{TOKEN}'\n"
+        f"    printf '%s\\n' '{TOKEN}' >&2\n"
+        "    exit 46\n"
+        "  fi\n"
+        f"  printf '%s\\n' '{TOKEN}'\n"
+        "  exit 0\n"
+        "fi\n"
+    )
+    source += environment_checks
+    source += (
+        "[ \"${GH_TOKEN:-}\" = '" + TOKEN + "' ] || exit 42\n"
+        "if [ \"$1 $2 $3 $4\" = 'api /user --jq .login' ]; then\n"
+        f"  if [ '{fail_call}' = 'user' ]; then\n"
+        f"    printf '%s\\n' '{TOKEN}'\n"
+        f"    printf '%s\\n' '{TOKEN}' >&2\n"
+        "    exit 47\n"
+        "  fi\n"
+        f"  printf '%s\\n' '{login}'\n"
+        "  exit 0\n"
+        "fi\n"
+        f"if [ \"$1 $2 $3 $4\" = 'api repos/{TARGET} --jq .permissions.push' ]; then\n"
+        f"  if [ '{fail_call}' = 'repository' ]; then\n"
+        f"    printf '%s\\n' '{TOKEN}'\n"
+        f"    printf '%s\\n' '{TOKEN}' >&2\n"
+        "    exit 48\n"
+        "  fi\n"
+        f"  printf '%s\\n' '{push}'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    gh.write_text(source, encoding="ascii")
+    gh.chmod(0o755)
+    return gh, calls
+
+
+def recorded_arguments(path: Path) -> str:
+    return path.read_text(encoding="ascii") if path.exists() else ""
+
+
+def generated_artifact_contents(root: Path, fixture: Path) -> str:
+    return "".join(
+        artifact.read_text(encoding="ascii")
+        for artifact in root.iterdir()
+        if artifact.is_file() and artifact != fixture
+    )
 
 
 def test_installation_without_declared_target_is_refused_without_exposing_token() -> None:
@@ -112,3 +182,144 @@ def test_resolver_stderr_reaches_failure_with_command_and_origin() -> None:
     assert match
     source_lines = PROVIDER.read_text(encoding="utf-8").splitlines()
     assert 'fail("github-app-token-mint-failed"' in source_lines[int(match.group(1)) - 1]
+
+
+def test_github_cli_user_issues_login_verified_target_writable_credential() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(root)
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user",
+            source="github-cli-user", GH_TOKEN="stale-gh", GITHUB_TOKEN="stale-github",
+        )
+        arguments = recorded_arguments(calls)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "login": "declared-user", "token": TOKEN, "target": TARGET,
+        "identity_proof": "login-verified;token-scope-account-wide-not-repository-scoped",
+    }
+    assert arguments == (
+        "auth\ntoken\n--hostname\ngithub.com\n--user\ndeclared-user\n"
+        "api\n/user\n--jq\n.login\n"
+        f"api\nrepos/{TARGET}\n--jq\n.permissions.push\n"
+    )
+    assert TOKEN not in arguments
+    assert "stale-gh" not in result.stdout + result.stderr
+    assert "stale-github" not in result.stdout + result.stderr
+
+
+def test_github_cli_user_mint_failure_does_not_expose_token() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(root, fail_call="mint")
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user", source="github-cli-user"
+        )
+        arguments = recorded_arguments(calls)
+        artifacts = generated_artifact_contents(root, gh)
+
+    assert result.returncode != 0
+    assert "token-mint-failed" in result.stderr
+    assert TOKEN not in result.stdout
+    assert TOKEN not in result.stderr
+    assert TOKEN not in arguments
+    assert TOKEN not in artifacts
+
+
+def test_github_cli_user_login_failure_does_not_expose_token() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(root, fail_call="user")
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user", source="github-cli-user"
+        )
+        arguments = recorded_arguments(calls)
+        artifacts = generated_artifact_contents(root, gh)
+
+    assert result.returncode != 0
+    assert "login-verification-failed" in result.stderr
+    assert TOKEN not in result.stdout
+    assert TOKEN not in result.stderr
+    assert TOKEN not in arguments
+    assert TOKEN not in artifacts
+
+
+def test_github_cli_user_repository_failure_does_not_expose_token() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(root, fail_call="repository")
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user", source="github-cli-user"
+        )
+        arguments = recorded_arguments(calls)
+        artifacts = generated_artifact_contents(root, gh)
+
+    assert result.returncode != 0
+    assert "push-verification-failed" in result.stderr
+    assert TOKEN not in result.stdout
+    assert TOKEN not in result.stderr
+    assert TOKEN not in arguments
+    assert TOKEN not in artifacts
+
+
+def test_github_cli_user_refuses_wrong_login_without_exposing_token() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(root, login="different-user")
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user", source="github-cli-user"
+        )
+        observable = result.stdout + result.stderr + recorded_arguments(calls)
+
+    assert result.returncode != 0
+    assert "login-mismatch" in result.stderr
+    assert TOKEN not in observable
+
+
+def test_github_cli_user_refuses_false_push_permission_without_exposing_token() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(root, push="false")
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user", source="github-cli-user"
+        )
+        observable = result.stdout + result.stderr + recorded_arguments(calls)
+
+    assert result.returncode != 0
+    assert "push-permission-missing" in result.stderr
+    assert TOKEN not in observable
+
+
+def test_github_cli_user_refuses_malformed_permission_without_exposing_token() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(root, push="not-a-boolean")
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user", source="github-cli-user"
+        )
+        observable = result.stdout + result.stderr + recorded_arguments(calls)
+
+    assert result.returncode != 0
+    assert "push-permission-missing" in result.stderr
+    assert TOKEN not in observable
+
+
+def test_github_cli_user_verification_pins_github_com_credential_environment() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        gh, calls = make_github_cli_user_gh(
+            root, require_github_com_environment=True
+        )
+        result = invoke(
+            root / "missing-app-resolver", gh, "declared-user",
+            source="github-cli-user", GH_HOST="enterprise.example.invalid",
+            GH_ENTERPRISE_TOKEN="hostile-enterprise-token",
+            GITHUB_ENTERPRISE_TOKEN="hostile-github-enterprise-token",
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["identity_proof"] == (
+        "login-verified;token-scope-account-wide-not-repository-scoped"
+    )
+    assert TOKEN not in recorded_arguments(calls)

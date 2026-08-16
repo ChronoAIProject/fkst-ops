@@ -377,6 +377,53 @@ class ValidatorTests(unittest.TestCase):
             [self.machine["tools"]["make"], "engine"],
         )
 
+    def test_github_credential_source_resolves_from_machine_default(self) -> None:
+        provider = next(
+            item for item in self.declaration["provider"]
+            if item["kind"] == "credential.github"
+        )
+        provider["configuration"]["source"] = "machine:github-credential-source"
+        self.machine["defaults"]["github-credential-source"] = "github-cli-user"
+
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+
+        resolved = result["deployment"][0]["providers"]["github_credential"]
+        self.assertEqual(resolved["configuration"], {"source": "github-cli-user"})
+
+    def test_github_credential_source_rejects_unresolved_machine_default(self) -> None:
+        provider = next(
+            item for item in self.declaration["provider"]
+            if item["kind"] == "credential.github"
+        )
+        provider["configuration"]["source"] = "machine:missing-source"
+
+        self.reject(
+            r"declaration\.provider\[3\]\.configuration\.source: "
+            r"unresolved logical defaults reference: missing-source"
+        )
+
+    def test_github_credential_source_rejects_invalid_resolved_value(self) -> None:
+        provider = next(
+            item for item in self.declaration["provider"]
+            if item["kind"] == "credential.github"
+        )
+        provider["configuration"]["source"] = "machine:github-credential-source"
+        self.machine["defaults"]["github-credential-source"] = "ambient-account"
+
+        self.reject(
+            r"declaration\.provider\[3\]\.configuration\.source: "
+            r"must be github-app or github-cli-user"
+        )
+
+    def test_literal_github_app_credential_source_resolves_unchanged(self) -> None:
+        before = copy.deepcopy(self.declaration)
+
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+
+        resolved = result["deployment"][0]["providers"]["github_credential"]
+        self.assertEqual(resolved["configuration"], {"source": "github-app"})
+        self.assertEqual(self.declaration, before)
+
     def test_rejects_malformed_engine_build_command(self) -> None:
         self.declaration["provider"][0]["configuration"]["build_command"] = "make engine"
         self.reject("configuration.build_command.*non-empty string list")

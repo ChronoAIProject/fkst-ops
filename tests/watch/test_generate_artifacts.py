@@ -92,7 +92,7 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
 
 def run_generator(
     repository: Path, home: Path, machine_root: Path | None = None,
-    bot_login: str | None = "fkst-bot",
+    bot_login: str | None = "fkst-bot", github_credential_source: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     mechanism = home / "mechanism"
     if not mechanism.exists():
@@ -156,6 +156,8 @@ def run_generator(
     command = [sys.executable, str(mechanism / "watch" / "generate_artifacts.py"), str(repository)]
     if bot_login is not None:
         command.extend(["--bot-login", bot_login])
+    if github_credential_source is not None:
+        command.extend(["--github-credential-source", github_credential_source])
     if machine_root is not None:
         command.extend(["--machine-state-root", str(machine_root)])
     return subprocess.run(
@@ -232,6 +234,94 @@ def test_machine_integration_reference_generates_resolves_and_hydrates_branch(
     for checkout_name in {machine["target_checkout"], machine["engine_checkout"]}:
         checkout = home / ".fkst" / "machine" / "roots" / checkout_name
         assert git(checkout, "branch", "--show-current") == concrete_branch
+
+
+def test_machine_credential_source_uses_explicit_github_cli_user_selection(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration = repository / "deployment.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="ascii").replace(
+            'configuration = { source = "github-app" }',
+            'configuration = { source = "machine:credential-source" }',
+        ),
+        encoding="ascii",
+    )
+
+    result = run_generator(
+        repository, home, github_credential_source="github-cli-user"
+    )
+
+    assert result.returncode == 0, result.stderr
+    profile = home / ".fkst" / "machine" / "profile.toml"
+    profile_data = tomllib.loads(profile.read_text(encoding="ascii"))
+    assert profile_data["defaults"] == {"credential-source": "github-cli-user"}
+    resolved = load_and_resolve(declaration, profile, repository / "fkst.lock")
+    provider = resolved["deployment"][0]["providers"]["github_credential"]
+    assert provider["configuration"] == {"source": "github-cli-user"}
+
+
+def test_machine_credential_source_requires_explicit_selection(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration = repository / "deployment.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="ascii").replace(
+            'configuration = { source = "github-app" }',
+            'configuration = { source = "machine:credential-source" }',
+        ),
+        encoding="ascii",
+    )
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 2
+    assert "--github-credential-source is required" in result.stderr
+
+
+def test_machine_credential_source_rejects_invalid_explicit_selection(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration = repository / "deployment.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="ascii").replace(
+            'configuration = { source = "github-app" }',
+            'configuration = { source = "machine:credential-source" }',
+        ),
+        encoding="ascii",
+    )
+
+    result = run_generator(
+        repository, home, github_credential_source="ambient-account"
+    )
+
+    assert result.returncode == 2
+    assert "--github-credential-source must be github-app or github-cli-user" in result.stderr
+
+
+def test_literal_github_app_source_does_not_require_explicit_selection(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 0, result.stderr
+    profile = home / ".fkst" / "machine" / "profile.toml"
+    profile_data = tomllib.loads(profile.read_text(encoding="ascii"))
+    assert profile_data["defaults"] == {}
+
+
+def test_literal_github_app_source_rejects_invalid_explicit_selection(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+
+    result = run_generator(
+        repository, home, github_credential_source="ambient-account"
+    )
+
+    assert result.returncode == 2
+    assert "--github-credential-source must be github-app or github-cli-user" in result.stderr
 
 
 def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(

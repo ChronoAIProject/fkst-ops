@@ -69,9 +69,19 @@ def credential() -> tuple[str, str] | None:
              f"credential target {document.get('target')!r} does not match declared target {expected_target!r}",
              command=helper_command)
         return None
-    if document.get("identity_proof") != "target-access-only;bot-login-not-mechanically-proven":
+    source = os.environ.get("FKST_GITHUB_CREDENTIAL_SOURCE", "")
+    expected_proofs = {
+        "github-app": "target-access-only;bot-login-not-mechanically-proven",
+        "github-cli-user": "login-verified;token-scope-account-wide-not-repository-scoped",
+    }
+    if source not in expected_proofs:
+        fail("refreshed-credential-source-unsupported",
+             f"FKST_GITHUB_CREDENTIAL_SOURCE is {source!r}", command=helper_command)
+        return None
+    if document.get("identity_proof") != expected_proofs[source]:
         fail("refreshed-credential-proof-missing",
-             f"credential identity proof is {document.get('identity_proof')!r}", command=helper_command)
+             f"credential identity proof is {document.get('identity_proof')!r} for source {source!r}",
+             command=helper_command)
         return None
     real_gh = os.environ.get("FKST_GITHUB_REAL_GH", "")
     if not real_gh or not os.path.isfile(real_gh) or not os.access(real_gh, os.X_OK):
@@ -92,6 +102,10 @@ def main() -> int:
     environment = os.environ.copy()
     environment["GH_TOKEN"] = issued[0]
     environment.pop("GITHUB_TOKEN", None)
+    if os.environ.get("FKST_GITHUB_CREDENTIAL_SOURCE") == "github-cli-user":
+        environment["GH_HOST"] = "github.com"
+        environment.pop("GH_ENTERPRISE_TOKEN", None)
+        environment.pop("GITHUB_ENTERPRISE_TOKEN", None)
     command = [real_gh, *sys.argv[1:]]
     try:
         completed = subprocess.run(command, env=environment, check=False)

@@ -285,7 +285,8 @@ sync_to_run_branch /checkout
                 self.assertIn(marker, result.stdout)
 
     def _capture_launch_environment(
-        self, write: str | None, deployment_python: str = "/fixture/resolved/python"
+        self, write: str | None, deployment_python: str = "/fixture/resolved/python",
+        credential_source: str = "github-app",
     ) -> dict[str, str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -294,8 +295,18 @@ sync_to_run_branch /checkout
             run_script.parent.mkdir(parents=True)
             capture = root / "capture.json"
             helper = root / "credential-helper"
+            identity_proof = (
+                "target-access-only;bot-login-not-mechanically-proven"
+                if credential_source == "github-app"
+                else "login-verified;token-scope-account-wide-not-repository-scoped"
+            )
             helper.write_text(
-                '#!/bin/sh\nprintf \'%s\\n\' \'{"login":"resolved-bot","token":"fixture-secret-token","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}\'\n',
+                "#!/bin/sh\nprintf '%s\\n' '"
+                + json.dumps({
+                    "login": "resolved-bot", "token": "fixture-secret-token",
+                    "target": "example/repo", "identity_proof": identity_proof,
+                }, separators=(",", ":"))
+                + "'\n",
                 encoding="ascii",
             )
             helper.chmod(0o755)
@@ -325,7 +336,7 @@ sync_to_run_branch /checkout
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json, os, shutil, sys, time, tomllib\n"
-                "keys = ['PATH', 'FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_CREDENTIAL_RESOLVER', 'FKST_GITHUB_REAL_GH', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
+                "keys = ['PATH', 'FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_CREDENTIAL_SOURCE', 'FKST_GITHUB_CREDENTIAL_RESOLVER', 'FKST_GITHUB_REAL_GH', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
                 "captured = {key: os.environ.get(key) for key in keys}\n"
                 "captured['codex'] = shutil.which('codex')\n"
                 "captured['python3'], captured['python3_executable'] = shutil.which('python3'), sys.executable\n"
@@ -354,7 +365,7 @@ RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","pee
 AUTHORIZED_LOGINS='["trusted-author","second-author"]'; AUTHORIZE_ORG_MEMBERS=1; AUTHORIZE_REPO_COLLABORATORS=0
 UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
 CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
-LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
+LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{json.dumps({"source": credential_source}, separators=(",", ":"))}'
 mkdir -p "$HOST" "$DUR" "$RUNTIME_ROOT" "$LOGDIR"
 launch_one fixture 0
 '''
@@ -541,7 +552,15 @@ github_write_posture
         self.assertEqual(captured["FKST_GITHUB_BOT_LOGIN"], "resolved-bot")
         self.assertEqual(captured["FKST_DEVLOOP_MANAGED_BOT_LOGINS"], "resolved-bot,peer-bot")
         self.assertEqual(captured["FKST_GITHUB_REAL_GH"], "/usr/bin/true")
+        self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_SOURCE"], "github-app")
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_RESOLVER"], "/usr/bin/true")
+
+    def test_launch_forwards_resolved_github_credential_source(self) -> None:
+        captured = self._capture_launch_environment(
+            None, credential_source="github-cli-user"
+        )
+
+        self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_SOURCE"], "github-cli-user")
 
     def test_declared_author_authorization_reaches_launched_process(self) -> None:
         captured = self._capture_launch_environment(None)
@@ -623,6 +642,33 @@ authorize_github_writer
                      "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true"},
                 text=True, capture_output=True, check=False,
             )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_gate_admits_github_cli_user_without_app_resolver(self) -> None:
+        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
+_self_dir="{ROOT / 'ops'}"
+BOT=declared-user; REPO=example/repo; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-cli-user"}}'
+authorize_github_writer
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            helper = Path(directory) / "helper"
+            helper.write_text(
+                '#!/bin/sh\nprintf \'%s\\n\' \'{"login":"declared-user","token":"fixture-secret-token","target":"example/repo","identity_proof":"login-verified;token-scope-account-wide-not-repository-scoped"}\'\n',
+                encoding="ascii",
+            )
+            helper.chmod(0o755)
+            environment = {
+                **os.environ,
+                "GITHUB_CREDENTIAL_PROVIDER": str(helper),
+                "FKST_GITHUB_REAL_GH": "/usr/bin/true",
+            }
+            environment.pop("FKST_GITHUB_CREDENTIAL_RESOLVER", None)
+            result = subprocess.run(
+                ["bash", "-c", command], env=environment,
+                text=True, capture_output=True, check=False,
+            )
+
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_active_account_resolution_fails_closed_for_ambiguous_report(self) -> None:
@@ -712,6 +758,7 @@ printf '{{"login":"declared-bot","token":"%s","target":"example/repo","identity_
             env = {
                 **os.environ,
                 "FKST_GITHUB_CREDENTIAL_HELPER": str(helper),
+                "FKST_GITHUB_CREDENTIAL_SOURCE": "github-app",
                 "FKST_GITHUB_BOT_LOGIN": "declared-bot",
                 "FKST_GITHUB_REAL_GH": str(real_gh),
                 "FKST_GITHUB_REPO": "example/repo",
@@ -745,6 +792,7 @@ printf '%s\\n' '{{"login":"wrong-bot","token":"{token}"}}'
             real_gh.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$@" > "{args}"\n', encoding="ascii")
             real_gh.chmod(0o755)
             env = {**os.environ, "FKST_GITHUB_CREDENTIAL_HELPER": str(helper),
+                   "FKST_GITHUB_CREDENTIAL_SOURCE": "github-app",
                    "FKST_GITHUB_BOT_LOGIN": "declared-bot", "FKST_GITHUB_REAL_GH": str(real_gh)}
             result = subprocess.run(
                 [sys.executable, str(ROOT / "ops/github_credential_gh.py"), "api", "/repo"],
@@ -775,6 +823,7 @@ printf '%s\\n' '{{"login":"wrong-bot","token":"{token}"}}'
             )
             real_gh.chmod(0o755)
             env = {**os.environ, "FKST_GITHUB_CREDENTIAL_HELPER": str(helper),
+                   "FKST_GITHUB_CREDENTIAL_SOURCE": "github-app",
                    "FKST_GITHUB_BOT_LOGIN": "declared-bot", "FKST_GITHUB_REAL_GH": str(real_gh),
                    "FKST_GITHUB_REPO": "example/repo"}
             result = subprocess.run(
