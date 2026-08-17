@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -38,14 +39,19 @@ def test_launch_platform_snapshot_is_content_addressed_and_reused() -> None:
         (source / "platform-state").write_text("advanced\n", encoding="ascii")
         run("git", "-C", str(source), "add", ".")
         run("git", "-C", str(source), "commit", "-qm", "advanced platform")
-        advanced_revision = run("git", "-C", str(source), "rev-parse", "HEAD").stdout.strip()
+        run("git", "-C", str(source), "rev-parse", "HEAD")
         snapshot = root / "runtime" / ".platform" / platform_revision
         marker = snapshot / "reuse-marker"
-        command = f'''eval "$(sed -n '/^materialise_launch_platform()/,/^}}/p' "{OPERATOR}")"
+        command = f'''eval "$(sed -n '/^launch_platform_snapshot_valid()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^materialise_launch_platform()/,/^}}/p' "{OPERATOR}")"
 assert_engine_pair_at() {{
   [ "$(git -C "$1" rev-parse HEAD)" = "$2" ] &&
     [ "$(git -C "$1" show "HEAD:.control/engine-ref")" = "$3" ]
 }}
+PYTHON={sys.executable!s}
+_repo_root={ROOT!s}
+_self_dir={ROOT / "ops"!s}
+RUNTIME_ROOT="$5"
 materialise_launch_platform "$1" "$2" "$3" "$4"
 touch "$2/reuse-marker"
 materialise_launch_platform "$1" "$2" "$3" "$4"
@@ -53,7 +59,7 @@ materialise_launch_platform "$1" "$2" "$3" "$4"
 
         completed = subprocess.run(
             ["/bin/bash", "-c", command, "test", str(source), str(snapshot),
-             platform_revision, "e" * 40],
+             platform_revision, "e" * 40, str(root / "runtime")],
             text=True, capture_output=True, check=False,
         )
 
@@ -61,14 +67,15 @@ materialise_launch_platform "$1" "$2" "$3" "$4"
         assert marker.is_file()
         assert run("git", "-C", str(snapshot), "rev-parse", "HEAD").stdout.strip() == platform_revision
 
-        run("git", "-C", str(snapshot), "reset", "--hard", "-q", advanced_revision)
+        tracked = snapshot / ".control" / "engine-ref"
+        tracked.write_text("tampered\n", encoding="ascii")
         revalidated = subprocess.run(
             ["/bin/bash", "-c", command, "test", str(source), str(snapshot),
-             platform_revision, "e" * 40],
+             platform_revision, "e" * 40, str(root / "runtime")],
             text=True, capture_output=True, check=False,
         )
-        assert revalidated.returncode != 0
-        assert "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH" in revalidated.stderr
+        assert revalidated.returncode == 0, revalidated.stdout + revalidated.stderr
+        assert tracked.read_text(encoding="ascii") == "e" * 40 + "\n"
 
 
 def test_reclamation_keeps_current_and_live_referenced_snapshots() -> None:
@@ -80,16 +87,37 @@ def test_reclamation_keeps_current_and_live_referenced_snapshots() -> None:
         stale = snapshots / ("3" * 40)
         for path in (current, live, stale):
             path.mkdir(parents=True)
+        locks = runtime / ".platform-locks"
+        locks.mkdir()
+        live_lock = locks / f"{live.name}.lock"
+        ready = runtime / "holder-ready"
         holder = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(10)", str(live / "packages/pkg")],
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import fcntl,pathlib,time; "
+                    f"p=pathlib.Path({json.dumps(str(live_lock))}); "
+                    "f=p.open('a+b'); fcntl.flock(f,fcntl.LOCK_SH); "
+                    f"pathlib.Path({json.dumps(str(ready))}).touch(); time.sleep(10)"
+                ),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         command = f'''eval "$(sed -n '/^clean_stale_launch_platforms()/,/^}}/p' "{OPERATOR}")"
 RUNTIME_ROOT="$1"
+PYTHON={sys.executable!s}
+_self_dir={ROOT / "ops"!s}
 clean_stale_launch_platforms "$2"
 '''
         try:
+            for _ in range(100):
+                if ready.exists():
+                    break
+                import time
+                time.sleep(0.01)
+            assert ready.exists()
             completed = subprocess.run(
                 ["/bin/bash", "-c", command, "test", str(runtime), str(current)],
                 env={**os.environ, "PATH": "/usr/bin:/bin"},

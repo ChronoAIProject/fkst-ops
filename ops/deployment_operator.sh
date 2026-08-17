@@ -1,31 +1,7 @@
 #!/usr/bin/env bash
 # deployment_operator.sh - execute the operator surface for declared deployments.
-#
-# Each deployment drives one target's issue-to-change loop with declared target,
-# platform, and engine sources. GitHub write posture is required deployment policy,
-# so operator and unattended launches reproduce the same validated value.
-#
-# Package layout: `.fkst/` is RUNTIME/build only (gitignored: runtime, durable,
-# substrate-src, board cache) except host repos that intentionally commit their own
-# local package source under `.fkst/local-packages/<pkg>`. The engine BIN + shared
-# devloop packages are the PLATFORM, loaded by delegating the resolved topology to
-# the host-run contract in `$PKGSRC/scripts/run.sh supervise`.
-#
-# Commands:
-#   ./deployment_operator.sh status  [name|all]            pid/uptime/code-version/panic per supervise
-#   ./deployment_operator.sh board   [name|all] [stale_h]  GitHub board sweep: which issues/PRs flow vs are stuck (default stale 6h)
-#   ./deployment_operator.sh bin      [name|all]           ensure engine BIN matches the platform-derived revision (no restart)
-#   ./deployment_operator.sh start   [name|all]            launch via host-run contract
-#   ./deployment_operator.sh stop    [name|all]            SIGKILL supervise; all attempts every target and any failure exits nonzero
-#   ./deployment_operator.sh restart [name|all]            sync run checkouts to origin/<integration> + relaunch (unconditional)
-#   ./deployment_operator.sh sync    [name|all]            auto-deploy: advance declared source checkouts, rebuild BIN,
-#                                              and restart ONLY supervises whose running code is a real
-#                                              package/engine change (skill/docs-only skew is left running)
-#   ./deployment_operator.sh logs    [name] [lines]        tail the latest log (default first declaration, 40 lines)
-#
-# The deployment operator resolves per-machine topology and delegates one-host launch invariants
-# (fresh runtime scratch, stable durable reuse, package loading, and restart) to
-# `scripts/run.sh supervise`.
+# It resolves declared topology and delegates one-host launch invariants to the
+# captured platform's `scripts/run.sh supervise` contract.
 set -uo pipefail
 
 # ---- validated deployment input ----
@@ -105,6 +81,7 @@ print("\t".join(fields))
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
+  ENGINE_BINARY_BASE="$BIN"
   CARGO="$("$PYTHON" -c 'import json, pathlib, sys; command=json.loads(sys.argv[1])["build_command"]; print(command[0] if pathlib.Path(command[0]).name == "cargo" else "")' "$ENGINE_PROVIDER_CONFIGURATION")" || return 1
 }
 
@@ -354,12 +331,7 @@ resolve_engine_pair() {
     echo "engine revision resolution failed: empty platform/engine pair" >&2
     return 1
   }
-}
-
-assert_shared_engine_revision() {
-  : "${FKST_OPS_DEPLOYMENT_ROOT:?deployment repository root is required}"
-  "$PYTHON" "$_repo_root/ops/revision_derivation.py" assert-shared \
-    "$FKST_OPS_DEPLOYMENT_ROOT" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK" "$BIN"
+  BIN="${ENGINE_BINARY_BASE}-${ENGINE_REVISION}"
 }
 
 assert_engine_pair() { # $1 captured platform revision, $2 captured engine revision
@@ -372,34 +344,65 @@ assert_engine_pair_at() { # $1 platform checkout, $2 platform revision, $3 engin
     "$1" "$ENGINE_REVISION_PATH" "$2" "$3"
 }
 
+launch_platform_snapshot_valid() { # $1 source, $2 snapshot, $3 P, $4 E
+  local source_tree snapshot_tree status
+  source_tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$1" "$3" 2>/dev/null) || return 1
+  snapshot_tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$2" "$3" 2>/dev/null) || return 1
+  [ "$source_tree" = "$snapshot_tree" ] || return 1
+  status=$(git -C "$2" status --porcelain --untracked-files=no 2>/dev/null) || return 1
+  [ -z "$status" ] || return 1
+  assert_engine_pair_at "$2" "$3" "$4" >/dev/null 2>&1
+}
+
 materialise_launch_platform() { # $1 source checkout, $2 destination, $3 P, $4 E
-  local source="$1" destination="$2" platform_revision="$3" engine_revision="$4" source_identity
+  local source="$1" destination="$2" platform_revision="$3" engine_revision="$4"
+  local source_identity temporary lock status
   mkdir -p "$(dirname "$destination")" || return 1
-  if [ ! -e "$destination" ]; then
-    git clone --quiet --no-checkout "$source" "$destination" 2>/dev/null || {
-      echo "LAUNCH_PLATFORM_SNAPSHOT_FAILED: cannot clone captured platform revision" >&2
-      return 1
-    }
-    git -C "$destination" checkout --quiet --detach "$platform_revision" 2>/dev/null || {
-      echo "LAUNCH_PLATFORM_SNAPSHOT_FAILED: cannot check out captured platform revision" >&2
+  lock="$RUNTIME_ROOT/.platform-locks/$platform_revision.lock"
+  if [ -e "$destination" ] && ! launch_platform_snapshot_valid "$@"; then
+    "$PYTHON" "$_self_dir/launch_child.py" --remove-unlocked-snapshot \
+      "$destination" "$lock" || {
+      status=$?
+      [ "$status" -eq 75 ] || echo "LAUNCH_PLATFORM_REBUILD_FAILED: cannot remove invalid snapshot" >&2
       return 1
     }
   fi
-  source_identity=$(git -C "$source" config --get remote.origin.url 2>/dev/null || true)
-  [ -n "$source_identity" ] || source_identity="$source"
-  git -C "$destination" remote set-url origin "$source_identity" 2>/dev/null || {
-    echo "LAUNCH_PLATFORM_SNAPSHOT_FAILED: cannot bind captured platform source identity" >&2
-    return 1
-  }
-  assert_engine_pair_at "$destination" "$platform_revision" "$engine_revision" || {
-    echo "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH: captured platform checkout changed" >&2
+  if [ ! -e "$destination" ]; then
+    temporary=$(mktemp -d "$(dirname "$destination")/.${platform_revision}.XXXXXX") || return 1
+    git clone --quiet --no-checkout "$source" "$temporary" 2>/dev/null || {
+      rm -rf "$temporary"
+      echo "LAUNCH_PLATFORM_SNAPSHOT_FAILED: cannot clone captured platform revision" >&2
+      return 1
+    }
+    git -C "$temporary" checkout --quiet --detach "$platform_revision" 2>/dev/null || {
+      rm -rf "$temporary"
+      echo "LAUNCH_PLATFORM_SNAPSHOT_FAILED: cannot check out captured platform revision" >&2
+      return 1
+    }
+    source_identity=$(git -C "$source" config --get remote.origin.url 2>/dev/null || true)
+    [ -n "$source_identity" ] || source_identity="$source"
+    git -C "$temporary" remote set-url origin "$source_identity" 2>/dev/null || {
+      rm -rf "$temporary"
+      echo "LAUNCH_PLATFORM_SNAPSHOT_FAILED: cannot bind captured platform source identity" >&2
+      return 1
+    }
+    launch_platform_snapshot_valid "$source" "$temporary" "$platform_revision" "$engine_revision" || {
+      rm -rf "$temporary"
+      echo "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH: materialised tree does not match captured commit" >&2
+      return 1
+    }
+    "$PYTHON" -c 'import os,sys; os.rename(sys.argv[1],sys.argv[2])' \
+      "$temporary" "$destination" 2>/dev/null || rm -rf "$temporary"
+  fi
+  launch_platform_snapshot_valid "$@" || {
+    echo "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH: captured platform tree changed" >&2
     return 1
   }
 }
 
 engine_build_receipt_current() {
   "$PYTHON" "$_repo_root/ops/revision_derivation.py" receipt-current \
-    "$BIN" "$ENGINE_CHECKOUT" "$ENGINE_REVISION" "$ENGINE_PROVIDER_CONFIGURATION"
+    "$BIN" "$ENGINE_REVISION" "$ENGINE_PROVIDER_CONFIGURATION"
 }
 
 invoke_engine_build_provider() {
@@ -411,7 +414,6 @@ invoke_engine_build_provider() {
 ensure_engine_binary_current() {
   local response source_revision
   resolve_engine_pair || return $?
-  assert_shared_engine_revision || return $?
   if engine_build_receipt_current; then
     ENGINE_BUILD_STATUS="current: $BIN@${ENGINE_REVISION:0:8}"
     return 0
@@ -431,12 +433,6 @@ ensure_engine_binary_current() {
   ENGINE_BUILD_STATUS="built: $BIN@${ENGINE_REVISION:0:8}"
 }
 
-require_engine_binary() {
-  [ -f "$BIN" ] && [ -x "$BIN" ] && return 0
-  printf 'ENGINE_BINARY_UNAVAILABLE: declared build path: %s\n' "$BIN" >&2
-  return 1
-}
-
 bin_ensure_fresh() {
   ensure_engine_binary_current || return $?
   printf '%s\n' "$ENGINE_BUILD_STATUS"
@@ -446,13 +442,17 @@ cmd_board() {
   local target="${1:-all}" n failed=0 tmp github_input engine_input
   for n in $(expand "$target"); do
     cfg "$n" || { failed=1; continue; }
-    require_engine_binary || { failed=1; continue; }
+    resolve_engine_pair || { failed=1; continue; }
+    engine_build_receipt_current || {
+      echo "ENGINE_BUILD_RECEIPT_MISMATCH: $BIN@$ENGINE_REVISION" >&2
+      failed=1
+      continue
+    }
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/fkst-ops-board.XXXXXX") || return 1
     github_input="$tmp/github.json"; engine_input="$tmp/engine.json"
     "$PYTHON" -c 'import json,sys; p=json.loads(sys.argv[3]); p["stale_hours"]=int(sys.argv[6] or 6); json.dump({"target_identity":sys.argv[1],"platform_checkout":sys.argv[2],"profile":p,"bot_login":sys.argv[4],"managed_bot_set":json.loads(sys.argv[5])},open(sys.argv[7],"w"))' "$REPO" "$PKGSRC" "$GITHUB_DEVLOOP_PROFILE" "$BOT" "$MANAGED_BOT_LOGINS" "${2:-}" "$github_input"
     "$PYTHON" -c 'import json,sys; json.dump({"engine_binary":sys.argv[1],"durable_root":sys.argv[2],"cache":sys.argv[3],"refresh":False,"ttl_seconds":300,"stall_seconds":900},open(sys.argv[4],"w"))' "$BIN" "$DUR" "$tmp/cache.json" "$engine_input"
-    require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }
-    "$PYTHON" "$_repo_root/board/board.py" --github-provider "$GITHUB_BOARD_PROVIDER" --engine-provider "$ENGINE_BOARD_PROVIDER" --github-input "$github_input" --engine-input "$engine_input" || failed=1
+    FKST_EXPECTED_ENGINE_REVISION="$ENGINE_REVISION" "$PYTHON" "$_repo_root/board/board.py" --github-provider "$GITHUB_BOARD_PROVIDER" --engine-provider "$ENGINE_BOARD_PROVIDER" --github-input "$github_input" --engine-input "$engine_input" || failed=1
     rm -rf "$tmp"
   done
   return "$failed"
@@ -518,32 +518,25 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
 }
 
 clean_stale_launch_platforms() { # $1 current platform snapshot
-  local keep="$1" d process_census process_census_status=0
-  process_census=$(ps axww -o command= 2>&1) || process_census_status=$?
+  local keep="$1" d lock status
   for d in "$RUNTIME_ROOT"/.platform/*; do
     [ -d "$d" ] && [ "$d" != "$keep" ] || continue
-    if [ "$process_census_status" -ne 0 ]; then
-      echo "cannot prove launch platform is unreferenced: ps exit $process_census_status; retaining $d" >&2
-      continue
-    fi
-    case "$process_census" in
-      *"$d"*)
-        echo "retaining launch platform referenced by a live process: $d" >&2
-        continue
-        ;;
-    esac
-    rm -rf "$d" 2>/dev/null || {
-      echo "cannot reclaim unreferenced launch platform: $d" >&2
+    lock="$RUNTIME_ROOT/.platform-locks/$(basename "$d").lock"
+    "$PYTHON" "$_self_dir/launch_child.py" --remove-unlocked-snapshot "$d" "$lock" || {
+      status=$?
+      [ "$status" -eq 75 ] && continue
+      echo "LAUNCH_PLATFORM_RECLAIM_FAILED: cannot remove $d" >&2
       return 1
     }
   done
 }
 
 launch_one() { # $1 name, $2 restart flag (0|1)
-  local name="$1" restart="${2:-0}" ts log rt launch_platform write_posture managed_bot_logins authorized_logins args=()
+  local name="$1" restart="${2:-0}" ts log rt launch_platform launch_lock write_posture managed_bot_logins authorized_logins args=()
   ensure_engine_binary_current || return 1
   ts=$(date +%s); log="$LOGDIR/${name}-sv-${ts}.log"; rt="$RUNTIME_ROOT/${name}.${ts}"
   launch_platform="$RUNTIME_ROOT/.platform/$PLATFORM_REVISION"
+  launch_lock="$RUNTIME_ROOT/.platform-locks/$PLATFORM_REVISION.lock"
   derive_devloop_pkgs_from_workspace "$name" || return 1
   [ -n "$DEVLOOP_PKGS" ] || { echo "[$name] no platform packages declared in fkst.workspace.toml"; return 1; }
   write_posture=$(github_write_posture) || return 1
@@ -580,6 +573,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     --project-root "$HOST"
     --platform-root "$launch_platform"
     --platform-packages "$DEVLOOP_PKGS"
+    --expected-engine-revision "$ENGINE_REVISION"
     --durable-root "$DUR"
     --runtime-root "$rt"
   )
@@ -599,7 +593,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS="$AUTHORIZE_REPO_COLLABORATORS" \
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
-    FKST_WORKTREE_GC_REMOVE=1 PATH="$DEPLOYMENT_CHILD_PATH" \
+    FKST_WORKTREE_GC_REMOVE=1 FKST_LAUNCH_PLATFORM_LOCK="$launch_lock" PATH="$DEPLOYMENT_CHILD_PATH" \
     nohup "$PYTHON" "$_self_dir/launch_child.py" "${args[@]}" >> "$log" 2>&1 &
   local pid=$!
   ln -sf "$log" "$LOGDIR/${name}-sv.log"
@@ -776,12 +770,8 @@ _proc_stale() {
 # (pkg-stale/engine-stale). Skill/docs-only skew and already-current processes are
 # left running — a restart would only churn in-flight codex for no code change.
 cmd_sync() {
-  local n st failed=0 selected ready=""
-  selected=$(expand "${1:-all}")
-  # Advance the complete selected checkout set before any shared-revision assertion.
-  # A pin-changing platform commit is therefore observed as one coherent set rather
-  # than as a deterministic conflict between the first and second deployment.
-  for n in $selected; do
+  local n st failed=0
+  for n in $(expand "${1:-all}"); do
     cfg "$n" || { failed=1; continue; }
     echo "[$n] deployment source checkouts -> origin/$INTEGRATION_BRANCH:"
     derive_devloop_pkgs_from_workspace "$n" || { echo "  $n: config-error"; failed=1; continue; }
@@ -791,10 +781,6 @@ cmd_sync() {
     if [ "$HOST" != "$PKGSRC" ]; then
       sync_to_run_branch "$HOST" || { failed=1; continue; }
     fi
-    ready="${ready}${ready:+ }$n"
-  done
-  for n in $ready; do
-    cfg "$n" || { failed=1; continue; }
     echo "[$n] engine BIN:"
     bin_ensure_fresh | sed 's/^/  /' || { failed=1; continue; }
     echo "[$n] supervise:"

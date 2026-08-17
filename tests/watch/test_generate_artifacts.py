@@ -33,8 +33,14 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     profile = home / ".fkst" / "machine" / "profile.toml"
     profile_data = tomllib.loads(profile.read_text())
     assert all(Path(path).is_dir() for path in profile_data["roots"].values())
-    assert all(Path(path).is_file() and os.access(path, os.X_OK)
-               for path in profile_data["binaries"].values())
+    machine = declaration["deployment"][0]["machine"]
+    revision = git(
+        Path(profile_data["roots"][machine["platform_checkout"]]),
+        "show",
+        "HEAD:.control/engine-ref",
+    )
+    binary = Path(f'{profile_data["binaries"][machine["engine_binary"]]}-{revision}')
+    assert binary.is_file() and os.access(binary, os.X_OK)
     checkout = home / ".fkst" / "machine" / "roots" / declaration["deployment"][0]["machine"]["target_checkout"]
     assert git(checkout, "branch", "--show-current") == "integration"
     assert git(checkout, "rev-parse", "HEAD") == git(tmp_path / "target-source", "rev-parse", "HEAD")
@@ -216,13 +222,14 @@ def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
     deployment = resolved["deployment"][0]
     command_from_profile = deployment["providers"]["engine"]["configuration"]["build_command"]
     assert command_from_profile[0] == str(tool.resolve())
+    expected_revision = git(Path(deployment["machine"]["engine_checkout"]), "rev-parse", "HEAD")
     invocation = {
         "version": "fkst.ops.invocation.v1",
         "contract": "fkst.ops.engine.v1",
         "input": {
             "engine_checkout": deployment["machine"]["engine_checkout"],
-            "engine_binary": deployment["machine"]["engine_binary"],
-            "expected_revision": git(Path(deployment["machine"]["engine_checkout"]), "rev-parse", "HEAD"),
+            "engine_binary": f'{deployment["machine"]["engine_binary"]}-{expected_revision}',
+            "expected_revision": expected_revision,
             "operation": "build",
             "build_command": command_from_profile,
         },
@@ -465,7 +472,9 @@ def test_regeneration_preserves_accumulated_state_and_skips_settled_build(tmp_pa
     base = home / ".fkst" / "machine"
     durable = base / "roots" / declaration["deployment"][0]["machine"]["durable"] / "history"
     durable.write_text("keep")
-    binary = base / "bin" / declaration["deployment"][0]["machine"]["engine_binary"]
+    machine = declaration["deployment"][0]["machine"]
+    revision = git(base / "roots" / machine["platform_checkout"], "show", "HEAD:.control/engine-ref")
+    binary = base / "bin" / f'{machine["engine_binary"]}-{revision}'
     first_mtime = binary.lstat().st_mtime_ns
     result = run_generator(repository, home)
     assert result.returncode == 0, result.stderr
@@ -513,7 +522,10 @@ def test_engine_branch_advance_without_platform_revision_change_skips_build(
     assert run_generator(repository, home).returncode == 0
     base = home / ".fkst" / "machine"
     machine = declaration["deployment"][0]["machine"]
-    binary = base / "bin" / machine["engine_binary"]
+    derived_revision = git(
+        base / "roots" / machine["platform_checkout"], "show", "HEAD:.control/engine-ref"
+    )
+    binary = base / "bin" / f'{machine["engine_binary"]}-{derived_revision}'
     target_checkout = base / "roots" / machine["target_checkout"]
     platform_checkout = base / "roots" / machine["platform_checkout"]
     engine_checkout = base / "roots" / machine["engine_checkout"]
@@ -597,7 +609,7 @@ def test_generation_reports_malformed_engine_derivation_without_traceback(
     assert "Traceback" not in result.stderr
 
 
-def test_shared_binary_rejects_differing_platform_declared_revisions(
+def test_shared_binary_stem_publishes_each_platform_declared_revision(
     tmp_path: Path,
 ) -> None:
     repository, home, _ = prepared(tmp_path)
@@ -631,6 +643,7 @@ def test_shared_binary_rejects_differing_platform_declared_revisions(
         first.replace('id = "packages"', 'id = "second"', 1)
         .replace(f'target_identity = "{first_target}"', 'target_identity = "example/second"')
         .replace('lock_ref = "target-source"', 'lock_ref = "second-platform"')
+        .replace('implementation = "target-source:', 'implementation = "second-platform:')
         .replace('target_checkout = "packages-host"', 'target_checkout = "second-platform"')
         .replace('platform_checkout = "packages-host"', 'platform_checkout = "second-platform"')
         .replace('engine_checkout = "engine-source"', 'engine_checkout = "second-engine-checkout"')
@@ -649,8 +662,11 @@ def test_shared_binary_rejects_differing_platform_declared_revisions(
 
     result = run_generator(repository, home)
 
-    assert result.returncode == 2
-    assert "engine binary engine has conflicting declared revisions" in result.stderr
+    assert result.returncode == 0, result.stderr
+    binary_root = home / ".fkst" / "machine" / "bin"
+    assert (binary_root / f"engine-{second_revision}").is_file()
+    first_revision = git(tmp_path / "target-source", "show", "HEAD:.control/engine-ref")
+    assert (binary_root / f"engine-{first_revision}").is_file()
 
 
 def test_regeneration_preserves_advanced_deployment_branch(tmp_path: Path) -> None:

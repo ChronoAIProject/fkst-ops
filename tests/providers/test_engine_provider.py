@@ -54,6 +54,10 @@ def build_script(checkout: Path) -> tuple[Path, list[str]]:
     return binary, [str(build), "build", "-p", "engine"]
 
 
+def published_binary(tmp_path: Path, revision: str) -> Path:
+    return tmp_path / "published" / f"engine-{revision}"
+
+
 def invoke(payload: object) -> tuple[subprocess.CompletedProcess[str], dict]:
     result = subprocess.run(
         [str(PROVIDER)], input=json.dumps(payload), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -96,7 +100,8 @@ def test_exact_revision_is_checked_out_detached_after_branch_advances(tmp_path: 
     checkout = repository(tmp_path)
     expected = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
     advance(tmp_path / "seed", "build", "unselected branch advance")
-    binary, build_command = build_script(checkout)
+    _product, build_command = build_script(checkout)
+    binary = published_binary(tmp_path, expected)
 
     result, body = invoke(payload(checkout, binary, build_command, expected))
 
@@ -115,8 +120,9 @@ def test_old_expected_branch_input_is_rejected(tmp_path: Path) -> None:
 
 def test_build_success(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
-    binary, build_command = build_script(checkout)
+    _product, build_command = build_script(checkout)
     revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    binary = published_binary(tmp_path, revision)
     result, body = invoke(payload(checkout, binary, build_command, revision))
     assert result.returncode == 0
     assert body == {
@@ -126,7 +132,7 @@ def test_build_success(tmp_path: Path) -> None:
     }
 
 
-def test_build_replaces_unrelated_binary_with_checkout_product(tmp_path: Path) -> None:
+def test_build_refuses_to_replace_an_existing_revision_artifact(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
     revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
     cargo = checkout / "cargo"
@@ -138,7 +144,7 @@ def test_build_replaces_unrelated_binary_with_checkout_product(tmp_path: Path) -
         encoding="ascii",
     )
     cargo.chmod(0o755)
-    binary = tmp_path / "published" / "engine"
+    binary = published_binary(tmp_path, revision)
     binary.parent.mkdir()
     binary.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
     binary.chmod(0o755)
@@ -147,16 +153,18 @@ def test_build_replaces_unrelated_binary_with_checkout_product(tmp_path: Path) -
         payload(checkout, binary, [str(cargo), "build", "-p", "engine"], revision)
     )
 
-    assert result.returncode == 0, body
-    assert binary.is_symlink()
-    assert binary.resolve() == (checkout / "target" / "debug" / "engine").resolve()
+    assert result.returncode == 2, body
+    assert body["failure"]["code"] == "CONTRACT_MISSING"
+    assert "ENGINE_ARTIFACT_CONFLICT" in body["failure"]["message"]
+    assert binary.read_text(encoding="ascii") == "#!/bin/sh\nexit 99\n"
 
 
 def test_exact_remote_revision_is_fetched_without_following_branch(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
-    binary, build_command = build_script(checkout)
+    _product, build_command = build_script(checkout)
     previous_revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
     remote_revision = advance(tmp_path / "seed", "build", "advance build")
+    binary = published_binary(tmp_path, remote_revision)
 
     result, body = invoke(payload(checkout, binary, build_command, remote_revision))
 
@@ -172,7 +180,8 @@ def test_local_divergence_cannot_select_the_built_revision(tmp_path: Path) -> No
     command("git", "config", "user.name", "Test", cwd=checkout)
     command("git", "commit", "--allow-empty", "-m", "local advance", cwd=checkout)
     remote_revision = advance(tmp_path / "seed", "build", "remote advance")
-    binary, build_command = build_script(checkout)
+    _product, build_command = build_script(checkout)
+    binary = published_binary(tmp_path, remote_revision)
 
     result, body = invoke(payload(checkout, binary, build_command, remote_revision))
 

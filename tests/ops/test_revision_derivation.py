@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
-import sys
 
 import pytest
 
@@ -10,6 +9,8 @@ from ops.revision_derivation import (
     RevisionDerivationError,
     assert_pair,
     build_is_current,
+    publish_engine_product,
+    receipt_path,
     resolve_pair,
     write_build_receipt,
 )
@@ -65,41 +66,46 @@ def test_derivation_path_is_safe_relative(path: str, tmp_path: Path) -> None:
         resolve_pair(root, path)
 
 
-def test_shared_revision_cli_imports_schema_outside_repository(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(CLI),
-            "assert-shared",
-            str(tmp_path / "missing-deployments"),
-            str(tmp_path / "missing-profile.toml"),
-            str(tmp_path / "missing-lock.toml"),
-            str(tmp_path / "engine"),
-        ],
-        cwd=tmp_path,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-
-    assert result.returncode == 2
-    assert "DECLARATION_SET_INVALID" in result.stderr
-    assert "ModuleNotFoundError" not in result.stderr
-
-
-def test_build_receipt_rejects_binary_outside_checkout_product(tmp_path: Path) -> None:
-    root, source_revision, _ = repository(tmp_path)
-    git(root, "checkout", "--detach", "-q")
-    product = root / "target" / "debug" / "engine"
-    product.parent.mkdir(parents=True)
-    product.write_text("#!/bin/sh\n", encoding="ascii")
-    product.chmod(0o755)
-    binary = tmp_path / "bin" / "engine"
+def test_revision_binary_path_and_receipt_attest_published_bytes(tmp_path: Path) -> None:
+    source_revision = "a" * 40
+    binary = tmp_path / "bin" / f"engine-{source_revision}"
     binary.parent.mkdir()
-    binary.write_text("#!/bin/sh\n", encoding="ascii")
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
     binary.chmod(0o755)
     command = ["cargo", "build", "-p", "engine"]
     write_build_receipt(binary, source_revision, command)
 
-    assert not build_is_current(binary, root, source_revision, command)
+    assert binary.name == f"engine-{source_revision}"
+    assert build_is_current(binary, source_revision, command)
+
+    binary.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+    binary.chmod(0o755)
+    assert not build_is_current(binary, source_revision, command)
+
+
+def test_receipt_failure_leaves_only_an_unusable_revision_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ops.revision_derivation as derivation
+
+    source_revision = "b" * 40
+    product = tmp_path / "target" / "debug" / "engine"
+    product.parent.mkdir(parents=True)
+    product.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+    product.chmod(0o755)
+    binary = tmp_path / "bin" / f"engine-{source_revision}"
+    command = ["cargo", "build", "-p", "engine"]
+
+    def fail_receipt(*_args: object) -> None:
+        raise OSError("injected receipt publication failure")
+
+    monkeypatch.setattr(derivation, "write_build_receipt", fail_receipt)
+
+    with pytest.raises(OSError, match="injected receipt publication failure"):
+        publish_engine_product(product, binary, source_revision, command)
+
+    assert binary.is_file()
+    assert not binary.is_symlink()
+    assert binary.read_bytes() == product.read_bytes()
+    assert not receipt_path(binary).exists()
+    assert not build_is_current(binary, source_revision, command)

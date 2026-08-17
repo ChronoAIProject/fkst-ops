@@ -13,7 +13,12 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ops.revision_derivation import RevisionDerivationError, engine_product, write_build_receipt
+from ops.revision_derivation import (
+    RevisionDerivationError,
+    engine_product,
+    lock_engine_checkout,
+    publish_engine_product,
+)
 
 
 VERSION = "fkst.ops.invocation.v1"
@@ -73,6 +78,10 @@ def main() -> int:
         return fail("CHECKOUT_MISSING", f"engine checkout does not exist: {checkout}", 1)
     if not (checkout / ".git").exists():
         return fail("CONTRACT_MISSING", f"engine checkout has no .git contract: {checkout}", 2)
+    try:
+        checkout_lock = lock_engine_checkout(checkout)
+    except OSError as exc:
+        return fail("UPDATE_FAILED", f"cannot lock engine checkout: {exc}", 1)
     expected_revision = value["expected_revision"]
     try:
         update = run_git(checkout, "fetch", "--no-tags", "origin", expected_revision)
@@ -116,20 +125,8 @@ def main() -> int:
             1,
         )
     try:
-        binary.parent.mkdir(parents=True, exist_ok=True)
-        if binary.resolve(strict=False) != product.resolve(strict=True):
-            pointer = binary.with_name(f".{binary.name}.{os.getpid()}.tmp")
-            pointer.unlink(missing_ok=True)
-            pointer.symlink_to(product)
-            os.replace(pointer, binary)
-        if binary.resolve(strict=True) != product.resolve(strict=True):
-            return fail(
-                "BINARY_PROVENANCE_MISMATCH",
-                "engine binary does not resolve to the detached checkout product",
-                2,
-            )
-        write_build_receipt(binary, source_rev, value["build_command"])
-    except OSError as exc:
+        publish_engine_product(product, binary, source_rev, value["build_command"])
+    except (OSError, RevisionDerivationError) as exc:
         return fail("CONTRACT_MISSING", f"cannot publish engine build receipt: {exc}", 2)
     emit({"version": VERSION, "ok": True, "result": {"binary": str(binary), "source_rev": source_rev}})
     return 0

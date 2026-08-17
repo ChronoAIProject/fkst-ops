@@ -160,13 +160,11 @@ mutable working-tree file. The verified authority reduction is narrow: the set
 of writable records that can select which engine executes goes from three to
 one, the revision file in the platform commit.
 
-The change also widens mechanism surfaces. A declaration can select
-`engine_revision.path`; `host_run.sh` accepts a captured platform tree distinct
-from `--project-root` when Git source identity and workspace path bindings
-intersect; the snapshot binds that source identity; the engine provider creates
-or replaces the `engine_binary` symlink; and operator execution requires
-`FKST_OPS_DEPLOYMENT_ROOT` for shared-binary validation. These are new
-expressible inputs or mutations and are not described as authority reductions.
+The declaration can select `engine_revision.path`, and `host_run.sh` accepts a
+captured platform tree distinct from `--project-root`. For workspace packages,
+both repositories must contain each other's `HEAD` commit; mutable origin URLs
+do not establish this identity. These are expressible inputs, not authority
+reductions.
 
 Deployment-operated lock entries contain source identity and Git URL only. A
 `resolved` table on such an entry is invalid. The mechanism entry is different:
@@ -178,32 +176,25 @@ a separate checkout and is detached at `E`. The engine provider accepts exactly
 `engine_checkout`, `engine_binary`, `expected_revision`, `operation`, and
 `build_command`; `expected_branch` and every other extra input are invalid. It
 fetches `E` explicitly, checks out `E` detached, verifies `HEAD == E` before and
-after the build, derives the Cargo product from the declared `-p` package,
-atomically points `engine_binary` at that product, publishes an observational
-build receipt, and returns `source_rev == E`. A receipt is current only when the
-binary's real path is that product of the detached checkout; an arbitrary
-executable cannot be described as a build of `E` by writing receipt JSON.
-Only this build-from-source case is supported today. Released-engine deployment
-is unsupported. It can later be added as a second `engine_revision` arm while
-the current `path` arm remains valid, so that addition need not break today's
-declarations.
+after the build, and returns `source_rev == E`. Checkout mutation and product
+copying are serialized. The Cargo product is copied to the regular file
+`<engine_binary>-E` with create-if-absent publication; existing content is never
+replaced. Its v2 receipt binds `E`, the build command, and the published bytes'
+SHA-256 digest, which is recomputed at reuse. A missing or mismatched receipt,
+symlink, or conflicting existing artifact is not current. Only this
+build-from-source case is supported today.
 
-Launch captures `(P, E)`, ensures the executable receipt and detached checkout
-match `E`, and materialises or reuses a private detached platform checkout at
-`$RUNTIME_ROOT/.platform/P`. The pair is reasserted against that checkout before
-every use, including after an interrupted first materialisation. Both the
-host-run entry and platform package roots come from it. Repeated launches at one
-`P` do not copy the checkout again. Snapshots at other revisions are reclaimed
-only when the process command census contains no reference to their path; this
-is independent of stale launch-runtime reclamation and its open-file census.
-The mutable branch checkout is therefore not the spawned process's platform
-root; advancing it after verification cannot change the launched pair. A
-changed declaration or an unmaterialisable captured commit fails before launch.
-Declarations sharing one engine binary must resolve to one `E`; disagreement
-fails before a build or launch rather than selecting whichever writer runs
-last. Build freshness keys on `E` and the build command, not on the engine source
-branch tip, so an engine branch advance with unchanged platform commit does not
-rebuild or restart a supervisor.
+Launch captures `(P, E)`, selects `<engine_binary>-E`, and materialises a detached
+platform checkout at `$RUNTIME_ROOT/.platform/P`. Reuse requires equal canonical
+tree hashes for `P`, a clean materialised tracked tree, and the expected
+derivation blob; an invalid snapshot is removed and rebuilt. `host_run.sh`
+requires `E`, rejects a binary path naming another revision, and exports `E` to
+the engine process. The loader holds a shared advisory lock outside the snapshot
+through `exec`; reclamation holds the matching exclusive lock across deletion,
+so it uses no process-command census. Different deployments may select different
+`E` values from one binary stem without conflict. A build-receipt failure or a
+later control-publication failure can leave only an unselected revision-named
+artifact, not a mutable pointer or a valid receipt for different bytes.
 
 Artifact hydration compares every pre-existing target, platform, and engine
 checkout's `origin` URL exactly with its declared lock source before fetching or
@@ -245,8 +236,8 @@ deployment action. Internal commands and functions are not public API.
 | `board` | No deployment lifecycle state. Providers may perform remote reads. | Common entry validation, then provider contract and result-shape checks. |
 | `status` | No. | Common entry validation; identifies the declared supervisor before reporting process and provenance state. |
 | `logs` | No. | Common entry validation; resolves the declared log identity before selecting and tailing its latest log. |
-| `restart` | Yes: source checkouts, supervisor process, runtime generation, logs, and possibly engine artifacts. It may block on a full engine build and fail before process replacement if that build fails. | Common entry validation; branch checkout sync; packages-derived engine pair, shared-binary agreement, exact detached build receipt, and final pair reassertion; numeric durable PID-file parsing and liveness checks before replacement. |
-| `sync` | Yes: declared run branches/checkouts and engine artifacts; restarts only when loaded package or engine code is stale. | Common entry validation; provider and checkout identity; forward integration of the complete selected checkout set before any shared-engine assertion; packages-derived engine pair and shared-binary agreement; build receipt; and running-provenance checks before the corresponding mutation. |
+| `restart` | Yes: source checkouts, supervisor process, runtime generation, logs, and possibly engine artifacts. It may block on a full engine build and fail before process replacement if that build fails. | Common entry validation; branch checkout sync; packages-derived engine pair; revision-addressed byte receipt; clean captured platform tree; child revision binding; numeric durable PID-file parsing and liveness checks before replacement. |
+| `sync` | Yes: declared run branches/checkouts and engine artifacts; restarts only when loaded package or engine code is stale. | Common entry validation; provider and checkout identity; per-deployment forward integration; packages-derived engine pair; revision-addressed byte receipt; and running-provenance checks before the corresponding mutation. |
 | `stop` | Yes: sends `SIGKILL` to one PID. | Common entry validation; resolves the declared deployment and reads its durable PID file. `stop all` attempts every selected deployment and returns nonzero if any attempt fails. |
 | `doctor` | Conditionally: guarded leaked-test reaping and stale-receipt cleanup. | Common entry validation; each repair independently checks process identity, parent/orphan and age guards, or receipt identity and age. Findings and failures remain visible. |
 
@@ -284,8 +275,8 @@ not inherited by the child.
 
 For a self-hosted target, the mutable project checkout and captured platform
 checkout have different paths. The host-run contract accepts workspace platform
-packages from that captured root only when Git source identity proves both roots
-belong to the same repository; an unrelated root still fails closed.
+packages from that captured root only when each Git object database contains the
+other checkout's `HEAD`; an unrelated root with a copied origin URL fails closed.
 
 This direct topology is deliberate policy. A separate shipped process root
 would add no process-group isolation because the supervisor already owns its

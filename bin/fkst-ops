@@ -254,7 +254,6 @@ fi
 
 source "$ROOT/ops/public_actions.sh"
 export FKST_OPS_DECLARATION="$declaration"
-export FKST_OPS_DEPLOYMENT_ROOT="$deployment_root"
 export FKST_OPS_MACHINE_PROFILE="$machine"
 export FKST_OPS_LOCK="$lock"
 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -m schema.validator "$declaration" "$machine" "$lock" >/dev/null

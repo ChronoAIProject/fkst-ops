@@ -394,19 +394,13 @@ sync_to_run_branch /checkout
                     ["git", "-C", str(platform), "reset", "--hard", "-q", selected_platform_revision],
                     check=True,
                 )
-            shared_assertion = "assert_shared_engine_revision() { :; }"
-            if advance_platform_before_spawn:
-                shared_assertion = '''assert_shared_engine_revision() {
-  if [ -n "${RACE_PLATFORM_REVISION:-}" ]; then
-    git -C "$PKGSRC" reset --hard -q "$RACE_PLATFORM_REVISION" || return 1
-  fi
-}'''
             command = f'''source "{OPERATOR}"
-require_engine_binary() {{ :; }}
-{shared_assertion}
 ensure_engine_binary_current() {{
   PLATFORM_REVISION={selected_platform_revision}; ENGINE_REVISION={selected_engine_revision}
-  assert_shared_engine_revision
+  BIN="/bin/true-$ENGINE_REVISION"
+  if [ -n "${{RACE_PLATFORM_REVISION:-}}" ]; then
+    git -C "$PKGSRC" reset --hard -q "$RACE_PLATFORM_REVISION" || return 1
+  fi
 }}
 engine_build_receipt_current() {{ :; }}
 derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=pkg; }}
@@ -577,7 +571,10 @@ invoke_engine_build_provider
         self.assertIn("ensure_engine_binary_current || return 1", source)
         self.assertNotIn("engine_build_result", source)
         self.assertNotIn("expected_branch", source)
-        self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    "$PYTHON" "$_repo_root/board/board.py"', source)
+        self.assertNotIn("assert_shared_engine_revision", source)
+        self.assertNotIn("SHARED_ENGINE_REVISION_CONFLICT", source)
+        self.assertIn('engine_build_receipt_current || {', source)
+        self.assertIn('FKST_EXPECTED_ENGINE_REVISION="$ENGINE_REVISION" "$PYTHON" "$_repo_root/board/board.py"', source)
         self.assertIn('assert_engine_pair "$PLATFORM_REVISION" "$ENGINE_REVISION" || return 1', source)
         self.assertNotIn('GH_TOKEN="$GITHUB_TOKEN_DISCOVERED"', source)
         self.assertIn('FKST_GITHUB_REAL_GH="$REAL_GH"', source)
@@ -634,37 +631,6 @@ github_write_posture
         self.assertEqual("b" * 40, captured["engine_revision"])
         self.assertIn("/runtime/.platform/", captured["platform_root"])
         self.assertTrue(captured["platform_root"].endswith(captured["selected_platform_revision"]))
-
-    def test_sync_advances_every_checkout_before_asserting_shared_engine_revision(self) -> None:
-        command = f'''set -uo pipefail
-eval "$(sed -n '/^cmd_sync()/,/^}}/p' "{OPERATOR}")"
-expand() {{ printf 'first\nsecond\n'; }}
-cfg() {{ NAME="$1"; PKGSRC="/$1-platform"; HOST="$PKGSRC"; INTEGRATION_BRANCH=integration; UPSTREAM_BRANCH=dev; }}
-derive_devloop_pkgs_from_workspace() {{ :; }}
-ensure_integration_caught_up() {{ :; }}
-sync_to_run_branch() {{ touch "$STATE/${{NAME}}.advanced"; }}
-bin_ensure_fresh() {{
-  [ -f "$STATE/first.advanced" ] && [ -f "$STATE/second.advanced" ] || {{
-    echo SHARED_ENGINE_REVISION_CONFLICT >&2
-    return 1
-  }}
-  echo current
-}}
-_proc_stale() {{ echo current; }}
-restart_one() {{ echo unexpected-restart >&2; return 1; }}
-cmd_sync all
-'''
-        with tempfile.TemporaryDirectory() as directory:
-            result = subprocess.run(
-                ["bash", "-c", command],
-                env={**os.environ, "STATE": directory},
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertNotIn("SHARED_ENGINE_REVISION_CONFLICT", result.stderr)
 
     def test_launch_forwards_resolved_github_credential_source(self) -> None:
         captured = self._capture_launch_environment(

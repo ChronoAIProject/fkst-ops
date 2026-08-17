@@ -51,12 +51,13 @@ bootstrap_bin_on_total_miss() {
   : "${FKST_OPS_ENGINE_REVISION_CHECKOUT:?engine revision derivation checkout is required}"
   : "${FKST_OPS_ENGINE_REVISION_PATH:?engine revision derivation path is required}"
   : "${FKST_OPS_ENGINE_CONFIGURATION:?resolved engine provider configuration is required}"
-  local pair platform_revision engine_revision response source_revision
+  local pair platform_revision engine_revision binary response source_revision
   pair=$(python3 "$FKST_OPS_HOST_ROOT/../ops/revision_derivation.py" resolve \
     "$FKST_OPS_ENGINE_REVISION_CHECKOUT" "$FKST_OPS_ENGINE_REVISION_PATH") || return $?
   IFS=$'\t' read -r platform_revision engine_revision <<<"$pair"
+  binary="${FKST_OPS_ENGINE_BINARY}-${engine_revision}"
   response=$(python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_revision":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' \
-    "$FKST_OPS_ENGINE_CHECKOUT" "$FKST_OPS_ENGINE_BINARY" "$engine_revision" "$FKST_OPS_ENGINE_CONFIGURATION" \
+    "$FKST_OPS_ENGINE_CHECKOUT" "$binary" "$engine_revision" "$FKST_OPS_ENGINE_CONFIGURATION" \
     | python3 "$FKST_OPS_HOST_ROOT/../ops/invoke_provider.py" "$FKST_OPS_ENGINE_PROVIDER" fkst.ops.engine.v1) || return $?
   python3 "$FKST_OPS_HOST_ROOT/../ops/revision_derivation.py" assert \
     "$FKST_OPS_ENGINE_REVISION_CHECKOUT" "$FKST_OPS_ENGINE_REVISION_PATH" \

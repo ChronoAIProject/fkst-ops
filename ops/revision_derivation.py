@@ -5,18 +5,22 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 REVISION = re.compile(r"^[0-9a-f]{40}$")
-RECEIPT_SCHEMA = "fkst.ops.engine-build.v1"
+RECEIPT_SCHEMA = "fkst.ops.engine-build.v2"
 
 
 class RevisionDerivationError(ValueError):
@@ -117,11 +121,28 @@ def receipt_path(binary: Path) -> Path:
     return binary.with_name(f".{binary.name}.build-receipt.json")
 
 
+def binary_sha256(binary: Path) -> str:
+    digest = hashlib.sha256()
+    with binary.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256-" + digest.hexdigest()
+
+
+def lock_engine_checkout(checkout: Path):
+    path = checkout.parent / f".{checkout.name}.build.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = path.open("a+b")
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    return stream
+
+
 def write_build_receipt(binary: Path, source_revision: str, build_command: list[str]) -> None:
     document = {
         "schema": RECEIPT_SCHEMA,
         "source_revision": source_revision,
         "build_command": build_command,
+        "binary_sha256": binary_sha256(binary),
     }
     destination = receipt_path(binary)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -147,108 +168,49 @@ def engine_product(engine_checkout: Path, build_command: list[str]) -> Path:
 
 
 def build_is_current(
-    binary: Path, engine_checkout: Path, source_revision: str, build_command: list[str]
+    binary: Path, source_revision: str, build_command: list[str]
 ) -> bool:
-    if not binary.is_file() or not os.access(binary, os.X_OK):
+    if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
         return False
     try:
         document = json.loads(receipt_path(binary).read_text(encoding="ascii"))
-        head = _git(engine_checkout, "rev-parse", "--verify", "HEAD^{commit}").decode(
-            "ascii", "strict"
-        ).strip()
-        branch = _git(engine_checkout, "branch", "--show-current").decode("ascii", "strict").strip()
-        product = engine_product(engine_checkout, build_command)
-        binary_target = binary.resolve(strict=True)
-        product_target = product.resolve(strict=True)
-    except (OSError, UnicodeError, json.JSONDecodeError, RevisionDerivationError):
+        digest = binary_sha256(binary)
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return False
-    return (
-        document
-        == {
-            "schema": RECEIPT_SCHEMA,
-            "source_revision": source_revision,
-            "build_command": build_command,
-        }
-        and head == source_revision
-        and branch == ""
-        and product.is_file()
-        and os.access(product, os.X_OK)
-        and binary_target == product_target
-    )
+    return document == {
+        "schema": RECEIPT_SCHEMA,
+        "source_revision": source_revision,
+        "build_command": build_command,
+        "binary_sha256": digest,
+    }
 
 
-def _declaration_paths(repository: Path) -> list[Path]:
-    manifest = repository / "deployment-set.json"
-    try:
-        document = json.loads(manifest.read_text(encoding="ascii"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise RevisionDerivationError(
-            f"DECLARATION_SET_INVALID: cannot read {manifest}: {exc}"
-        ) from exc
-    if (
-        not isinstance(document, dict)
-        or set(document) != {"schema", "declarations"}
-        or document.get("schema") != "fkst.ops.declaration-input.v1"
-        or not isinstance(document.get("declarations"), list)
-        or not document["declarations"]
-    ):
-        raise RevisionDerivationError("DECLARATION_SET_INVALID: closed declaration set mismatch")
-    paths: list[Path] = []
-    for value in document["declarations"]:
-        if not isinstance(value, str) or not value:
-            raise RevisionDerivationError("DECLARATION_SET_INVALID: declaration path is invalid")
-        relative = Path(value)
-        candidate = (repository / relative).resolve()
-        try:
-            candidate.relative_to(repository.resolve())
-        except ValueError as exc:
-            raise RevisionDerivationError(
-                f"DECLARATION_SET_INVALID: declaration escapes repository: {value}"
-            ) from exc
-        if relative.is_absolute() or ".." in relative.parts or not candidate.is_file():
-            raise RevisionDerivationError(
-                f"DECLARATION_SET_INVALID: declaration path is unsafe or missing: {value}"
-            )
-        paths.append(candidate)
-    if len(set(paths)) != len(paths):
-        raise RevisionDerivationError("DECLARATION_SET_INVALID: duplicate declaration path")
-    return paths
-
-
-def assert_shared_binary_revision(
-    repository: Path, profile: Path, lock: Path, binary: Path
+def publish_engine_product(
+    product: Path, binary: Path, source_revision: str, build_command: list[str]
 ) -> None:
-    """Reject differing derived revisions for declarations sharing one binary."""
-    from schema.validator import ValidationError, load_and_resolve
-
-    observations: list[tuple[str, RevisionPair]] = []
+    if not binary.name.endswith(f"-{source_revision}"):
+        raise RevisionDerivationError(
+            f"ENGINE_BINARY_NOT_REVISION_ADDRESSED: {binary} does not name {source_revision}"
+        )
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{binary.name}.", suffix=".tmp", dir=binary.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
     try:
-        for declaration in _declaration_paths(repository):
-            resolved = load_and_resolve(declaration, profile, lock)
-            for deployment in resolved["deployment"]:
-                machine = deployment["machine"]
-                if Path(machine["engine_binary"]).resolve() != binary.resolve():
-                    continue
-                derivation = deployment["engine_revision"]
-                checkout = Path(machine["platform_checkout"])
-                observations.append(
-                    (deployment["id"], resolve_pair(checkout, derivation["path"]))
+        shutil.copyfile(product, temporary)
+        temporary.chmod(product.stat().st_mode & 0o777)
+        try:
+            os.link(temporary, binary)
+        except FileExistsError:
+            if binary.is_symlink() or binary_sha256(binary) != binary_sha256(temporary):
+                raise RevisionDerivationError(
+                    f"ENGINE_ARTIFACT_CONFLICT: refusing to replace existing {binary}"
                 )
-    except ValidationError as exc:
-        raise RevisionDerivationError(f"DECLARATION_SET_INVALID: {exc}") from exc
-    revisions = {pair.engine_revision for _, pair in observations}
-    if not observations:
-        raise RevisionDerivationError(
-            f"SHARED_ENGINE_BINARY_UNDECLARED: no declaration owns binary {binary}"
-        )
-    if len(revisions) > 1:
-        details = ", ".join(
-            f"{identity}={pair.engine_revision}@{pair.platform_revision}"
-            for identity, pair in observations
-        )
-        raise RevisionDerivationError(
-            f"SHARED_ENGINE_REVISION_CONFLICT: shared binary {binary} has differing declarations: {details}"
-        )
+        write_build_receipt(binary, source_revision, build_command)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -264,14 +226,8 @@ def main(argv: list[str] | None = None) -> int:
     assertion.add_argument("engine_revision")
     current = subparsers.add_parser("receipt-current")
     current.add_argument("binary", type=Path)
-    current.add_argument("engine_checkout", type=Path)
     current.add_argument("source_revision")
     current.add_argument("build_command_json")
-    shared = subparsers.add_parser("assert-shared")
-    shared.add_argument("repository", type=Path)
-    shared.add_argument("profile", type=Path)
-    shared.add_argument("lock", type=Path)
-    shared.add_argument("binary", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "resolve":
@@ -287,14 +243,8 @@ def main(argv: list[str] | None = None) -> int:
                 command = command.get("build_command")
             if not isinstance(command, list) or any(not isinstance(item, str) for item in command):
                 raise RevisionDerivationError("BUILD_RECEIPT_INPUT_INVALID: build command is invalid")
-            if not build_is_current(
-                args.binary, args.engine_checkout, args.source_revision, command
-            ):
+            if not build_is_current(args.binary, args.source_revision, command):
                 return 1
-        else:
-            assert_shared_binary_revision(
-                args.repository, args.profile, args.lock, args.binary
-            )
     except (OSError, UnicodeError, json.JSONDecodeError, RevisionDerivationError) as exc:
         print(f"engine revision resolution failed: {exc}", file=sys.stderr)
         return 2

@@ -15,8 +15,9 @@ from urllib.parse import urlsplit
 from ops.revision_derivation import (
     build_is_current,
     engine_product,
+    lock_engine_checkout,
+    publish_engine_product,
     resolve_pair,
-    write_build_receipt,
 )
 from schema.validator import resolve_machine_default
 
@@ -236,7 +237,7 @@ def _materialise_engine_checkout(destination: Path, spec: EngineCheckout) -> Non
 
 def _materialise_engine_build(checkout: Path, binary: Path, spec: EngineBuild) -> None:
     command = list(spec.command)
-    if build_is_current(binary, checkout, spec.revision, command):
+    if build_is_current(binary, spec.revision, command):
         return
     result = subprocess.run(command, cwd=checkout, check=False)
     if result.returncode != 0:
@@ -248,12 +249,7 @@ def _materialise_engine_build(checkout: Path, binary: Path, spec: EngineBuild) -
     product = engine_product(checkout, command)
     if not product.is_file() or not os.access(product, os.X_OK):
         raise ValueError(f"engine build did not produce executable: {product}")
-    binary.parent.mkdir(parents=True, exist_ok=True)
-    pointer = binary.with_name(f".{binary.name}.{os.getpid()}.tmp")
-    pointer.unlink(missing_ok=True)
-    pointer.symlink_to(product)
-    os.replace(pointer, binary)
-    write_build_receipt(binary, spec.revision, command)
+    publish_engine_product(product, binary, spec.revision, command)
 
 
 def hydrate(
@@ -295,8 +291,7 @@ def hydrate(
     for logical, spec in branch_specs.items():
         _materialise_branch_checkout(machine_root / "roots" / logical, spec)
 
-    engine_checkouts: dict[str, EngineCheckout] = {}
-    engine_builds: dict[str, EngineBuild] = {}
+    engine_builds: dict[str, tuple[EngineCheckout, EngineBuild]] = {}
     for declaration_path, declaration in declarations:
         providers = {provider["id"]: provider for provider in declaration["provider"]}
         for index, deployment in enumerate(declaration["deployment"]):
@@ -322,30 +317,31 @@ def hydrate(
                 ) from exc
             checkout_name = machine["engine_checkout"]
             checkout_spec = EngineCheckout(engine_source, pair.engine_revision)
-            if checkout_name in engine_checkouts and engine_checkouts[checkout_name] != checkout_spec:
-                raise ValueError(
-                    f"engine checkout {checkout_name} is assigned conflicting exact revisions"
-                )
-            engine_checkouts[checkout_name] = checkout_spec
             provider = providers[deployment["providers"]["engine"]]
             command = list(provider["configuration"]["build_command"])
             if Path(command[0]).name == command[0]:
                 command[0] = tools[command[0]]
             build_spec = EngineBuild(checkout_name, tuple(command), pair.engine_revision)
-            binary_name = machine["engine_binary"]
-            if binary_name in engine_builds and engine_builds[binary_name] != build_spec:
+            binary_name = f'{machine["engine_binary"]}-{pair.engine_revision}'
+            combined_spec = (checkout_spec, build_spec)
+            if binary_name in engine_builds and engine_builds[binary_name] != combined_spec:
                 raise ValueError(
-                    f"engine binary {binary_name} has conflicting declared revisions or build inputs"
+                    f"engine binary {binary_name} has conflicting declared build inputs"
                 )
-            engine_builds[binary_name] = build_spec
+            engine_builds[binary_name] = combined_spec
 
-    for logical, spec in engine_checkouts.items():
-        _materialise_engine_checkout(machine_root / "roots" / logical, spec)
     for logical in preserved_roots:
         (machine_root / "roots" / logical).mkdir(parents=True, exist_ok=True)
-    for binary_name, spec in engine_builds.items():
+    for binary_name, (checkout_spec, build_spec) in engine_builds.items():
+        binary = machine_root / "bin" / binary_name
+        command = list(build_spec.command)
+        if build_is_current(binary, build_spec.revision, command):
+            continue
+        checkout = machine_root / "roots" / build_spec.checkout
+        checkout_lock = lock_engine_checkout(checkout)
+        _materialise_engine_checkout(checkout, checkout_spec)
         _materialise_engine_build(
-            machine_root / "roots" / spec.checkout,
-            machine_root / "bin" / binary_name,
-            spec,
+            checkout,
+            binary,
+            build_spec,
         )

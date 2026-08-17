@@ -69,6 +69,7 @@ def test_real_loader_raises_launchd_limit_and_preserves_composed_environment(
         "PATH": child_path,
         "FKST_CARGO": str(tools / "cargo"),
         "FKST_PYTHON": sys.executable,
+        "FKST_LAUNCH_PLATFORM_LOCK": str(tmp_path / "platform.lock"),
     }
     probe = textwrap.dedent(
         """\
@@ -103,10 +104,11 @@ def test_real_loader_raises_launchd_limit_and_preserves_composed_environment(
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the deployment loader targets launchd")
-def test_real_loader_refuses_to_start_when_required_limit_cannot_be_set() -> None:
+def test_real_loader_refuses_to_start_when_required_limit_cannot_be_set(tmp_path: Path) -> None:
     child_marker = "target-child-started"
+    environment = {**os.environ, "FKST_LAUNCH_PLATFORM_LOCK": str(tmp_path / "platform.lock")}
     result = _run_from_launchd_limit(
-        f"print({child_marker!r}, flush=True)", os.environ.copy(), restrict_hard_limit=True
+        f"print({child_marker!r}, flush=True)", environment, restrict_hard_limit=True
     )
 
     assert result.returncode != 0

@@ -91,9 +91,10 @@ chmod +x target/debug/engine
     command = f'. "{BOOTSTRAP}"; resolve_bin_contract "$1"; printf "%s" "$RESOLVED_BIN"'
     result = subprocess.run(["bash", "-c", command, "test", str(tmp_path)], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == str(binary)
-    assert binary.is_file()
-    assert os.access(binary, os.X_OK)
+    revision_binary = Path(f"{binary}-{revision}")
+    assert result.stdout == str(revision_binary)
+    assert revision_binary.is_file()
+    assert os.access(revision_binary, os.X_OK)
 
 
 def test_readonly_miss_does_not_invoke_provider(tmp_path):

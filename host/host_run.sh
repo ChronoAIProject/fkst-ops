@@ -12,11 +12,12 @@ HOST_RUN_RUNTIME_BASE=""
 HOST_RUN_RUNTIME_LABEL=""
 HOST_RUN_RUNTIME_IS_EXPLICIT=0
 HOST_RUN_RESTART=0
+HOST_RUN_EXPECTED_ENGINE_REVISION=""
 HOST_RUN_PACKAGE_ROOTS=()
 
 host_run_usage() {
   cat >&2 <<'EOF'
-usage: scripts/run.sh supervise --project-root <HOST> --platform-root <PKGSRC> --platform-packages "<names>" [--host-packages "<names>"] --durable-root <path> [--runtime-root <fresh-scratch-root>] [--restart]
+usage: scripts/run.sh supervise --project-root <HOST> --platform-root <PKGSRC> --platform-packages "<names>" --expected-engine-revision <sha> [--host-packages "<names>"] --durable-root <path> [--runtime-root <fresh-scratch-root>] [--restart]
    or: scripts/run.sh supervise <package>
 EOF
 }
@@ -219,17 +220,21 @@ def same_path(left: Path, right: Path) -> bool:
         return False
 
 
-def repository_refs(root: Path) -> set[str]:
-    top_value = git_output_optional(["rev-parse", "--show-toplevel"], cwd=root)
-    if not top_value:
-        return set()
-    top = Path(top_value).resolve()
-    refs = git_ref_names(str(top), base=top)
-    refs.update(git_ref_names(str(root), base=top))
-    origin = git_output_optional(["config", "--get", "remote.origin.url"], cwd=root)
-    if origin:
-        refs.update(git_ref_names(origin, base=top))
-    return refs
+def same_repository_history(left: Path, right: Path) -> bool:
+    left_head = git_output_optional(["rev-parse", "HEAD"], cwd=left)
+    right_head = git_output_optional(["rev-parse", "HEAD"], cwd=right)
+    if not left_head or not right_head:
+        return False
+    return all(
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode == 0
+        for root, revision in ((left, right_head), (right, left_head))
+    )
 
 
 def trusted_platform_identity(platform_root: Path) -> tuple[str, set[str]]:
@@ -238,7 +243,13 @@ def trusted_platform_identity(platform_root: Path) -> tuple[str, set[str]]:
     head = git_output(["rev-parse", "HEAD"], cwd=platform_root).lower()
     if not REV_RE.fullmatch(head):
         fail(f"trusted --platform-root HEAD is not a full git SHA: {platform_root}")
-    return head, repository_refs(platform_root)
+    top = Path(git_output(["rev-parse", "--show-toplevel"], cwd=platform_root)).resolve()
+    refs = git_ref_names(str(top), base=top)
+    refs.update(git_ref_names(str(platform_root), base=top))
+    origin = git_output_optional(["config", "--get", "remote.origin.url"], cwd=platform_root)
+    if origin:
+        refs.update(git_ref_names(origin, base=top))
+    return head, refs
 
 
 def read_workspace(workspace_path: Path) -> dict[str, object]:
@@ -349,9 +360,7 @@ for package, kind, source_id in selected:
     if kind == "workspace":
         package_platform_root = project_root
         if not same_path(project_root, trusted_platform_root):
-            project_refs = repository_refs(project_root)
-            _, workspace_platform_refs = trusted_platform_identity(trusted_platform_root)
-            if not project_refs or project_refs.isdisjoint(workspace_platform_refs):
+            if not same_repository_history(project_root, trusted_platform_root):
                 fail(
                     f"workspace platform package '{package}' requires trusted --platform-root "
                     "from the project repository"
@@ -397,6 +406,7 @@ host_run_parse_supervise_args() {
   HOST_RUN_RUNTIME_LABEL=""
   HOST_RUN_RUNTIME_IS_EXPLICIT=0
   HOST_RUN_RESTART=0
+  HOST_RUN_EXPECTED_ENGINE_REVISION=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -412,6 +422,9 @@ host_run_parse_supervise_args() {
       --platform-packages)
         [ "$#" -ge 2 ] || { echo "error: --platform-packages requires a package list" >&2; return 2; }
         HOST_RUN_PLATFORM_PACKAGES="$2"; shift 2 ;;
+      --expected-engine-revision)
+        [ "$#" -ge 2 ] || { echo "error: --expected-engine-revision requires a revision" >&2; return 2; }
+        HOST_RUN_EXPECTED_ENGINE_REVISION="$2"; shift 2 ;;
       --host-packages)
         [ "$#" -ge 2 ] || { echo "error: --host-packages requires a package list" >&2; return 2; }
         HOST_RUN_HOST_PACKAGES="$2"; shift 2 ;;
@@ -651,6 +664,22 @@ host_run_require_engine_binary() {
   return 1
 }
 
+host_run_require_expected_engine_revision() {
+  if [[ ! "$HOST_RUN_EXPECTED_ENGINE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "ENGINE_REVISION_INVALID: --expected-engine-revision must be a full lowercase Git SHA" >&2
+    return 1
+  fi
+  case "$BIN" in
+    *-"$HOST_RUN_EXPECTED_ENGINE_REVISION") ;;
+    *)
+      printf 'ENGINE_REVISION_MISMATCH: expected %s, binary path is %s\n' \
+        "$HOST_RUN_EXPECTED_ENGINE_REVISION" "$BIN" >&2
+      return 1
+      ;;
+  esac
+  export FKST_EXPECTED_ENGINE_REVISION="$HOST_RUN_EXPECTED_ENGINE_REVISION"
+}
+
 host_run_claim_supervise_slot() {
   local pid_file pid wrote=0
   pid_file="$(host_run_pid_file)"
@@ -710,6 +739,7 @@ host_run_supervise_contract() {
   fi
 
   host_run_validate_local_iteration_test_command || return $?
+  host_run_require_expected_engine_revision || return $?
   host_run_require_engine_binary || return $?
   host_run_restart_prior || return $?
   export FKST_RUNTIME_ROOT="$HOST_RUN_RUNTIME_ROOT"
