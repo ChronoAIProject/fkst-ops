@@ -6,19 +6,36 @@ deployment repositories. The current contracts and ownership boundaries are in
 
 The repository contains a Bash and Python entry, schema validation, lifecycle
 and observation commands, provider adapters, and deterministic acceptance
-fixtures. Deployment parameters and pins live in the deployment repository;
+fixtures. Deployment parameters, source bindings, revision derivations, and the
+mechanism pin live in the deployment repository;
 local paths and credentials come from its machine profile.
+
+For engine selection, the verified narrowing is specific: the set of writable
+records that can select which engine executes goes from three to one, the
+revision file named by `engine_revision.path` in the platform commit. The full
+authority and widened-surface accounting is in [SPEC.md](SPEC.md#engine-revision-authority).
 
 ## Run it
 
-Create `<deployment-repo>/.fkst/machine-profile.toml` from the deployment
-repository's example, then inspect the complete binding:
+Generate the machine profile and related control artifacts from a clean checkout
+whose revision and tree match the deployment-owned mechanism pin:
+
+```sh
+<pinned-fkst-ops-checkout>/bin/fkst-regenerate <deployment-repo> \
+  --bot-login <machine-actor-login> \
+  --github-credential-source <github-app-or-github-cli-user>
+```
+
+The generator derives every logical root named by the declarations, hydrates
+their declared sources, and atomically publishes the control generation under
+`$HOME/.fkst/machine`. Do not hand-author or edit the generated profile. Inspect
+the complete binding with:
 
 ```sh
 ~/fkst-ops/bin/fkst-ops preflight \
   --deployment-dir <deployment-repo> \
   --declaration <deployment-repo>/deployments/<name>.toml \
-  --machine-profile <deployment-repo>/.fkst/machine-profile.toml \
+  --machine-profile "$HOME/.fkst/machine/profile.toml" \
   --lock <deployment-repo>/fkst.lock
 ```
 

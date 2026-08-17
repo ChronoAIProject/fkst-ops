@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Advance one external-source pin from facts observed in its source repository."""
+"""Advance one mechanism pin from facts observed in its source repository."""
 
 from __future__ import annotations
 
@@ -39,7 +39,12 @@ def _source_url(lock: dict[str, object], source_id: str) -> str:
     matches = [entry for entry in sources if isinstance(entry, dict) and entry.get("id") == source_id]
     if len(matches) != 1:
         raise ValueError(f"lock must contain exactly one external_source(id={source_id})")
-    url = matches[0].get("git")
+    entry = matches[0]
+    if entry.get("checkout_role") != "mechanism":
+        raise ValueError(
+            f"external_source(id={source_id}): only mechanism source pins can be advanced"
+        )
+    url = entry.get("git")
     if not isinstance(url, str) or not url:
         raise ValueError(f"external_source(id={source_id}).git must be a non-empty string")
     parsed = urlsplit(url)
@@ -58,6 +63,10 @@ def _updated_text(text: str, source_id: str, revision: str, tree: str) -> str:
         entries = parsed.get("external_source", [])
         if len(entries) != 1 or entries[0].get("id") != source_id:
             continue
+        if entries[0].get("checkout_role") != "mechanism":
+            raise ValueError(
+                f"external_source(id={source_id}): only mechanism source pins can be advanced"
+            )
         chunk, rev_count = re.subn(
             r'(?m)^(rev\s*=\s*)"[^"]*"[ \t]*$', rf'\1"{revision}"', chunk
         )

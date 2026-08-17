@@ -16,6 +16,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from schema.provider_surface import PUBLISHED_PROVIDER_ENTRY_POINTS
+from ops.revision_derivation import RevisionDerivationError, validate_derivation_path
 
 
 SCHEMA_ID = "fkst.ops.deployment.v1"
@@ -94,7 +95,7 @@ def normalized_login(login: str) -> str:
 
 def domain_a_normalized_login(login: str) -> str:
     """Match content_filter.lua's case-insensitive authorization identity."""
-    # Keep this aligned with fkst-packages/libraries/forge/github/content_filter.lua:370-380.
+    # Keep this aligned with libraries/forge/github/content_filter.lua:370-380.
     value = login.strip().lower()
     return value[:-5] if value.endswith("[bot]") else value
 
@@ -180,14 +181,18 @@ def _validate_lock(lock: dict[str, Any]) -> dict[str, dict[str, Any]]:
         checkout_role = _string(entry, "checkout_role", path)
         if checkout_role not in {"deployment-operated", "mechanism"}:
             _fail(path + ".checkout_role", "must be deployment-operated or mechanism")
-        resolved = _table(entry.get("resolved"), f"{path}.resolved")
-        _closed(resolved, {"rev", "tree_sha256"}, f"{path}.resolved")
-        rev = _string(resolved, "rev", f"{path}.resolved")
-        tree = _string(resolved, "tree_sha256", f"{path}.resolved")
-        if not _SHA.fullmatch(rev):
-            _fail(f"{path}.resolved.rev", "must be a full lowercase Git SHA")
-        if not _TREE_SHA.fullmatch(tree):
-            _fail(f"{path}.resolved.tree_sha256", "must be a canonical SHA-256 pin")
+        if checkout_role == "deployment-operated":
+            if "resolved" in entry:
+                _fail(path + ".resolved", "deployment-operated source must not contain resolved")
+        else:
+            resolved = _table(entry.get("resolved"), f"{path}.resolved")
+            _closed(resolved, {"rev", "tree_sha256"}, f"{path}.resolved")
+            rev = _string(resolved, "rev", f"{path}.resolved")
+            tree = _string(resolved, "tree_sha256", f"{path}.resolved")
+            if not _SHA.fullmatch(rev):
+                _fail(f"{path}.resolved.rev", "must be a full lowercase Git SHA")
+            if not _TREE_SHA.fullmatch(tree):
+                _fail(f"{path}.resolved.tree_sha256", "must be a canonical SHA-256 pin")
         if identity in result:
             _fail(path + ".id", f"duplicate lock identity: {identity}")
         result[identity] = entry
@@ -344,6 +349,12 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
         role: _require_directory(machine[f"{role}_checkout"], f"{path}.machine.{role}_checkout")
         for role in ("target", "platform", "engine")
     }
+    engine_root = checkouts["engine"].resolve()
+    if any(engine_root == checkouts[role].resolve() for role in ("target", "platform")):
+        _fail(
+            path + ".machine.engine_checkout",
+            "must be separate from branch-operated target and platform checkouts",
+        )
     _require_directory(machine["durable"], path + ".machine.durable")
 
     for package in resolved["packages"]["platform"]:
@@ -351,23 +362,27 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
     for package in resolved["packages"]["host"]:
         _require_directory(str(checkouts["target"] / ".fkst" / "local-packages" / package), path + f".packages.host[{package}]")
 
-    source_roots: dict[str, Path] = {}
+    source_roots: dict[str, set[Path]] = {}
     for role, source in resolved["sources"].items():
         lock_ref = source["lock_ref"]
         root = checkouts[role]
-        if lock_ref in source_roots and source_roots[lock_ref].resolve() != root.resolve():
-            _fail(path + f".sources.{role}.lock_ref", f"lock reference {lock_ref} resolves to multiple checkouts")
-        source_roots[lock_ref] = root
+        source_roots.setdefault(lock_ref, set()).add(root.resolve())
     # bootstrap/run.sh verifies the explicitly declared mechanism checkout before
     # handing control to the validator. Its identity is not inferred from its id.
     for lock_ref, pin in pins.items():
         if pin["checkout_role"] == "mechanism":
-            source_roots[lock_ref] = Path(__file__).resolve().parents[1]
+            source_roots[lock_ref] = {Path(__file__).resolve().parents[1]}
     for field, provider in resolved["providers"].items():
         lock_ref, relative = provider["implementation"].split(":", 1)
-        root = source_roots.get(lock_ref)
-        if root is None:
+        roots = source_roots.get(lock_ref)
+        if roots is None:
             _fail(path + f".providers.{field}", f"provider source is not bound to a deployment or mechanism source: {lock_ref}")
+        if len(roots) != 1:
+            _fail(
+                path + f".providers.{field}.implementation",
+                f"provider source {lock_ref} is ambiguous across declared checkouts",
+            )
+        root = next(iter(roots))
         if pins[lock_ref]["checkout_role"] == "mechanism":
             published_kind = PUBLISHED_PROVIDER_ENTRY_POINTS.get(relative)
             if published_kind != provider["kind"]:
@@ -472,7 +487,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     for index, raw in enumerate(deployments):
         path = f"declaration.deployment[{index}]"
         dep = _table(raw, path)
-        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "packages", "integration", "machine", "providers"}, path)
+        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "engine_revision", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
         github_write_enabled = dep.get("github_write_enabled")
@@ -547,8 +562,16 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                 "lock_ref": lock_ref,
                 "git": pins[lock_ref]["git"],
                 "checkout_role": pins[lock_ref]["checkout_role"],
-                "pin": copy.deepcopy(pins[lock_ref]["resolved"]),
             }
+
+        engine_revision_path = path + ".engine_revision"
+        engine_revision = _table(dep.get("engine_revision"), engine_revision_path)
+        _closed(engine_revision, {"path"}, engine_revision_path)
+        derivation_path = _string(engine_revision, "path", engine_revision_path)
+        try:
+            validate_derivation_path(derivation_path)
+        except RevisionDerivationError as exc:
+            _fail(engine_revision_path + ".path", str(exc))
 
         packages = _table(dep.get("packages"), path + ".packages")
         _closed(packages, {"platform", "host"}, path + ".packages")
@@ -608,7 +631,9 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                 "data": copy.deepcopy(_table(profile_table.get("data"), profile_path + ".data")),
                 "producer_binding": producer,
             }
-        resolved.update({"sources": resolved_sources, "packages": resolved_packages, "integration": resolved_integration,
+        resolved.update({"sources": resolved_sources,
+                         "engine_revision": {"path": derivation_path},
+                         "packages": resolved_packages, "integration": resolved_integration,
                          "machine": _resolve_machine(_table(dep.get("machine"), path + ".machine"), machine_values,
                                                      path + ".machine", profile_present=profile_block is not None),
                          "providers": resolved_bindings})

@@ -118,16 +118,10 @@ tree_sha256 = "sha256-{'0' * 64}"
 id = "target-source"
 git = "{target}"
 checkout_role = "deployment-operated"
-[external_source.resolved]
-rev = "1111111111111111111111111111111111111111"
-tree_sha256 = "sha256-{'1' * 64}"
 [[external_source]]
 id = "engine-source"
 git = "{engine}"
 checkout_role = "deployment-operated"
-[external_source.resolved]
-rev = "2222222222222222222222222222222222222222"
-tree_sha256 = "sha256-{'2' * 64}"
 ''', encoding="utf-8")
 
             before = byte_tree(mechanism)

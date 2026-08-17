@@ -357,6 +357,39 @@ class ValidatorTests(unittest.TestCase):
         source = result["deployment"][0]["sources"]["platform"]
         self.assertEqual(source["git"], "https://invalid.example/target.git")
 
+    def test_engine_revision_derivation_resolves_without_deployment_source_pins(self) -> None:
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+
+        deployment = result["deployment"][0]
+        self.assertEqual(
+            deployment["engine_revision"],
+            {"path": ".control/engine-ref"},
+        )
+        self.assertNotIn("pin", deployment["sources"]["engine"])
+
+    def test_deployment_operated_source_forbids_resolved_pin(self) -> None:
+        self.lock["external_source"][0]["resolved"] = {
+            "rev": "1" * 40,
+            "tree_sha256": "sha256-" + "1" * 64,
+        }
+        self.reject("deployment-operated source must not contain resolved")
+
+    def test_engine_revision_has_no_literal_revision_input(self) -> None:
+        self.declaration["deployment"][0]["engine_revision"]["revision"] = "1" * 40
+        self.reject("engine_revision.*unknown field: revision")
+
+    def test_engine_revision_path_rejects_checkout_escape(self) -> None:
+        self.declaration["deployment"][0]["engine_revision"]["path"] = "../engine-ref"
+        self.reject("DERIVATION_PATH_INVALID")
+
+    def test_engine_revision_rejects_removed_checkout_tag(self) -> None:
+        self.declaration["deployment"][0]["engine_revision"]["checkout"] = "platform"
+        self.reject("engine_revision.*unknown field: checkout")
+
+    def test_engine_checkout_cannot_alias_branch_operated_checkout(self) -> None:
+        self.declaration["deployment"][0]["machine"]["engine_checkout"] = "packages-host"
+        self.reject("must be separate from branch-operated target and platform checkouts")
+
     def test_published_mechanism_provider_binds_and_resolves(self) -> None:
         provider = self.declaration["provider"][1]
         provider["implementation"] = "fkst-ops:providers/board_engine_durable.py"
@@ -495,7 +528,11 @@ class ValidatorTests(unittest.TestCase):
         self.reject("references missing pin")
 
     def test_rejects_incomplete_pin(self) -> None:
-        del self.lock["external_source"][0]["resolved"]["tree_sha256"]
+        mechanism = next(
+            entry for entry in self.lock["external_source"]
+            if entry["checkout_role"] == "mechanism"
+        )
+        del mechanism["resolved"]["tree_sha256"]
         self.reject("tree_sha256.*non-empty string")
 
     def test_rejects_unknown_declaration_field(self) -> None:

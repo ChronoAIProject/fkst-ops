@@ -72,6 +72,7 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
                             "logs": f"/{name}/logs",
                         },
                         "github_devloop_profile": {},
+                        "engine_revision": {"path": "control/ref"},
                         "providers": {
                             key: {
                                 "executable": "/provider",
@@ -202,6 +203,7 @@ stop_one "$1"
                     "bot_login": actor,
                 },
                 "github_devloop_profile": {},
+                "engine_revision": {"path": "control/ref"},
                 "providers": providers,
                 "claim_posture": {"mode": "label", "label_exclusive": False},
                 "author_authorization": {
@@ -287,12 +289,17 @@ sync_to_run_branch /checkout
     def _capture_launch_environment(
         self, write: str | None, deployment_python: str = "/fixture/resolved/python",
         credential_source: str = "github-app",
+        advance_platform_before_spawn: bool = False,
     ) -> dict[str, str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             platform = root / "platform"
             run_script = platform / "scripts" / "run.sh"
             run_script.parent.mkdir(parents=True)
+            revision_path = platform / ".control" / "engine-ref"
+            revision_path.parent.mkdir(parents=True)
+            selected_engine_revision = "b" * 40
+            revision_path.write_text(selected_engine_revision + "\n", encoding="ascii")
             capture = root / "capture.json"
             helper = root / "credential-helper"
             identity_proof = (
@@ -335,9 +342,13 @@ sync_to_run_branch /checkout
             fake_python.chmod(0o755)
             run_script.write_text(
                 "#!/usr/bin/env python3\n"
-                "import json, os, shutil, sys, time, tomllib\n"
+                "import json, os, pathlib, shutil, subprocess, sys, time, tomllib\n"
                 "keys = ['PATH', 'FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_CREDENTIAL_SOURCE', 'FKST_GITHUB_CREDENTIAL_RESOLVER', 'FKST_GITHUB_REAL_GH', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
                 "captured = {key: os.environ.get(key) for key in keys}\n"
+                "platform_root = pathlib.Path(sys.argv[sys.argv.index('--platform-root') + 1])\n"
+                "captured['platform_root'] = str(platform_root)\n"
+                "captured['platform_revision'] = subprocess.check_output(['git', '-C', str(platform_root), 'rev-parse', 'HEAD'], text=True).strip()\n"
+                "captured['engine_revision'] = subprocess.check_output(['git', '-C', str(platform_root), 'show', 'HEAD:.control/engine-ref'], text=True).strip()\n"
                 "captured['codex'] = shutil.which('codex')\n"
                 "captured['python3'], captured['python3_executable'] = shutil.which('python3'), sys.executable\n"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps(captured))\n"
@@ -347,8 +358,57 @@ sync_to_run_branch /checkout
                 encoding="ascii",
             )
             run_script.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(platform)], check=True)
+            subprocess.run(
+                ["git", "-C", str(platform), "config", "user.email", "test@example.invalid"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(platform), "config", "user.name", "Test"], check=True,
+            )
+            subprocess.run(["git", "-C", str(platform), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(platform), "commit", "-qm", "selected platform"], check=True,
+            )
+            selected_platform_revision = subprocess.run(
+                ["git", "-C", str(platform), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            advanced_platform_revision = ""
+            if advance_platform_before_spawn:
+                (platform / "platform-state").write_text("advanced\n", encoding="ascii")
+                subprocess.run(["git", "-C", str(platform), "add", "."], check=True)
+                subprocess.run(
+                    ["git", "-C", str(platform), "commit", "-qm", "advanced platform"],
+                    check=True,
+                )
+                advanced_platform_revision = subprocess.run(
+                    ["git", "-C", str(platform), "rev-parse", "HEAD"],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+                subprocess.run(
+                    ["git", "-C", str(platform), "reset", "--hard", "-q", selected_platform_revision],
+                    check=True,
+                )
+            shared_assertion = "assert_shared_engine_revision() { :; }"
+            if advance_platform_before_spawn:
+                shared_assertion = '''assert_shared_engine_revision() {
+  if [ -n "${RACE_PLATFORM_REVISION:-}" ]; then
+    git -C "$PKGSRC" reset --hard -q "$RACE_PLATFORM_REVISION" || return 1
+  fi
+}'''
             command = f'''source "{OPERATOR}"
 require_engine_binary() {{ :; }}
+{shared_assertion}
+ensure_engine_binary_current() {{
+  PLATFORM_REVISION={selected_platform_revision}; ENGINE_REVISION={selected_engine_revision}
+  assert_shared_engine_revision
+}}
+engine_build_receipt_current() {{ :; }}
 derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=pkg; }}
 wait_supervise_ready() {{
   local attempts=0
@@ -356,8 +416,10 @@ wait_supervise_ready() {{
   [ -f "$CAPTURE" ]
 }}
 clean_stale_runtime_worktrees() {{ :; }}
+clean_stale_launch_platforms() {{ :; }}
 engine_panic_count() {{ echo 0; }}
 REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
+REVISION_SOURCE="$PKGSRC"; ENGINE_REVISION_PATH=.control/engine-ref
 CARGO=/fixture/resolved/cargo
 DEPLOYMENT_PYTHON={deployment_python!s}
 DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
@@ -382,6 +444,7 @@ launch_one fixture 0
             env["FKST_GITHUB_REAL_GH"] = "/usr/bin/true"
             env["FKST_GITHUB_CREDENTIAL_RESOLVER"] = "/usr/bin/true"
             env["RESOLVED_FIXTURE"] = str(resolved_fixture)
+            env["RACE_PLATFORM_REVISION"] = advanced_platform_revision
             env.pop("FKST_GITHUB_WRITE", None)
             command = command.replace(
                 "CLAIM_MODE=label;", f"GITHUB_WRITE_POSTURE={write or '0'}; CLAIM_MODE=label;"
@@ -391,7 +454,9 @@ launch_one fixture 0
                 env=env, text=True, capture_output=True, check=False, timeout=10,
             )
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            return json.loads(capture.read_text(encoding="utf-8"))
+            captured = json.loads(capture.read_text(encoding="utf-8"))
+            captured["selected_platform_revision"] = selected_platform_revision
+            return captured
 
     def test_sync_never_touches_hydrated_mechanism_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -404,14 +469,15 @@ eval "$(sed -n '/^cmd_sync()/,/^}}/p' "{OPERATOR}")"
 expand() {{ printf 'deployment-a\\n'; }}
 cfg() {{
   UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
-  HOST=/target; PKGSRC=/platform; SUBSTRATE_SRC=/engine; BIN=/engine/bin
+  HOST=/target; PKGSRC=/platform; ENGINE_CHECKOUT=/engine; BIN=/engine/bin
   ENGINE_PROVIDER=/provider; ENGINE_CONTRACT=contract; ENGINE_PROVIDER_CONFIGURATION='{{}}'
 }}
 derive_devloop_pkgs_from_workspace() {{ :; }}
 ensure_integration_caught_up() {{ :; }}
+sync_to_run_branch() {{ printf 'synced:%s\\n' "$1"; }}
 bin_ensure_fresh() {{ echo built; }}
 _proc_stale() {{ echo current; }}
-restart_one() {{ :; }}
+restart_one() {{ echo unexpected-restart; return 1; }}
 cmd_sync all
 '''
             result = subprocess.run(
@@ -420,37 +486,39 @@ cmd_sync all
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual("a" * 40, head.read_text(encoding="ascii"))
             self.assertNotIn("operator checkouts", result.stdout)
+            self.assertIn("synced:/platform", result.stdout)
+            self.assertIn("synced:/target", result.stdout)
+            self.assertNotIn("unexpected-restart", result.stdout)
 
-    def test_engine_provider_uses_deployment_integration_branch(self) -> None:
+    def test_engine_provider_receives_only_the_derived_revision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            checkout = root / "checkout"
-            checkout.mkdir()
-            (checkout / ".git").mkdir()
             binary = root / "engine"
-            self.assertFalse(binary.exists())
-            tools = root / "tools"
-            tools.mkdir()
-            git = tools / "git"
-            git.write_text('#!/bin/sh\ncase "$1" in branch) echo build;; fetch|merge) :;; rev-parse) printf "%040d\\n" 0;; *) exit 1;; esac\n', encoding="ascii")
-            git.chmod(0o755)
-            build = root / "build"
-            build.write_text('#!/bin/sh\nprintf "#!/bin/sh\\nexit 0\\n" > "$1"\nchmod +x "$1"\n', encoding="ascii")
-            build.chmod(0o755)
+            provider = root / "provider.py"
+            provider.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, pathlib, sys\n"
+                "request=json.load(sys.stdin); value=request['input']\n"
+                "assert set(value) == {'engine_checkout','engine_binary','expected_revision','operation','build_command'}\n"
+                "assert value['expected_revision'] == os.environ['EXPECTED_REVISION']\n"
+                "binary=pathlib.Path(value['engine_binary']); binary.write_text('#!/bin/sh\\n'); binary.chmod(0o755)\n"
+                "json.dump({'version':'fkst.ops.invocation.v1','ok':True,'result':{'binary':str(binary),'source_rev':value['expected_revision']}},sys.stdout)\n",
+                encoding="ascii",
+            )
+            provider.chmod(0o755)
+            revision = "a" * 40
             command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
 _self_dir="{ROOT / 'ops'}"
 invoke_provider() {{ python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }}
-eval "$(sed -n '/^engine_build_result()/,/^}}/p' "{OPERATOR}")"
-SUBSTRATE_SRC="$1"; BIN="$2"; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=build
-ENGINE_PROVIDER="{ROOT / 'providers/engine.py'}"; ENGINE_CONTRACT=fkst.ops.engine.v1
-ENGINE_PROVIDER_CONFIGURATION="$3"
-engine_build_result
+eval "$(sed -n '/^invoke_engine_build_provider()/,/^}}/p' "{OPERATOR}")"
+ENGINE_CHECKOUT=/engine-checkout; BIN="$2"; ENGINE_REVISION="$3"
+ENGINE_PROVIDER="$1"; ENGINE_CONTRACT=fkst.ops.engine.v1
+ENGINE_PROVIDER_CONFIGURATION='{{"build_command":["true"]}}'
+invoke_engine_build_provider
 '''
-            env = os.environ.copy()
-            env["PATH"] = f"{tools}{os.pathsep}{env['PATH']}"
+            env = {**os.environ, "EXPECTED_REVISION": revision}
             result = subprocess.run(
-                ["bash", "-c", command, "test", str(checkout), str(binary),
-                 json.dumps({"build_command": [str(build), str(binary)]})],
+                ["bash", "-c", command, "test", str(provider), str(binary), revision],
                 env=env, text=True, capture_output=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -459,6 +527,7 @@ engine_build_result
             self.assertEqual(response["result"]["binary"], str(binary))
             self.assertTrue(binary.is_file())
             self.assertTrue(os.access(binary, os.X_OK))
+            self.assertEqual(response["result"]["source_rev"], revision)
 
     def test_engine_provider_failure_is_visible_through_deployment_operator_caller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -466,7 +535,7 @@ engine_build_result
             provider.write_text(
                 "#!/bin/sh\n"
                 "cat >/dev/null\n"
-                "printf '%s\\n' '{\"version\":\"fkst.ops.invocation.v1\",\"ok\":false,\"failure\":{\"code\":\"WRONG_BRANCH\",\"message\":\"expected branch integration, found dev\",\"details\":{}}}'\n"
+                "printf '%s\\n' '{\"version\":\"fkst.ops.invocation.v1\",\"ok\":false,\"failure\":{\"code\":\"REVISION_MISMATCH\",\"message\":\"expected derived revision aaaa, found bbbb\",\"details\":{}}}'\n"
                 "exit 1\n",
                 encoding="ascii",
             )
@@ -474,22 +543,21 @@ engine_build_result
             command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
 _self_dir="{ROOT / 'ops'}"
 invoke_provider() {{ python3 "$_self_dir/invoke_provider.py" "$1" "$2"; }}
-eval "$(sed -n '/^engine_build_result()/,/^}}/p' "{OPERATOR}")"
-SUBSTRATE_SRC=/engine; BIN=/engine/bin; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
+eval "$(sed -n '/^invoke_engine_build_provider()/,/^}}/p' "{OPERATOR}")"
+ENGINE_CHECKOUT=/engine; BIN=/engine/bin; ENGINE_REVISION={'a' * 40}
 ENGINE_PROVIDER="$1"; ENGINE_CONTRACT=fkst.ops.engine.v1
 ENGINE_PROVIDER_CONFIGURATION='{{"build_command":["true"]}}'
-bin_ensure_fresh() {{ local response; response=$(engine_build_result) || return $?; }}
-bin_ensure_fresh
+invoke_engine_build_provider
 '''
             result = subprocess.run(
                 ["bash", "-c", command, "test", str(provider)],
                 text=True, capture_output=True, check=False,
             )
             self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stdout, "")
+            self.assertEqual(json.loads(result.stdout)["failure"]["code"], "REVISION_MISMATCH")
             self.assertIn("fkst.ops.engine.v1", result.stderr)
-            self.assertIn("WRONG_BRANCH", result.stderr)
-            self.assertIn("expected branch integration, found dev", result.stderr)
+            self.assertIn("REVISION_MISMATCH", result.stderr)
+            self.assertIn("expected derived revision", result.stderr)
 
     def test_shell_is_valid_and_uses_schema_validator(self) -> None:
         subprocess.run(["bash", "-n", str(OPERATOR)], check=True)
@@ -506,9 +574,11 @@ bin_ensure_fresh
         self.assertNotIn("GH_ORG=", source)
         self.assertNotIn("GITHUB_PROXY_POLL_LABEL_PREFIX=", source)
         self.assertNotIn("  doctor)", source)
-        self.assertGreaterEqual(source.count("require_engine_binary || return 1"), 3)
+        self.assertIn("ensure_engine_binary_current || return 1", source)
+        self.assertNotIn("engine_build_result", source)
+        self.assertNotIn("expected_branch", source)
         self.assertIn('require_engine_binary || { rm -rf "$tmp"; failed=1; continue; }\n    "$PYTHON" "$_repo_root/board/board.py"', source)
-        self.assertIn('require_engine_binary || return 1\n  printf \'FKST_GITHUB_WRITE=', source)
+        self.assertIn('assert_engine_pair "$PLATFORM_REVISION" "$ENGINE_REVISION" || return 1', source)
         self.assertNotIn('GH_TOKEN="$GITHUB_TOKEN_DISCOVERED"', source)
         self.assertIn('FKST_GITHUB_REAL_GH="$REAL_GH"', source)
 
@@ -554,6 +624,47 @@ github_write_posture
         self.assertEqual(captured["FKST_GITHUB_REAL_GH"], "/usr/bin/true")
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_SOURCE"], "github-app")
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_RESOLVER"], "/usr/bin/true")
+
+    def test_launch_uses_the_verified_pair_when_platform_advances_before_spawn(self) -> None:
+        captured = self._capture_launch_environment(
+            None, advance_platform_before_spawn=True
+        )
+
+        self.assertEqual(captured["selected_platform_revision"], captured["platform_revision"])
+        self.assertEqual("b" * 40, captured["engine_revision"])
+        self.assertIn("/runtime/.platform/", captured["platform_root"])
+        self.assertTrue(captured["platform_root"].endswith(captured["selected_platform_revision"]))
+
+    def test_sync_advances_every_checkout_before_asserting_shared_engine_revision(self) -> None:
+        command = f'''set -uo pipefail
+eval "$(sed -n '/^cmd_sync()/,/^}}/p' "{OPERATOR}")"
+expand() {{ printf 'first\nsecond\n'; }}
+cfg() {{ NAME="$1"; PKGSRC="/$1-platform"; HOST="$PKGSRC"; INTEGRATION_BRANCH=integration; UPSTREAM_BRANCH=dev; }}
+derive_devloop_pkgs_from_workspace() {{ :; }}
+ensure_integration_caught_up() {{ :; }}
+sync_to_run_branch() {{ touch "$STATE/${{NAME}}.advanced"; }}
+bin_ensure_fresh() {{
+  [ -f "$STATE/first.advanced" ] && [ -f "$STATE/second.advanced" ] || {{
+    echo SHARED_ENGINE_REVISION_CONFLICT >&2
+    return 1
+  }}
+  echo current
+}}
+_proc_stale() {{ echo current; }}
+restart_one() {{ echo unexpected-restart >&2; return 1; }}
+cmd_sync all
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                ["bash", "-c", command],
+                env={**os.environ, "STATE": directory},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("SHARED_ENGINE_REVISION_CONFLICT", result.stderr)
 
     def test_launch_forwards_resolved_github_credential_source(self) -> None:
         captured = self._capture_launch_environment(
@@ -776,226 +887,6 @@ printf '{{"login":"declared-bot","token":"%s","target":"example/repo","identity_
             self.assertEqual(second.stdout, "work-continued\n")
             self.assertEqual(counter.read_text(encoding="ascii"), "2")
 
-    def test_refreshed_credential_is_secret_and_identity_checked_every_time(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            token = "never-expose-this-token"
-            helper = root / "helper"
-            helper.write_text(
-                f'''#!/bin/sh
-printf '%s\\n' '{{"login":"wrong-bot","token":"{token}"}}'
-''', encoding="ascii",
-            )
-            helper.chmod(0o755)
-            args = root / "args"
-            real_gh = root / "real-gh"
-            real_gh.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$@" > "{args}"\n', encoding="ascii")
-            real_gh.chmod(0o755)
-            env = {**os.environ, "FKST_GITHUB_CREDENTIAL_HELPER": str(helper),
-                   "FKST_GITHUB_CREDENTIAL_SOURCE": "github-app",
-                   "FKST_GITHUB_BOT_LOGIN": "declared-bot", "FKST_GITHUB_REAL_GH": str(real_gh)}
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "ops/github_credential_gh.py"), "api", "/repo"],
-                env=env, text=True, capture_output=True, check=False,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("HEALTH=UNHEALTHY", result.stderr)
-            self.assertNotIn(token, result.stdout + result.stderr)
-            self.assertFalse(args.exists())
-            for artifact in root.rglob("*"):
-                if artifact.is_file() and artifact not in {helper}:
-                    self.assertNotIn(token, artifact.read_text(encoding="utf-8"))
 
-    def test_credential_never_appears_in_real_gh_process_arguments(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            token = "process-argument-secret"
-            helper = root / "helper"
-            helper.write_text(
-                f'#!/bin/sh\nprintf \'%s\\n\' \'{{"login":"declared-bot","token":"{token}","target":"example/repo","identity_proof":"target-access-only;bot-login-not-mechanically-proven"}}\'\n',
-                encoding="ascii",
-            )
-            helper.chmod(0o755)
-            arguments = root / "arguments"
-            real_gh = root / "real-gh"
-            real_gh.write_text(
-                f'#!/bin/sh\nprintf \'%s\\n\' "$@" > "{arguments}"\n', encoding="ascii",
-            )
-            real_gh.chmod(0o755)
-            env = {**os.environ, "FKST_GITHUB_CREDENTIAL_HELPER": str(helper),
-                   "FKST_GITHUB_CREDENTIAL_SOURCE": "github-app",
-                   "FKST_GITHUB_BOT_LOGIN": "declared-bot", "FKST_GITHUB_REAL_GH": str(real_gh),
-                   "FKST_GITHUB_REPO": "example/repo"}
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "ops/github_credential_gh.py"), "api", "/repo"],
-                env=env, text=True, capture_output=True, check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(arguments.read_text(encoding="ascii"), "api\n/repo\n")
-            self.assertNotIn(token, result.stdout + result.stderr + arguments.read_text(encoding="ascii"))
-
-    def test_authentication_failure_is_visible_in_status_health(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            log = Path(directory) / "supervise.log"
-            log.write_text(
-                "FKST_GITHUB_WRITE=1 FKST_GITHUB_WRITER_LOGIN=resolved-bot "
-                "FKST_GITHUB_CLAIM_MODE=label FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=0\n"
-                "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY\n",
-                encoding="ascii",
-            )
-            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
-eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
-cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
-pidof_df() {{ echo 123; }}; latest_log() {{ echo "$LOG"; }}
-fmt_uptime() {{ echo 1m00s; }}; engine_panic_count() {{ echo 0; }}
-ps() {{ echo 00:01:00; }}; git() {{ echo abcdef123456; }}
-status_one fixture
-'''
-            result = subprocess.run(["bash", "-c", command], env={**os.environ, "LOG": str(log)},
-                                    text=True, capture_output=True, check=False)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("health=UNHEALTHY", result.stdout)
-            self.assertIn("auth-fail=1", result.stdout)
-
-    def test_status_reports_the_running_launch_write_posture(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            log = Path(directory) / "supervise.log"
-            log.write_text(
-                "FKST_GITHUB_WRITE=1 FKST_GITHUB_WRITER_LOGIN=resolved-bot FKST_GITHUB_CLAIM_MODE=label "
-                "FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=0\nlast event\n",
-                encoding="ascii",
-            )
-            command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
-eval "$(sed -n '/^status_one()/,/^}}/p' "{OPERATOR}")"
-cfg() {{ HOST=/host; PKGSRC=/platform; REPO=example/repo; }}
-pidof_df() {{ echo 123; }}
-latest_log() {{ echo "$LOG"; }}
-fmt_uptime() {{ echo 1m00s; }}
-engine_panic_count() {{ echo 0; }}
-ps() {{ echo 00:01:00; }}
-git() {{ echo abcdef123456; }}
-status_one fixture
-'''
-            result = subprocess.run(
-                ["bash", "-c", command], env={**os.environ, "LOG": str(log)},
-                text=True, capture_output=True, check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("write=1", result.stdout)
-            self.assertIn("writer=resolved-bot", result.stdout)
-            self.assertIn("claim=label", result.stdout)
-            self.assertIn("label-exclusive=0", result.stdout)
-
-    def test_platform_source_role_is_an_input(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            host = root / "host"
-            platform = root / "platform"
-            host.mkdir()
-            platform.mkdir()
-            (host / "fkst.workspace.toml").write_text(
-                '[[external_sources]]\nid = "target-owned-name"\ngit = "ssh://git@example.com/team/platform"\npackages = ["one", "two"]\n',
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(MANIFEST),
-                    "platform-packages",
-                    "deployment-a",
-                    str(host),
-                    str(platform),
-                    "https://example.com/team/platform.git",
-                ],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "one two")
-
-    def test_platform_source_url_zero_matches_fails_closed_with_observed_ids(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            host = root / "host"
-            platform = root / "platform"
-            host.mkdir()
-            platform.mkdir()
-            (host / "fkst.workspace.toml").write_text(
-                '[[external_sources]]\nid = "other"\ngit = "https://example.com/team/other.git"\npackages = ["one"]\n',
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(MANIFEST),
-                    "platform-packages",
-                    "deployment-a",
-                    str(host),
-                    str(platform),
-                    "https://example.com/team/platform.git",
-                ],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("https://example.com/team/platform.git", result.stdout)
-            self.assertIn("no matches", result.stdout)
-            self.assertIn("other", result.stdout)
-
-    def test_platform_source_url_two_matches_fails_closed_with_observed_ids(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            host = root / "host"
-            platform = root / "platform"
-            host.mkdir()
-            platform.mkdir()
-            (host / "fkst.workspace.toml").write_text(
-                '[[external_sources]]\nid = "first"\ngit = "https://example.com/team/platform.git"\npackages = ["one"]\n'
-                '[[external_sources]]\nid = "second"\ngit = "git://example.com/team/platform"\npackages = ["two"]\n',
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                ["python3", str(MANIFEST), "platform-packages", "deployment-a", str(host), str(platform),
-                 "ssh://git@example.com/team/platform.git"],
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-            )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("ssh://git@example.com/team/platform.git", result.stdout)
-            self.assertIn("2 matches", result.stdout)
-            self.assertIn("first", result.stdout)
-            self.assertIn("second", result.stdout)
-
-    def test_corrupt_run_checkout_is_recloned_from_resolved_git_url(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            remote = root / "remote"
-            checkout = root / "run"
-            remote.mkdir()
-            subprocess.run(["git", "init", "-q", str(remote)], check=True)
-            subprocess.run(["git", "-C", str(remote), "config", "user.email", "test@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(remote), "config", "user.name", "Test"], check=True)
-            (remote / "tracked").write_text("restored\n", encoding="ascii")
-            subprocess.run(["git", "-C", str(remote), "add", "tracked"], check=True)
-            subprocess.run(["git", "-C", str(remote), "commit", "-qm", "fixture"], check=True)
-            checkout.mkdir()
-            (checkout / "partial").write_text("corrupt\n", encoding="ascii")
-            command = f'''set -e
-eval "$(sed -n '/^ensure_run_checkout()/,/^}}/p' {OPERATOR})"
-ensure_run_checkout "$1" "$2"
-'''
-            result = subprocess.run(
-                ["bash", "-c", command, "test", str(checkout), str(remote)],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((checkout / "tracked").read_text(encoding="ascii"), "restored\n")
-            self.assertTrue(list(root.glob("run.corrupt.*")))
-
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()

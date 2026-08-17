@@ -219,19 +219,26 @@ def same_path(left: Path, right: Path) -> bool:
         return False
 
 
+def repository_refs(root: Path) -> set[str]:
+    top_value = git_output_optional(["rev-parse", "--show-toplevel"], cwd=root)
+    if not top_value:
+        return set()
+    top = Path(top_value).resolve()
+    refs = git_ref_names(str(top), base=top)
+    refs.update(git_ref_names(str(root), base=top))
+    origin = git_output_optional(["config", "--get", "remote.origin.url"], cwd=root)
+    if origin:
+        refs.update(git_ref_names(origin, base=top))
+    return refs
+
+
 def trusted_platform_identity(platform_root: Path) -> tuple[str, set[str]]:
     if not platform_root.is_dir():
         fail(f"trusted --platform-root does not exist: {platform_root}")
     head = git_output(["rev-parse", "HEAD"], cwd=platform_root).lower()
     if not REV_RE.fullmatch(head):
         fail(f"trusted --platform-root HEAD is not a full git SHA: {platform_root}")
-    top = Path(git_output(["rev-parse", "--show-toplevel"], cwd=platform_root)).resolve()
-    refs = git_ref_names(str(top), base=top)
-    refs.update(git_ref_names(str(platform_root), base=top))
-    origin = git_output_optional(["config", "--get", "remote.origin.url"], cwd=platform_root)
-    if origin:
-        refs.update(git_ref_names(origin, base=top))
-    return head, refs
+    return head, repository_refs(platform_root)
 
 
 def read_workspace(workspace_path: Path) -> dict[str, object]:
@@ -340,10 +347,18 @@ package_roots: list[Path] = []
 platform_roots: set[Path] = set()
 for package, kind, source_id in selected:
     if kind == "workspace":
+        package_platform_root = project_root
         if not same_path(project_root, trusted_platform_root):
-            fail(f"workspace platform package '{package}' requires trusted --platform-root")
-        root = project_root / "packages" / package
-        platform_roots.add(project_root)
+            project_refs = repository_refs(project_root)
+            _, workspace_platform_refs = trusted_platform_identity(trusted_platform_root)
+            if not project_refs or project_refs.isdisjoint(workspace_platform_refs):
+                fail(
+                    f"workspace platform package '{package}' requires trusted --platform-root "
+                    "from the project repository"
+                )
+            package_platform_root = trusted_platform_root
+        root = package_platform_root / "packages" / package
+        platform_roots.add(package_platform_root)
     else:
         assert source_id is not None
         root = source_roots[source_id] / "packages" / package

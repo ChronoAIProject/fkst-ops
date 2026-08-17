@@ -52,15 +52,17 @@ is `bin/fkst-ops` and stays the only invocation surface.
 
 Each step below has failed in practice; the ordering is the cheap-to-verify one.
 
-1. **Engine binary.** `cargo build -p fkst-framework` in the `fkst-substrate`
-   checkout. This is the longest pole and the validator requires the binary to
-   exist and be executable, so do it first. A machine with no Rust toolchain needs
-   one installed before anything else can be validated.
+1. **Engine binary.** Run the declared build in the detached engine checkout at
+   the revision derived from the platform commit. This is the longest pole and
+   the validator requires the binary to exist and be executable, so do it first.
+   A machine with no Rust toolchain needs one installed before anything else can
+   be validated.
 2. **Python.** The mechanism needs `tomllib`, so Python 3.11 or newer. A system
    `python3` may be older; point `FKST_OPS_PYTHON` at a suitable interpreter rather
    than changing the system one.
-3. **Source checkouts** at the revisions the lock pins — target, platform, and
-   engine, per the declaration's `[deployment.machine]` logical names.
+3. **Source checkouts.** Target and platform checkouts follow the declared run
+   branch; the separate engine checkout is detached at the platform-derived
+   revision. Only the mechanism checkout is lock-pinned.
 4. **Machine profile.** Derive every logical name from the declarations rather than
    from an example file; examples drift. `[roots]`, `[binaries]`, and `[tools]`
    paths must be absolute.

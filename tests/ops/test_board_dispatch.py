@@ -74,6 +74,8 @@ lock_ref="source"
 lock_ref="source"
 [deployment.sources.engine]
 lock_ref="engine"
+[deployment.engine_revision]
+path="control/engine-ref"
 [deployment.packages]
 platform=["workflow"]
 host=[]
@@ -141,7 +143,6 @@ github-bot="Local-Bot[bot]"
 [defaults]
 ''', encoding="utf-8")
     lock = tmp_path / "fkst.lock"
-    pin = '0' * 40; tree = 'sha256-' + '0' * 64
     mechanism_rev = subprocess.run(
         ["git", "-C", str(mechanism), "rev-parse", "HEAD"],
         check=True, text=True, capture_output=True,
@@ -161,16 +162,10 @@ tree_sha256="{mechanism_tree}"
 id="source"
 git="https://invalid.example/source.git"
 checkout_role="deployment-operated"
-[external_source.resolved]
-rev="{pin}"
-tree_sha256="{tree}"
 [[external_source]]
 id="engine"
 git="https://invalid.example/engine.git"
 checkout_role="deployment-operated"
-[external_source.resolved]
-rev="{pin}"
-tree_sha256="{tree}"
 ''', encoding="utf-8")
     result = subprocess.run([str(mechanism / "bin" / "fkst-ops"), "--declaration", str(declaration),
                              "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],

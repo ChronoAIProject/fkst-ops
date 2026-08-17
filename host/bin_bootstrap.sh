@@ -48,9 +48,24 @@ bootstrap_bin_on_total_miss() {
   : "${FKST_OPS_ENGINE_PROVIDER:?declared engine provider is required}"
   : "${FKST_OPS_ENGINE_CHECKOUT:?resolved engine checkout is required}"
   : "${FKST_OPS_ENGINE_BINARY:?resolved engine binary is required}"
-  : "${FKST_OPS_ENGINE_BRANCH:?resolved engine branch is required}"
+  : "${FKST_OPS_ENGINE_REVISION_CHECKOUT:?engine revision derivation checkout is required}"
+  : "${FKST_OPS_ENGINE_REVISION_PATH:?engine revision derivation path is required}"
   : "${FKST_OPS_ENGINE_CONFIGURATION:?resolved engine provider configuration is required}"
-  python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_branch":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' \
-    "$FKST_OPS_ENGINE_CHECKOUT" "$FKST_OPS_ENGINE_BINARY" "$FKST_OPS_ENGINE_BRANCH" "$FKST_OPS_ENGINE_CONFIGURATION" \
-    | python3 "$FKST_OPS_HOST_ROOT/../ops/invoke_provider.py" "$FKST_OPS_ENGINE_PROVIDER" fkst.ops.engine.v1
+  local pair platform_revision engine_revision response source_revision
+  pair=$(python3 "$FKST_OPS_HOST_ROOT/../ops/revision_derivation.py" resolve \
+    "$FKST_OPS_ENGINE_REVISION_CHECKOUT" "$FKST_OPS_ENGINE_REVISION_PATH") || return $?
+  IFS=$'\t' read -r platform_revision engine_revision <<<"$pair"
+  response=$(python3 -c 'import json,sys; c=json.loads(sys.argv[4]); print(json.dumps({"engine_checkout":sys.argv[1],"engine_binary":sys.argv[2],"expected_revision":sys.argv[3],"operation":"build","build_command":c["build_command"]}))' \
+    "$FKST_OPS_ENGINE_CHECKOUT" "$FKST_OPS_ENGINE_BINARY" "$engine_revision" "$FKST_OPS_ENGINE_CONFIGURATION" \
+    | python3 "$FKST_OPS_HOST_ROOT/../ops/invoke_provider.py" "$FKST_OPS_ENGINE_PROVIDER" fkst.ops.engine.v1) || return $?
+  python3 "$FKST_OPS_HOST_ROOT/../ops/revision_derivation.py" assert \
+    "$FKST_OPS_ENGINE_REVISION_CHECKOUT" "$FKST_OPS_ENGINE_REVISION_PATH" \
+    "$platform_revision" "$engine_revision" || return $?
+  source_revision=$(printf '%s\n' "$response" | python3 -c \
+    'import json,sys; print(json.load(sys.stdin)["result"]["source_rev"])') || return $?
+  [ "$source_revision" = "$engine_revision" ] || {
+    echo "engine provider revision mismatch: expected $engine_revision, returned $source_revision" >&2
+    return 1
+  }
+  printf '%s\n' "$response"
 }

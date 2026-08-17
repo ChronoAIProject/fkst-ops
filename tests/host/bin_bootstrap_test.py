@@ -14,6 +14,12 @@ def executable(path: Path, body: str) -> Path:
     return path
 
 
+def git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *args], text=True, capture_output=True, check=True
+    ).stdout.strip()
+
+
 def test_explicit_binary_is_preserved(tmp_path):
     binary = executable(tmp_path / "engine", "#!/bin/sh\nexit 0\n")
     command = f'. "{BOOTSTRAP}"; BIN="$1"; resolve_bin_contract "$2"; printf "%s" "$RESOLVED_BIN"'
@@ -42,20 +48,46 @@ def test_explicit_binary_rejects_absent_nonexecutable_and_directory(tmp_path):
 
 
 def test_total_miss_invokes_declared_engine_provider(tmp_path):
-    checkout = tmp_path / "checkout"; checkout.mkdir(); (checkout / ".git").mkdir()
+    remote = tmp_path / "engine.git"
+    seed = tmp_path / "seed"
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "-b", "build", str(seed)], check=True, capture_output=True)
+    git(seed, "config", "user.email", "test@example.invalid")
+    git(seed, "config", "user.name", "Test")
+    (seed / "README").write_text("engine\n", encoding="ascii")
+    git(seed, "add", "README")
+    git(seed, "commit", "-qm", "engine")
+    revision = git(seed, "rev-parse", "HEAD")
+    git(seed, "remote", "add", "origin", str(remote))
+    git(seed, "push", "-u", "origin", "build")
+    subprocess.run(["git", "clone", str(remote), str(checkout)], check=True, capture_output=True)
+
+    platform = tmp_path / "platform"
+    platform.mkdir()
+    git(platform, "init", "-q")
+    git(platform, "config", "user.email", "test@example.invalid")
+    git(platform, "config", "user.name", "Test")
+    revision_file = platform / "control" / "engine-ref"
+    revision_file.parent.mkdir()
+    revision_file.write_text(revision + "\n", encoding="ascii")
+    git(platform, "add", ".")
+    git(platform, "commit", "-qm", "platform")
+
     binary = tmp_path / "engine"
-    tools = tmp_path / "tools"; tools.mkdir()
-    executable(tools / "git", '''#!/bin/sh
-case "$1" in branch) echo build;; fetch|merge) :;; rev-parse) printf '%040d\n' 0;; *) exit 1;; esac
-''')
-    build = executable(tmp_path / "build", '''#!/bin/sh
-printf '#!/bin/sh\nexit 0\n' > "$1"
-chmod +x "$1"
+    build = executable(tmp_path / "cargo", '''#!/bin/sh
+mkdir -p target/debug
+printf '#!/bin/sh\nexit 0\n' > target/debug/engine
+chmod +x target/debug/engine
 ''')
     env = os.environ.copy()
-    env.update(PATH=f"{tools}{os.pathsep}{env['PATH']}", FKST_OPS_ENGINE_PROVIDER=str(ROOT / "providers/engine.py"),
+    env.update(FKST_OPS_ENGINE_PROVIDER=str(ROOT / "providers/engine.py"),
                FKST_OPS_ENGINE_CHECKOUT=str(checkout), FKST_OPS_ENGINE_BINARY=str(binary),
-               FKST_OPS_ENGINE_BRANCH="build", FKST_OPS_ENGINE_CONFIGURATION=json.dumps({"build_command": [str(build), str(binary)]}))
+               FKST_OPS_ENGINE_REVISION_CHECKOUT=str(platform),
+               FKST_OPS_ENGINE_REVISION_PATH="control/engine-ref",
+               FKST_OPS_ENGINE_CONFIGURATION=json.dumps(
+                   {"build_command": [str(build), "build", "-p", "engine"]}
+               ))
     command = f'. "{BOOTSTRAP}"; resolve_bin_contract "$1"; printf "%s" "$RESOLVED_BIN"'
     result = subprocess.run(["bash", "-c", command, "test", str(tmp_path)], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr

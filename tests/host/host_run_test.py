@@ -356,6 +356,50 @@ class HostRunTest(unittest.TestCase):
         finally:
             h.close()
 
+    def test_workspace_platform_packages_load_from_same_repository_snapshot(self) -> None:
+        h = HostRunHarness()
+        try:
+            h.write_workspace_manifest(root=h.packages_host, workspace_units=["packages/*"])
+            commit_git_file(
+                h.packages_host,
+                "fkst.workspace.toml",
+                (h.packages_host / "fkst.workspace.toml").read_text(encoding="utf-8"),
+            )
+            snapshot = h.root / "platform-snapshot"
+            result = run_argv(
+                ["git", "clone", "-q", "--no-checkout", str(h.packages_host), str(snapshot)],
+                cwd=h.root,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            result = run_argv(["git", "checkout", "-q", "--detach", "HEAD"], cwd=snapshot)
+            self.assertEqual(0, result.returncode, result.stderr)
+
+            result = h.package_roots(
+                [
+                    "--project-root",
+                    str(h.packages_host),
+                    "--platform-root",
+                    str(snapshot),
+                    "--platform-packages",
+                    "github-proxy consensus",
+                    "--durable-root",
+                    str(h.durable),
+                    "--runtime-root",
+                    str(h.runtime),
+                ]
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [
+                    str((snapshot / "packages" / "github-proxy").resolve()),
+                    str((snapshot / "packages" / "consensus").resolve()),
+                ],
+            )
+        finally:
+            h.close()
+
     def test_ambiguous_target_workspace_platform_package_fails_closed(self) -> None:
         h = HostRunHarness()
         try:

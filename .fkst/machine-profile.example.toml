@@ -7,7 +7,7 @@ schema = "fkst.ops.machine-profile.v1"
 "<target-checkout>" = "<absolute-path-to-target-checkout>"
 # Absolute path to the checkout providing platform packages.
 "<platform-checkout>" = "<absolute-path-to-platform-checkout>"
-# Absolute path to the checkout containing the pinned engine source.
+# Absolute path to the detached checkout containing the derived engine source.
 "<engine-checkout>" = "<absolute-path-to-engine-checkout>"
 # Absolute path to durable state; preserve the existing location across upgrades.
 "<durable-root>" = "<absolute-path-to-durable-state>"

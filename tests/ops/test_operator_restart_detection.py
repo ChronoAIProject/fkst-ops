@@ -61,7 +61,7 @@ cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; return 0; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$TEST_LOG"; }}
 derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=github-devloop; }}
-engine_build_result() {{ printf '%s\\n' '{{"result":{{"source_rev":"aaaaaaaa"}}}}'; }}
+resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
 git() {{
   case "$*" in
     *" fetch "*) return 0 ;;
