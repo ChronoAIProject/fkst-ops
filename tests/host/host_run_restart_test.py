@@ -9,6 +9,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from ops.revision_derivation import write_build_receipt
+
 from host_run_fixture import (
     HostRunHarness,
     kill_if_alive,
@@ -20,12 +22,94 @@ from host_run_fixture import (
 
 
 class HostRunRestartTest(unittest.TestCase):
+    def test_mutated_revision_binary_fails_at_final_consumer_check(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "a" * 40
+            binary = root / f"engine-{revision}"
+            binary.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+            binary.chmod(0o755)
+            write_build_receipt(binary, revision, ["cargo", "build", "-p", "engine"])
+            binary.write_text("#!/bin/sh\nexit 9\n", encoding="ascii")
+            binary.chmod(0o755)
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    textwrap.dedent(
+                        f"""\
+                        set -euo pipefail
+                        source host/host_run.sh
+                        BIN={shell_quote(binary)}
+                        HOST_RUN_PACKAGE_ROOTS=(/platform/pkg)
+                        host_run_validate_shape() {{ return 0; }}
+                        host_run_build_package_roots() {{ return 0; }}
+                        host_run_validate_local_iteration_test_command() {{ return 0; }}
+                        host_run_restart_prior() {{ return 0; }}
+                        host_run_export_codex_repository_roots() {{ return 0; }}
+                        host_run_claim_supervise_slot() {{ return 0; }}
+                        host_run_supervise_contract --project-root /project --platform-root /platform --platform-packages pkg --durable-root {shell_quote(root)} --expected-engine-revision {revision}
+                        """
+                    ),
+                ],
+                cwd=repo_root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ENGINE_BINARY_RECEIPT_MISMATCH", result.stderr)
+
+    def test_crossed_expected_revision_fails_before_restart_or_claim(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "side-effect"
+            expected = "1" * 40
+            other = "2" * 40
+            binary = root / f"engine-{other}"
+            binary.write_text("#!/bin/sh\n", encoding="ascii")
+            binary.chmod(0o755)
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    textwrap.dedent(
+                        f"""\
+                        set -euo pipefail
+                        source host/host_run.sh
+                        BIN={shell_quote(binary)}
+                        host_run_parse_supervise_args --project-root /project --platform-root /platform --platform-packages pkg --durable-root /durable --expected-engine-revision {expected}
+                        host_run_validate_shape() {{ return 0; }}
+                        host_run_build_package_roots() {{ return 0; }}
+                        host_run_validate_local_iteration_test_command() {{ return 0; }}
+                        host_run_restart_prior() {{ printf restart > {shell_quote(marker)}; }}
+                        host_run_claim_supervise_slot() {{ printf claim > {shell_quote(marker)}; }}
+                        host_run_supervise_contract --project-root /project --platform-root /platform --platform-packages pkg --durable-root /durable --expected-engine-revision {expected}
+                        """
+                    ),
+                ],
+                cwd=repo_root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(marker.exists())
+            self.assertIn("ENGINE_REVISION_MISMATCH", result.stderr)
+
     def test_missing_binary_fails_before_restart_or_claim(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             marker = root / "side-effect"
-            missing = root / "missing-engine"
+            expected = "a" * 40
+            missing = root / f"missing-engine-{expected}"
             result = subprocess.run(
                 ["/bin/bash", "-c",
                 textwrap.dedent(
@@ -33,6 +117,7 @@ class HostRunRestartTest(unittest.TestCase):
                     set -euo pipefail
                     source host/host_run.sh
                     BIN={shell_quote(missing)}
+                    HOST_RUN_EXPECTED_ENGINE_REVISION={expected}
                     host_run_parse_supervise_args() {{ return 0; }}
                     host_run_validate_shape() {{ return 0; }}
                     host_run_build_package_roots() {{ return 0; }}
@@ -56,6 +141,10 @@ class HostRunRestartTest(unittest.TestCase):
             )
             source = (repo_root / "host" / "host_run.sh").read_text(encoding="utf-8")
             function = source[source.index("host_run_supervise_contract() {") :]
+            self.assertLess(
+                function.index("host_run_require_expected_engine_revision"),
+                function.index("host_run_restart_prior"),
+            )
             self.assertLess(
                 function.index("host_run_require_engine_binary"),
                 function.index("host_run_restart_prior"),

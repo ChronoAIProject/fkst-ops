@@ -290,6 +290,65 @@ bot_login = "github-bot"
                 result = self.invoke_action("status")
                 self.assertEqual(accepted, result.returncode == 0, result.stderr)
 
+    def test_engine_revision_adoption_requires_one_declaration_and_pin_operation(self):
+        validator = self.source / "schema" / "validator.py"
+        validator.write_text(
+            "import sys, tomllib\n"
+            "from pathlib import Path\n"
+            "deployment = tomllib.loads(Path(sys.argv[1]).read_text())['deployment'][0]\n"
+            "if 'engine_revision' in deployment: raise SystemExit(2)\n"
+            "if deployment['machine']['engine_checkout'] != 'target-checkout': raise SystemExit(2)\n",
+            encoding="ascii",
+        )
+        run("git", "add", "schema/validator.py", cwd=self.source)
+        run("git", "commit", "-qm", "old engine declaration", cwd=self.source)
+        old_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
+        old_tree = run(
+            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), old_revision,
+            cwd=self.root,
+        ).stdout.strip()
+
+        validator.write_text(
+            "import sys, tomllib\n"
+            "from pathlib import Path\n"
+            "deployment = tomllib.loads(Path(sys.argv[1]).read_text())['deployment'][0]\n"
+            "if deployment.get('engine_revision') != {'path': '.control/engine-ref'}: raise SystemExit(2)\n"
+            "if deployment['machine']['engine_checkout'] != 'engine-checkout': raise SystemExit(2)\n",
+            encoding="ascii",
+        )
+        run("git", "add", "schema/validator.py", cwd=self.source)
+        run("git", "commit", "-qm", "new engine declaration", cwd=self.source)
+        new_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
+        new_tree = run(
+            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), new_revision,
+            cwd=self.root,
+        ).stdout.strip()
+
+        old_declaration = '''[[deployment]]
+[deployment.machine]
+engine_checkout = "target-checkout"
+'''
+        new_declaration = '''[[deployment]]
+[deployment.engine_revision]
+path = ".control/engine-ref"
+[deployment.machine]
+engine_checkout = "engine-checkout"
+'''
+        (self.deployment / "machine.toml").write_text("", encoding="ascii")
+
+        sequence = (
+            ("published old deployment remains operable", old_declaration, old_revision, old_tree, True),
+            ("atomic deployment commit selects new declaration and pin", new_declaration, new_revision, new_tree, True),
+            ("declaration changed before pin", new_declaration, old_revision, old_tree, False),
+            ("pin changed before declaration", old_declaration, new_revision, new_tree, False),
+        )
+        for label, declaration, revision, tree, accepted in sequence:
+            with self.subTest(label=label):
+                (self.deployment / "deployment.toml").write_text(declaration, encoding="ascii")
+                self.write_lock(revision, tree)
+                result = self.invoke_action("status")
+                self.assertEqual(accepted, result.returncode == 0, result.stderr)
+
     def test_hydration_reexec_preserves_action_argv(self):
         trailing = ["", "two words", "*.toml", "--option-like", "last", ""]
         self.install_nul_argv_recorder()

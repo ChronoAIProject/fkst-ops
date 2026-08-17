@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 SCAN = Path(__file__).resolve().parents[2] / "scan" / "zero_target_names.py"
+ROOT = SCAN.parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "concrete-name.txt"
 SCHEMA_FIXTURES = (
     "tests/schema/fixtures/fkst.lock",
@@ -73,6 +74,15 @@ class ZeroTargetNamesTest(unittest.TestCase):
             " ".join(NAMES),
         )
         self.assertEqual(0, self.invoke().returncode)
+
+    def test_actual_repository_contains_no_concrete_target_names(self):
+        names = [argument for name in NAMES[1:] for argument in ("--name", name)]
+        result = subprocess.run(
+            ["python3", str(SCAN), "--root", str(ROOT), *names],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
 
 
 if __name__ == "__main__":

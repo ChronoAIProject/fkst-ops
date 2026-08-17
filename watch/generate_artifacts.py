@@ -18,7 +18,6 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -30,11 +29,11 @@ from schema.validator import (
     load_and_resolve,
     machine_default_reference,
     normalized_login,
-    resolve_machine_default,
     validate_platform_login,
 )
 from schema.mechanism_tools import MECHANISM_TOOLS
 from bootstrap.canonical_tree import canonical_tree_sha256
+from watch.source_hydration import hydrate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,13 +68,11 @@ def _run_git(root: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
-def _verified_checkout(root: Path, revision: str, tree: str, branch: str | None = None) -> bool:
+def _verified_checkout(root: Path, revision: str, tree: str) -> bool:
     try:
         if _run_git(root, "rev-parse", "HEAD") != revision:
             return False
         if canonical_tree_sha256(root, revision) != tree:
-            return False
-        if branch is not None and _run_git(root, "branch", "--show-current") != branch:
             return False
         # The canonical hasher proves the commit; this proves the materialised
         # tracked files still represent it. Build outputs are intentionally ignored.
@@ -109,202 +106,6 @@ def _verify_mechanism_root(lock_path: Path, root: Path = ROOT) -> None:
         f"fkst-ops mechanism root does not match its lock pin: "
         f"current revision {observed}, lock revision {revision}, working tree {state}"
     )
-
-
-def _verified_deployment_checkout(
-    root: Path, revision: str, tree: str, branch: str
-) -> bool:
-    try:
-        if _run_git(root, "branch", "--show-current") != branch:
-            return False
-        remote_branch = f"refs/remotes/origin/{branch}"
-        if _run_git(root, "rev-parse", "--verify", remote_branch) == "":
-            return False
-        if canonical_tree_sha256(root, revision) != tree:
-            return False
-        ancestor = subprocess.run(
-            ["git", "-C", str(root), "merge-base", "--is-ancestor", revision, remote_branch],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-        )
-        if ancestor.returncode != 0:
-            return False
-        return not _run_git(root, "status", "--porcelain", "--untracked-files=no")
-    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError):
-        return False
-
-
-def _source_candidates(home: Path, source_url: str) -> list[Path]:
-    name = Path(source_url.removesuffix("/")).name.removesuffix(".git")
-    return [home / name, home / ".cache" / "fkst" / name]
-
-
-def _materialise_checkout(
-    destination: Path, source_url: str, revision: str, tree: str, home: Path,
-    checkout_role: str, branch: str | None = None,
-) -> None:
-    parsed = urlsplit(source_url)
-    if parsed.scheme in {"http", "https"} and (
-        parsed.username is not None or parsed.password is not None
-    ):
-        raise ValueError(f"checkout {destination.name} has a credential-bearing source URL")
-    if checkout_role not in {"deployment-operated", "mechanism"}:
-        raise ValueError(f"checkout {destination.name} has unknown role {checkout_role}")
-    if checkout_role == "deployment-operated" and not branch:
-        raise ValueError(f"deployment-operated checkout {destination.name} needs an integration branch")
-    if checkout_role == "mechanism" and branch is not None:
-        raise ValueError(f"mechanism checkout {destination.name} cannot declare a branch")
-    destination_verified = (
-        _verified_deployment_checkout(destination, revision, tree, branch)
-        if checkout_role == "deployment-operated"
-        else _verified_checkout(destination, revision, tree)
-    )
-    if destination_verified:
-        return
-    if destination.exists() or destination.is_symlink():
-        raise ValueError(
-            f"checkout {destination} does not match its declared reproducible state; "
-            "refusing to replace existing work"
-        )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
-    try:
-        reusable = next(
-            (candidate for candidate in _source_candidates(home, source_url)
-             if candidate.resolve() != destination.resolve()
-            and _verified_checkout(candidate, revision, tree)),
-            None,
-        )
-        clone_source = reusable if reusable is not None else source_url
-        subprocess.run(
-            ["git", "clone", "--quiet", "--no-checkout", str(clone_source), str(temporary)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-        )
-        checkout_arguments = (
-            ["checkout", "--quiet", "--detach", revision]
-            if checkout_role == "mechanism"
-            else ["checkout", "--quiet", "-B", branch, revision]
-        )
-        subprocess.run(
-            ["git", "-C", str(temporary), *checkout_arguments],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-        )
-        temporary_verified = (
-            _verified_deployment_checkout(temporary, revision, tree, branch)
-            if checkout_role == "deployment-operated"
-            else _verified_checkout(temporary, revision, tree)
-        )
-        if not temporary_verified:
-            raise ValueError(
-                f"checkout {destination.name} does not match pin {revision} / {tree} "
-                f"or remote integration branch {branch} is missing"
-            )
-        os.replace(temporary, destination)
-    finally:
-        if temporary.exists():
-            shutil.rmtree(temporary)
-
-
-def _engine_product(checkout: Path, command: list[str]) -> Path:
-    if command and Path(command[0]).name == "cargo" and "-p" in command:
-        index = command.index("-p")
-        if index + 1 < len(command):
-            return checkout / "target" / "debug" / command[index + 1]
-    raise ValueError(
-        "engine build output is not reproducible from build_command; "
-        "cargo builds must declare -p <binary-package>"
-    )
-
-
-def _materialise_engine(
-    checkout: Path, binary: Path, command: list[str], revision: str, tree: str, state: Path
-) -> None:
-    fingerprint = hashlib.sha256(json.dumps(
-        {"revision": revision, "tree_sha256": tree, "build_command": command},
-        sort_keys=True, separators=(",", ":"),
-    ).encode("ascii")).hexdigest()
-    marker = state / "engine-build.json"
-    try:
-        settled = json.loads(marker.read_text(encoding="ascii")).get("fingerprint") == fingerprint
-    except (OSError, json.JSONDecodeError, AttributeError):
-        settled = False
-    if settled and binary.is_file() and os.access(binary, os.X_OK):
-        return
-    result = subprocess.run(command, cwd=checkout, check=False)
-    if result.returncode != 0:
-        raise ValueError(f"engine build failed with exit code {result.returncode}: {command[0]}")
-    product = _engine_product(checkout, command)
-    if not product.is_file() or not os.access(product, os.X_OK):
-        raise ValueError(f"engine build did not produce executable: {product}")
-    binary.parent.mkdir(parents=True, exist_ok=True)
-    pointer = binary.with_name(f".{binary.name}.{os.getpid()}.tmp")
-    pointer.unlink(missing_ok=True)
-    pointer.symlink_to(product)
-    os.replace(pointer, binary)
-    state.mkdir(parents=True, exist_ok=True)
-    temporary = marker.with_name(f".{marker.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps({"fingerprint": fingerprint}, sort_keys=True) + "\n", encoding="ascii")
-    os.replace(temporary, marker)
-
-
-def _hydrate(
-    declarations: list[tuple[Path, dict[str, Any]]], lock_path: Path, machine_root: Path,
-    tools: dict[str, str], machine_defaults: dict[str, str],
-) -> None:
-    lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
-    pins = {entry["id"]: entry for entry in lock.get("external_source", [])}
-    base = machine_root
-    checkout_specs: dict[str, tuple[str, str, str, str, str]] = {}
-    engine_specs: dict[str, tuple[str, list[str]]] = {}
-    preserved_roots: set[str] = set()
-    for declaration_path, declaration in declarations:
-        providers = {provider["id"]: provider for provider in declaration["provider"]}
-        for index, deployment in enumerate(declaration["deployment"]):
-            machine = deployment["machine"]
-            branch = resolve_machine_default(
-                deployment["integration"]["integration_branch"], machine_defaults,
-                f"declaration.deployment[{index}].integration.integration_branch",
-            )
-            for role in ("target", "platform", "engine"):
-                logical = machine[f"{role}_checkout"]
-                source_id = deployment["sources"][role]["lock_ref"]
-                try:
-                    pin = pins[source_id]
-                    spec = (
-                        pin["git"], pin["resolved"]["rev"], pin["resolved"]["tree_sha256"],
-                        pin["checkout_role"], branch,
-                    )
-                except (KeyError, TypeError) as exc:
-                    raise ValueError(f"{declaration_path} deployment[{index}] source {source_id} has no complete pin") from exc
-                if logical in checkout_specs and checkout_specs[logical] != spec:
-                    raise ValueError(f"checkout root {logical} is assigned conflicting pins, roles, or branches")
-                checkout_specs[logical] = spec
-            for field in ("durable", "runtime", "logs", "rate_pool"):
-                preserved_roots.add(machine[field])
-            engine_provider = providers[deployment["providers"]["engine"]]
-            command = list(engine_provider["configuration"]["build_command"])
-            if Path(command[0]).name == command[0]:
-                command[0] = tools[command[0]]
-            engine_spec = (
-                machine["engine_checkout"], command
-            )
-            binary_name = machine["engine_binary"]
-            if binary_name in engine_specs and engine_specs[binary_name] != engine_spec:
-                raise ValueError(f"engine binary {binary_name} is assigned conflicting build inputs")
-            engine_specs[binary_name] = engine_spec
-    for logical, (url, revision, tree, checkout_role, branch) in checkout_specs.items():
-        _materialise_checkout(
-            base / "roots" / logical, url, revision, tree, machine_root, checkout_role, branch
-        )
-    # These roots contain accumulated or runtime state. Generation creates them,
-    # but never removes or replaces their contents.
-    for logical in preserved_roots:
-        (base / "roots" / logical).mkdir(parents=True, exist_ok=True)
-    for binary_name, (checkout_name, command) in engine_specs.items():
-        _, revision, tree, _, _ = checkout_specs[checkout_name]
-        _materialise_engine(
-            base / "roots" / checkout_name, base / "bin" / binary_name,
-            command, revision, tree, base / "state",
-        )
 
 
 def _load_declarations(
@@ -802,7 +603,7 @@ def generate(
         ],
     }, sort_keys=True, separators=(",", ":")) + "\n"
 
-    _hydrate(declarations, lock, machine_root, tools, machine_defaults)
+    hydrate(declarations, lock, machine_root, tools, machine_defaults)
     staging = Path(tempfile.mkdtemp(prefix=".control-", dir=machine_root))
     try:
         generation_name = f"generation-{os.getpid()}-{os.urandom(8).hex()}"

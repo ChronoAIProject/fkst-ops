@@ -13,7 +13,7 @@ from typing import Any
 VERSION = "fkst.ops.invocation.v1"
 FAILURE_CODES = {
     "fkst.ops.engine.v1": {
-        "INVALID_INPUT", "CHECKOUT_MISSING", "CONTRACT_MISSING", "WRONG_BRANCH", "UPDATE_FAILED", "BUILD_FAILED",
+        "INVALID_INPUT", "CHECKOUT_MISSING", "CONTRACT_MISSING", "REVISION_MISMATCH", "UPDATE_FAILED", "BUILD_FAILED",
     },
     "fkst.ops.board.engine-durable.v1": {"INVALID_INPUT", "OBSERVE_FAILED", "CACHE_FAILED", "MALFORMED_FACT"},
     "fkst.ops.board.github-control.v1": {

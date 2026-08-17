@@ -42,10 +42,10 @@ def test_advanced_pin_is_observed_and_accepted_by_entry_point(tmp_path: Path) ->
     ).stdout.strip()
     lock = deployment / "fkst.lock"
     lock.write_text(
-        f'[[external_source]]\nid = "fkst-ops"\ngit = "{source}"\n'
+        f'[[external_source]]\nid = "fkst-ops"\ngit = "{source}"\ncheckout_role = "mechanism"\n'
         f'[external_source.resolved]\nrev = "{"0" * 40}"\n'
         f'tree_sha256 = "sha256-{"0" * 64}"\n'
-        f'[[external_source]]\nid = "other"\ngit = "{source}"\n'
+        f'[[external_source]]\nid = "other"\ngit = "{source}"\ncheckout_role = "mechanism"\n'
         f'[external_source.resolved]\nrev = "{"1" * 40}"\n'
         f'tree_sha256 = "sha256-{"1" * 64}"\n',
         encoding="utf-8",
@@ -68,3 +68,32 @@ def test_advanced_pin_is_observed_and_accepted_by_entry_point(tmp_path: Path) ->
         cwd=deployment, env=environment,
     )
     assert verified.returncode == 0, verified.stderr
+
+
+def test_deployment_operated_source_pin_cannot_be_advanced(tmp_path: Path) -> None:
+    lock = tmp_path / "fkst.lock"
+    original = (
+        '[[external_source]]\n'
+        'id = "target"\n'
+        'git = "https://invalid.example/target.git"\n'
+        'checkout_role = "deployment-operated"\n'
+        '[external_source.resolved]\n'
+        f'rev = "{"1" * 40}"\n'
+        f'tree_sha256 = "sha256-{"1" * 64}"\n'
+    )
+    lock.write_text(original, encoding="ascii")
+
+    result = run(
+        str(ROOT / "bin" / "fkst-pin"),
+        "--lock",
+        str(lock),
+        "--source",
+        "target",
+        "--revision",
+        "2" * 40,
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert "only mechanism source pins can be advanced" in result.stderr
+    assert lock.read_text(encoding="ascii") == original

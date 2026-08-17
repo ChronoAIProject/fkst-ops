@@ -5,9 +5,10 @@ published-surface, and transport contracts are owned by
 [`SPEC.md`](../SPEC.md#provider-binding-and-transport); the executable path and
 kind registry is `schema/provider_surface.py`.
 
-`engine.py` updates a declared Git checkout with `git pull --ff-only`, executes
-the resolved argv-only build command without a shell, and verifies the declared
-engine binary contract.
+`engine.py` fetches the exact declared revision, detaches the engine checkout at
+that commit, executes the resolved argv-only Cargo build command without a shell,
+atomically points the declared binary at the selected package product, and
+rejects any pre-build, post-build, product, result, binary, or receipt mismatch.
 
 `board_github_control.sh` retains the GitHub classifier and resolves its
 package-owned workflow and lifecycle fact tools through

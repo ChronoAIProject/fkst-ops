@@ -3,6 +3,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ops.revision_derivation import write_build_receipt
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,7 +42,7 @@ def test_board_dispatch_contract_carries_validator_actor_and_complete_roster(tmp
     (source / "fkst.workspace.toml").write_text('[[external_sources]]\nid="source"\npackages=["workflow"]\n', encoding="utf-8")
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     subprocess.run(["git", "init", "-q", str(engine)], check=True)
-    binary = engine / "engine-bin"; executable(binary, "#!/bin/sh\nexit 0\n")
+    binary_stem = engine / "engine-bin"
     provider = '''#!/usr/bin/env python3
 import json,os,sys
 if os.environ.get("PROVIDER_CALL_MARKER"):
@@ -55,6 +57,22 @@ print(json.dumps({"version":"fkst.ops.invocation.v1","ok":True,"result":result})
 '''
     executable(source / "providers" / "board", provider)
     executable(engine / "providers" / "build", provider)
+    for repository in (source, engine):
+        subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(repository), "config", "user.name", "test"], check=True)
+    subprocess.run(["git", "-C", str(engine), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(engine), "commit", "-qm", "engine"], check=True)
+    engine_revision = subprocess.run(
+        ["git", "-C", str(engine), "rev-parse", "HEAD"],
+        check=True, text=True, capture_output=True,
+    ).stdout.strip()
+    (source / "control").mkdir()
+    (source / "control" / "engine-ref").write_text(engine_revision + "\n", encoding="ascii")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-qm", "platform"], check=True)
+    binary = Path(f"{binary_stem}-{engine_revision}")
+    executable(binary, "#!/bin/sh\nexit 0\n")
+    write_build_receipt(binary, engine_revision, [shutil.which("true")])
     declaration = tmp_path / "deployment.toml"
     declaration.write_text('''schema="fkst.ops.deployment.v1"
 cadence_enabled=true
@@ -74,6 +92,8 @@ lock_ref="source"
 lock_ref="source"
 [deployment.sources.engine]
 lock_ref="engine"
+[deployment.engine_revision]
+path="control/engine-ref"
 [deployment.packages]
 platform=["workflow"]
 host=[]
@@ -129,7 +149,7 @@ durable="{durable}"
 runtime="{runtime}"
 logs="{logs}"
 [binaries]
-binary="{binary}"
+binary="{binary_stem}"
 [tools]
 true="{shutil.which('true')}"
 codex="{shutil.which('codex')}"
@@ -141,7 +161,6 @@ github-bot="Local-Bot[bot]"
 [defaults]
 ''', encoding="utf-8")
     lock = tmp_path / "fkst.lock"
-    pin = '0' * 40; tree = 'sha256-' + '0' * 64
     mechanism_rev = subprocess.run(
         ["git", "-C", str(mechanism), "rev-parse", "HEAD"],
         check=True, text=True, capture_output=True,
@@ -161,16 +180,10 @@ tree_sha256="{mechanism_tree}"
 id="source"
 git="https://invalid.example/source.git"
 checkout_role="deployment-operated"
-[external_source.resolved]
-rev="{pin}"
-tree_sha256="{tree}"
 [[external_source]]
 id="engine"
 git="https://invalid.example/engine.git"
 checkout_role="deployment-operated"
-[external_source.resolved]
-rev="{pin}"
-tree_sha256="{tree}"
 ''', encoding="utf-8")
     result = subprocess.run([str(mechanism / "bin" / "fkst-ops"), "--declaration", str(declaration),
                              "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],
@@ -189,7 +202,7 @@ tree_sha256="{tree}"
         cwd=tmp_path, text=True, capture_output=True, env=env,
     )
     assert unavailable.returncode != 0
-    assert "ENGINE_BINARY_UNAVAILABLE" in unavailable.stderr
-    assert f"declared build path: {binary}" in unavailable.stderr
+    assert "ENGINE_BUILD_RECEIPT_MISMATCH" in unavailable.stderr
+    assert str(binary) in unavailable.stderr
     assert "deployment preflight failed" not in unavailable.stderr
     assert not marker.exists()

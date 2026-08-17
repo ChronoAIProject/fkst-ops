@@ -356,6 +356,94 @@ class HostRunTest(unittest.TestCase):
         finally:
             h.close()
 
+    def test_workspace_platform_packages_load_from_same_repository_snapshot(self) -> None:
+        h = HostRunHarness()
+        try:
+            h.write_workspace_manifest(root=h.packages_host, workspace_units=["packages/*"])
+            commit_git_file(
+                h.packages_host,
+                "fkst.workspace.toml",
+                (h.packages_host / "fkst.workspace.toml").read_text(encoding="utf-8"),
+            )
+            snapshot = h.root / "platform-snapshot"
+            result = run_argv(
+                ["git", "clone", "-q", "--no-checkout", str(h.packages_host), str(snapshot)],
+                cwd=h.root,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            result = run_argv(["git", "checkout", "-q", "--detach", "HEAD"], cwd=snapshot)
+            self.assertEqual(0, result.returncode, result.stderr)
+
+            result = h.package_roots(
+                [
+                    "--project-root",
+                    str(h.packages_host),
+                    "--platform-root",
+                    str(snapshot),
+                    "--platform-packages",
+                    "github-proxy consensus",
+                    "--durable-root",
+                    str(h.durable),
+                    "--runtime-root",
+                    str(h.runtime),
+                ]
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [
+                    str((snapshot / "packages" / "github-proxy").resolve()),
+                    str((snapshot / "packages" / "consensus").resolve()),
+                ],
+            )
+        finally:
+            h.close()
+
+    def test_workspace_snapshot_identity_does_not_trust_mutable_origins(self) -> None:
+        h = HostRunHarness()
+        try:
+            h.write_workspace_manifest(root=h.packages_host, workspace_units=["packages/*"])
+            commit_git_file(
+                h.packages_host,
+                "fkst.workspace.toml",
+                (h.packages_host / "fkst.workspace.toml").read_text(encoding="utf-8"),
+            )
+            unrelated, _ = create_git_source(
+                h.root,
+                "unrelated-platform",
+                {
+                    "packages/github-proxy/fkst.toml": (
+                        'kind = "package"\nname = "github-proxy"\n'
+                    )
+                },
+            )
+            for repository in (h.packages_host, unrelated):
+                run_argv(
+                    ["git", "remote", "set-url", "origin", "/self-attested/repository"],
+                    cwd=repository,
+                )
+
+            result = h.package_roots(
+                [
+                    "--project-root",
+                    str(h.packages_host),
+                    "--platform-root",
+                    str(unrelated),
+                    "--platform-packages",
+                    "github-proxy",
+                    "--durable-root",
+                    str(h.durable),
+                    "--runtime-root",
+                    str(h.runtime),
+                ]
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("requires trusted --platform-root from the project repository", result.stderr)
+        finally:
+            h.close()
+
     def test_ambiguous_target_workspace_platform_package_fails_closed(self) -> None:
         h = HostRunHarness()
         try:
@@ -530,12 +618,16 @@ class HostRunTest(unittest.TestCase):
         h = HostRunHarness()
         capture = h.root / "capture.json"
         try:
+            expected_engine_revision = "a" * 40
             substrate_repo, _ = create_git_source(
                 h.root,
                 "fkst-substrate",
                 {"Cargo.toml": "[workspace]\n"},
             )
-            fake_bin = substrate_repo / "target" / "debug" / "fkst-framework"
+            fake_bin = (
+                substrate_repo / "target" / "debug"
+                / f"fkst-framework-{expected_engine_revision}"
+            )
             fake_bin.parent.mkdir(parents=True)
             source_repo, source_rev = create_git_source(
                 h.root,
@@ -562,7 +654,7 @@ class HostRunTest(unittest.TestCase):
 
                     checkout = pathlib.Path({json.dumps(str(source_repo))})
                     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
-                    pathlib.Path({json.dumps(str(capture))}).write_text(json.dumps({{"argv": sys.argv, "head": head, "runtime": os.environ.get("FKST_RUNTIME_ROOT"), "durable": os.environ.get("FKST_DURABLE_ROOT"), "project_root": os.environ.get("FKST_PROJECT_ROOT"), "repository_roots": os.environ.get("FKST_CODEX_REPOSITORY_ROOTS")}}, sort_keys=True) + "\\n", encoding="utf-8")
+                    pathlib.Path({json.dumps(str(capture))}).write_text(json.dumps({{"argv": sys.argv, "head": head, "runtime": os.environ.get("FKST_RUNTIME_ROOT"), "durable": os.environ.get("FKST_DURABLE_ROOT"), "project_root": os.environ.get("FKST_PROJECT_ROOT"), "repository_roots": os.environ.get("FKST_CODEX_REPOSITORY_ROOTS"), "expected_engine_revision": os.environ.get("FKST_EXPECTED_ENGINE_REVISION")}}, sort_keys=True) + "\\n", encoding="utf-8")
                     """
                 ),
                 encoding="utf-8",
@@ -579,13 +671,14 @@ class HostRunTest(unittest.TestCase):
                     ensure_fresh_bin
                     export FKST_PROJECT_ROOT=/untrusted/launch-directory
                     export FKST_CODEX_REPOSITORY_ROOTS=/untrusted/ambient-repository
-                    host_run_supervise_contract --project-root {shell_quote(h.website_host)} --platform-root {shell_quote(source_repo)} --platform-packages 'github-proxy' --durable-root {shell_quote(h.durable)} --runtime-root {shell_quote(h.runtime)}
+                    host_run_supervise_contract --project-root {shell_quote(h.website_host)} --platform-root {shell_quote(source_repo)} --platform-packages 'github-proxy' --expected-engine-revision {expected_engine_revision} --durable-root {shell_quote(h.durable)} --runtime-root {shell_quote(h.runtime)}
                     """
                 )
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(capture.read_text(encoding="utf-8"))
             self.assertEqual(payload["head"], source_head)
+            self.assertEqual(payload["expected_engine_revision"], expected_engine_revision)
             self.assertEqual(
                 payload["argv"],
                 [

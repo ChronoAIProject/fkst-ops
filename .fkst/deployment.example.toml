@@ -34,6 +34,9 @@ lock_ref = "<platform-source-lock-id>"
 [deployment.sources.engine]
 lock_ref = "<engine-source-lock-id>"
 
+[deployment.engine_revision]
+path = "<safe-relative-revision-file>"
+
 [deployment.packages]
 platform = ["<platform-package-name>"]
 host = ["<host-package-name>"]

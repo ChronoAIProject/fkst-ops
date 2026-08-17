@@ -12,8 +12,8 @@ orchestration. It is parameterized and does not own a concrete deployment.
 Repository Python code uses only the Python standard library. Changing that
 dependency constraint requires a deliberate revision of this specification.
 
-`fkst-deployments` owns deployment parameters and composition: source bindings
-and pins, package selection, integration policy, target identity, logical
+`fkst-deployments` owns deployment parameters and composition: source bindings,
+the mechanism pin, engine-revision derivations, package selection, integration policy, target identity, logical
 runtime/durable/log identities, the complete cross-machine managed-bot roster,
 provider selection, its bootstrap, and its lock. A machine profile supplies
 discovered machine facts such as absolute paths, credentials, the local machine
@@ -40,7 +40,7 @@ attempt to make them agree:
 - Domain A is case-insensitive. `libraries/devloop/github_author_policy.lua:29`
   supplies `managed_bot_logins` and `:41` supplies `is_managed_bot_login`; both
   use the `devloop/base.lua:153` trim/lower/strip normalization. Its separate
-  authorization path is `fkst-packages/libraries/forge/github/content_filter.lua:370-380`
+  authorization path is `libraries/forge/github/content_filter.lua:370-380`
   through `content_filter.is_authorized:421` into
   `libraries/devloop/github_author_policy.is_authorized:87`. The consensus,
   liveness-scan, and loop departments consume that path.
@@ -150,23 +150,90 @@ contents. Modified or deleted tracked working-tree files can therefore pass
 when `HEAD` and the named commit tree match the lock. Verification of the
 actual executable contents is a required invariant that is not implemented.
 
+## Engine revision authority
+
+Each deployment declares a closed `engine_revision` relationship containing one
+safe relative `path`. That path is always read from the platform checkout; there
+is no configurable checkout tag or literal revision. The mechanism captures
+commit `P` and reads revision `E` from the blob at `P:<path>`; it never reads the
+mutable working-tree file. The verified authority reduction is narrow: the set
+of writable records that can select which engine executes goes from three to
+one, the revision file in the platform commit.
+
+The declaration can select `engine_revision.path`, and `host_run.sh` accepts a
+captured platform tree distinct from `--project-root`. For workspace packages,
+both repositories must contain each other's `HEAD` commit; mutable origin URLs
+do not establish this identity. These are expressible inputs, not authority
+reductions.
+
+Deployment-operated lock entries contain source identity and Git URL only. A
+`resolved` table on such an entry is invalid. The mechanism entry is different:
+its `resolved.rev` and `resolved.tree_sha256` remain required and are enforced by
+exact `HEAD` and canonical tracked-tree equality before execution.
+
+Target and platform checkouts are branch-operated. The engine checkout must be
+a separate checkout and is detached at `E`. The engine provider accepts exactly
+`engine_checkout`, `engine_binary`, `expected_revision`, `operation`, and
+`build_command`; `expected_branch` and every other extra input are invalid. It
+fetches `E` explicitly, checks out `E` detached, verifies `HEAD == E` before and
+after the build, and returns `source_rev == E`. Checkout mutation and product
+copying are serialized. The Cargo product is copied to the regular file
+`<engine_binary>-E` with create-if-absent publication; existing content is never
+replaced. Its v2 receipt binds `E`, the build command, and the published bytes'
+SHA-256 digest, which is recomputed at reuse. A missing or mismatched receipt,
+symlink, or conflicting existing artifact is not current. Only this
+build-from-source case is supported today. The host consumer recomputes the
+receipt digest again immediately before exec. This check detects incomplete or
+corrupt publication; it is not tamper resistance. Tamper resistance is out of
+scope because a same-user writer can also replace source checkouts,
+declarations, the operator, and a matching receipt.
+
+Launch captures `(P, E)`, selects `<engine_binary>-E`, and materialises a detached
+platform checkout at `$RUNTIME_ROOT/.platform/P`. Reuse requires equal canonical
+tree hashes for `P`, a clean materialised tracked tree, and the expected
+derivation blob; an invalid snapshot is removed and rebuilt. `host_run.sh`
+requires `E`, rejects a binary path naming another revision, and exports `E` to
+the engine process. The foreground launcher opens and holds the platform and
+engine revision lock descriptors before it forks; the executable child inherits
+them through exec. This removes the spawn-to-lock interval with one descriptor
+handoff, which is smaller than a readiness handshake and its protocol. Cleanup
+takes the matching exclusive lock and removes only revisions selected by no
+declaration and held by no live child; it has no age or count policy. A stable
+guard serializes revision-lock creation and removal, so internal cleanup cannot
+split lock identity. The guard path is never unlinked or recreated; external
+maintenance must preserve that inode while operators or children may run.
+Different deployments may select different `E` values from one binary stem
+without conflict. A build-receipt failure or a later control-publication failure
+can leave only an unselected revision-named artifact, which cleanup reclaims.
+
+Artifact hydration compares every pre-existing target, platform, and engine
+checkout's `origin` URL exactly with its declared lock source before fetching or
+accepting it. A different origin fails with `CHECKOUT_SOURCE_MISMATCH`; matching
+content at the requested SHA does not substitute for declared provenance.
+
 ## Cross-repository adoption order
 
-The mechanism/schema change is adopted in this order:
+The engine-derivation mechanism/schema change is adopted in this order:
 
 1. Publish the mechanism revision first, while no deployment lock refers to it.
-2. Then use one `fkst-deployments` commit to carry both the declaration-shape
-   change (expand each roster to the complete fleet and remove
-   `machine.managed_bot_set`) and the new mechanism `rev` plus `tree_sha256`.
+2. Then use one deployment commit to carry both the `engine_revision` and
+   separate `engine_checkout` declaration changes and the new mechanism `rev`
+   plus `tree_sha256`.
+3. Run that mechanism revision's artifact generator. It derives every logical
+   root, including the newly declared engine checkout, before hydration and
+   profile validation, so no generated machine profile is hand-edited.
 
 This ordering avoids a declaration/pin incompatibility in either repository
 history because the entry self-pins from the `fkst.lock` in the same deployment
 commit. An old deployment commit therefore uses the old mechanism that explains
 its old declaration, while the new deployment commit atomically carries both
-the new schema-shaped declaration and the mechanism pin that explains it. This
-does not guarantee a race-free window for concurrent cross-repository delivery,
-and it proves no downstream engine or package adoption semantics; those remain
-explicitly excluded below.
+the new schema-shaped declaration and the mechanism pin that explains it. The
+executable old/old, new/new, and crossed-pair matrix lives in
+`tests/bootstrap/test_bootstrap.py`; the generated-engine-root evidence lives in
+`tests/watch/test_generate_artifacts_publication.py`. This does not guarantee a
+race-free window for concurrent cross-repository delivery, and it proves no
+downstream engine or package adoption semantics; those remain explicitly
+excluded below.
 
 ## Public action surface
 
@@ -179,8 +246,8 @@ deployment action. Internal commands and functions are not public API.
 | `board` | No deployment lifecycle state. Providers may perform remote reads. | Common entry validation, then provider contract and result-shape checks. |
 | `status` | No. | Common entry validation; identifies the declared supervisor before reporting process and provenance state. |
 | `logs` | No. | Common entry validation; resolves the declared log identity before selecting and tailing its latest log. |
-| `restart` | Yes: source checkouts, supervisor process, runtime generation, logs, and possibly engine artifacts. | Common entry validation; engine availability; declared checkout identity and cleanliness/divergence checks before sync; numeric durable PID-file parsing and liveness checks before replacement. |
-| `sync` | Yes: declared run branches/checkouts and engine artifacts; restarts only when loaded package or engine code is stale. | Common entry validation; provider and checkout identity; forward-integration, dirty/diverged, build, and running-provenance checks before the corresponding mutation. |
+| `restart` | Yes: source checkouts, supervisor process, runtime generation, logs, and possibly engine artifacts. It may block on a full engine build and fail before process replacement if that build fails. | Common entry validation; branch checkout sync; packages-derived engine pair; revision-addressed byte receipt; clean captured platform tree; child revision binding; numeric durable PID-file parsing and liveness checks before replacement. |
+| `sync` | Yes: declared run branches/checkouts and engine artifacts; restarts only when loaded package or engine code is stale. | Common entry validation; provider and checkout identity; per-deployment forward integration; packages-derived engine pair; revision-addressed byte receipt; and running-provenance checks before the corresponding mutation. |
 | `stop` | Yes: sends `SIGKILL` to one PID. | Common entry validation; resolves the declared deployment and reads its durable PID file. `stop all` attempts every selected deployment and returns nonzero if any attempt fails. |
 | `doctor` | Conditionally: guarded leaked-test reaping and stale-receipt cleanup. | Common entry validation; each repair independently checks process identity, parent/orphan and age guards, or receipt identity and age. Findings and failures remain visible. |
 
@@ -215,6 +282,11 @@ the directory of the interpreter that resolved the operator, the directories of
 every tool in the generated machine profile, and the platform default executable
 path, with duplicates removed. The generator's or operator's ambient `PATH` is
 not inherited by the child.
+
+For a self-hosted target, the mutable project checkout and captured platform
+checkout have different paths. The host-run contract accepts workspace platform
+packages from that captured root only when each Git object database contains the
+other checkout's `HEAD`; an unrelated root with a copied origin URL fails closed.
 
 This direct topology is deliberate policy. A separate shipped process root
 would add no process-group isolation because the supervisor already owns its
@@ -295,9 +367,9 @@ value propagates to both the authorization check and the supervised process, so
 launch authorization and later refreshes cannot announce different sources.
 
 `provider.implementation` has the form
-`<pinned-source-id>:<safe-relative-entry>`. The source must be one of the
+`<source-id>:<safe-relative-entry>`. The source must be one of the
 deployment's bound target, platform, or engine sources, or its declared
-mechanism source. Absolute entries, traversal, checkout escape, missing pins,
+mechanism source. Absolute entries, traversal, checkout escape, missing source bindings,
 unbound sources, and missing or non-executable entries fail validation.
 
 Mechanism-owned entries are bindable only when their path and kind appear in

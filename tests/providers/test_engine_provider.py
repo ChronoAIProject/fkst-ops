@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import subprocess
 
@@ -40,74 +39,91 @@ def advance(seed: Path, branch: str, message: str) -> str:
 
 
 def build_script(checkout: Path) -> tuple[Path, list[str]]:
-    binary = checkout / "out" / "engine"
-    build = checkout / "build.py"
+    binary = checkout / "target" / "debug" / "engine"
+    build = checkout / "cargo"
     build.write_text(
-        "#!/usr/bin/env python3\nfrom pathlib import Path\np=Path('out/engine')\np.parent.mkdir()\np.write_text('#!/bin/sh\\n')\np.chmod(0o755)\n",
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "p=Path('target/debug/engine')\n"
+        "p.parent.mkdir(parents=True, exist_ok=True)\n"
+        "p.write_text('#!/bin/sh\\n')\n"
+        "p.chmod(0o755)\n",
         encoding="ascii",
     )
     build.chmod(0o755)
-    return binary, [str(build)]
+    return binary, [str(build), "build", "-p", "engine"]
 
 
-def concurrent_fetch_environment(tmp_path: Path, branch: str, other_branch: str) -> dict[str, str]:
-    # Intercept pull's child fetch, then let a separate fetch replace FETCH_HEAD
-    # before pull selects its merge candidates.
-    real_exec_path = Path(command("git", "--exec-path").stdout.strip())
-    exec_path = tmp_path / "git-exec"
-    exec_path.mkdir()
-    for helper in real_exec_path.iterdir():
-        if helper.name != "git":
-            (exec_path / helper.name).symlink_to(helper)
-    git = exec_path / "git"
-    real_git = command("which", "git").stdout.strip()
-    git.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = fetch ]; then\n"
-        "  \"$REAL_GIT\" \"$@\" || exit $?\n"
-        "  \"$REAL_GIT\" fetch origin \"$EXPECTED_BRANCH\" \"$OTHER_BRANCH\"\n"
-        "  exit $?\n"
-        "fi\n"
-        "exec \"$REAL_GIT\" \"$@\"\n",
-        encoding="ascii",
-    )
-    git.chmod(0o755)
-    environment = os.environ.copy()
-    environment.update(
-        GIT_EXEC_PATH=str(exec_path),
-        REAL_GIT=real_git,
-        EXPECTED_BRANCH=branch,
-        OTHER_BRANCH=other_branch,
-    )
-    return environment
+def published_binary(tmp_path: Path, revision: str) -> Path:
+    return tmp_path / "published" / f"engine-{revision}"
 
 
-def invoke(payload: object, env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+def invoke(payload: object) -> tuple[subprocess.CompletedProcess[str], dict]:
     result = subprocess.run(
         [str(PROVIDER)], input=json.dumps(payload), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        check=False, env=env,
+        check=False,
     )
     return result, json.loads(result.stdout)
 
 
-def payload(checkout: Path, binary: Path, build_command: list[str], branch: str = "build") -> dict:
+def branch_payload(checkout: Path, binary: Path, build_command: list[str]) -> dict:
     return {
         "version": "fkst.ops.invocation.v1",
         "contract": "fkst.ops.engine.v1",
         "input": {
             "engine_checkout": str(checkout),
             "engine_binary": str(binary),
-            "expected_branch": branch,
+            "expected_branch": "build",
             "operation": "build",
             "build_command": build_command,
         },
     }
 
 
+def payload(
+    checkout: Path, binary: Path, build_command: list[str], revision: str
+) -> dict:
+    return {
+        "version": "fkst.ops.invocation.v1",
+        "contract": "fkst.ops.engine.v1",
+        "input": {
+            "engine_checkout": str(checkout),
+            "engine_binary": str(binary),
+            "expected_revision": revision,
+            "operation": "build",
+            "build_command": build_command,
+        },
+    }
+
+
+def test_exact_revision_is_checked_out_detached_after_branch_advances(tmp_path: Path) -> None:
+    checkout = repository(tmp_path)
+    expected = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    advance(tmp_path / "seed", "build", "unselected branch advance")
+    _product, build_command = build_script(checkout)
+    binary = published_binary(tmp_path, expected)
+
+    result, body = invoke(payload(checkout, binary, build_command, expected))
+
+    assert result.returncode == 0
+    assert body["result"]["source_rev"] == expected
+    assert command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip() == expected
+    assert command("git", "branch", "--show-current", cwd=checkout).stdout.strip() == ""
+
+
+def test_old_expected_branch_input_is_rejected(tmp_path: Path) -> None:
+    checkout = repository(tmp_path)
+    result, body = invoke(branch_payload(checkout, checkout / "engine", ["true"]))
+    assert result.returncode == 2
+    assert body["failure"]["code"] == "INVALID_INPUT"
+
+
 def test_build_success(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
-    binary, build_command = build_script(checkout)
-    result, body = invoke(payload(checkout, binary, build_command))
+    _product, build_command = build_script(checkout)
+    revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    binary = published_binary(tmp_path, revision)
+    result, body = invoke(payload(checkout, binary, build_command, revision))
     assert result.returncode == 0
     assert body == {
         "version": "fkst.ops.invocation.v1",
@@ -116,13 +132,41 @@ def test_build_success(tmp_path: Path) -> None:
     }
 
 
-def test_update_fast_forwards_named_branch(tmp_path: Path) -> None:
+def test_build_refuses_to_replace_an_existing_revision_artifact(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
-    binary, build_command = build_script(checkout)
+    revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    cargo = checkout / "cargo"
+    cargo.write_text(
+        "#!/bin/sh\n"
+        "mkdir -p target/debug\n"
+        "printf '#!/bin/sh\\n' > target/debug/engine\n"
+        "chmod +x target/debug/engine\n",
+        encoding="ascii",
+    )
+    cargo.chmod(0o755)
+    binary = published_binary(tmp_path, revision)
+    binary.parent.mkdir()
+    binary.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+    binary.chmod(0o755)
+
+    result, body = invoke(
+        payload(checkout, binary, [str(cargo), "build", "-p", "engine"], revision)
+    )
+
+    assert result.returncode == 2, body
+    assert body["failure"]["code"] == "CONTRACT_MISSING"
+    assert "ENGINE_ARTIFACT_CONFLICT" in body["failure"]["message"]
+    assert binary.read_text(encoding="ascii") == "#!/bin/sh\nexit 99\n"
+
+
+def test_exact_remote_revision_is_fetched_without_following_branch(tmp_path: Path) -> None:
+    checkout = repository(tmp_path)
+    _product, build_command = build_script(checkout)
     previous_revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
     remote_revision = advance(tmp_path / "seed", "build", "advance build")
+    binary = published_binary(tmp_path, remote_revision)
 
-    result, body = invoke(payload(checkout, binary, build_command))
+    result, body = invoke(payload(checkout, binary, build_command, remote_revision))
 
     assert result.returncode == 0
     assert body["result"]["source_rev"] == remote_revision
@@ -130,92 +174,87 @@ def test_update_fast_forwards_named_branch(tmp_path: Path) -> None:
     assert command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip() == remote_revision
 
 
-def test_diverged_named_branch_is_update_failed(tmp_path: Path) -> None:
+def test_local_divergence_cannot_select_the_built_revision(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
     command("git", "config", "user.email", "test@example.invalid", cwd=checkout)
     command("git", "config", "user.name", "Test", cwd=checkout)
     command("git", "commit", "--allow-empty", "-m", "local advance", cwd=checkout)
-    local_revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
     remote_revision = advance(tmp_path / "seed", "build", "remote advance")
+    _product, build_command = build_script(checkout)
+    binary = published_binary(tmp_path, remote_revision)
 
-    result, body = invoke(payload(checkout, checkout / "engine", ["true"]))
-
-    assert result.returncode == 1
-    assert body["failure"]["code"] == "UPDATE_FAILED"
-    assert command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip() == local_revision
-    assert command("git", "rev-parse", "origin/build", cwd=checkout).stdout.strip() == remote_revision
-    assert not (checkout / ".git" / "MERGE_HEAD").exists()
-
-
-def test_missing_named_remote_branch_is_update_failed(tmp_path: Path) -> None:
-    checkout = repository(tmp_path)
-    local_revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
-    command("git", "config", "receive.denyDeleteCurrent", "ignore", cwd=tmp_path / "remote.git")
-    command("git", "push", "origin", "--delete", "build", cwd=tmp_path / "seed")
-
-    result, body = invoke(payload(checkout, checkout / "engine", ["true"]))
-
-    assert result.returncode == 1
-    assert body["failure"]["code"] == "UPDATE_FAILED"
-    assert command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip() == local_revision
-
-
-def test_update_ignores_other_advanced_merge_candidate(tmp_path: Path) -> None:
-    checkout = repository(tmp_path)
-    seed = tmp_path / "seed"
-    branch = "build"
-    other_branch = "other"
-    command("git", "switch", "-c", other_branch, cwd=seed)
-    command("git", "push", "-u", "origin", other_branch, cwd=seed)
-    advance(seed, other_branch, "advance other")
-    remote_revision = advance(seed, branch, "advance build")
-    environment = concurrent_fetch_environment(tmp_path, branch, other_branch)
-
-    assert command("git", "config", "--get-all", f"branch.{branch}.merge", cwd=checkout).stdout.splitlines() == [
-        f"refs/heads/{branch}"
-    ]
-    assert command("git", "config", "--get-all", "remote.origin.fetch", cwd=checkout).stdout.splitlines() == [
-        "+refs/heads/*:refs/remotes/origin/*"
-    ]
-
-    old_update = subprocess.run(
-        ["git", "pull", "--ff-only"], cwd=checkout, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, env=environment,
-    )
-    merge_candidates = [
-        line for line in (checkout / ".git" / "FETCH_HEAD").read_text(encoding="ascii").splitlines()
-        if "not-for-merge" not in line
-    ]
-    assert old_update.returncode != 0
-    assert "Cannot fast-forward to multiple branches" in old_update.stderr
-    assert len(merge_candidates) == 2
-
-    binary, build_command = build_script(checkout)
-    result, body = invoke(payload(checkout, binary, build_command), env=environment)
+    result, body = invoke(payload(checkout, binary, build_command, remote_revision))
 
     assert result.returncode == 0
     assert body["result"]["source_rev"] == remote_revision
     assert command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip() == remote_revision
+    assert command("git", "branch", "--show-current", cwd=checkout).stdout.strip() == ""
+    assert not (checkout / ".git" / "MERGE_HEAD").exists()
+
+
+def test_missing_exact_revision_is_update_failed(tmp_path: Path) -> None:
+    checkout = repository(tmp_path)
+    local_revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
+
+    result, body = invoke(payload(checkout, checkout / "engine", ["true"], "f" * 40))
+
+    assert result.returncode == 1
+    assert body["failure"]["code"] == "UPDATE_FAILED"
+    assert command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip() == local_revision
 
 
 def test_missing_checkout_is_typed(tmp_path: Path) -> None:
-    result, body = invoke(payload(tmp_path / "missing", tmp_path / "engine", ["true"]))
+    result, body = invoke(payload(tmp_path / "missing", tmp_path / "engine", ["true"], "0" * 40))
     assert result.returncode == 1
     assert body["failure"]["code"] == "CHECKOUT_MISSING"
 
 
-def test_wrong_branch_is_typed(tmp_path: Path) -> None:
+def test_malformed_expected_revision_is_invalid_input(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
-    result, body = invoke(payload(checkout, checkout / "engine", ["true"], branch="other"))
-    assert result.returncode == 1
-    assert body["failure"]["code"] == "WRONG_BRANCH"
+    result, body = invoke(payload(checkout, checkout / "engine", ["true"], "build"))
+    assert result.returncode == 2
+    assert body["failure"]["code"] == "INVALID_INPUT"
 
 
 def test_failed_build_is_typed(tmp_path: Path) -> None:
     checkout = repository(tmp_path)
-    result, body = invoke(payload(checkout, checkout / "engine", ["false"]))
+    revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    build = checkout / "cargo"
+    build.write_text("#!/bin/sh\nexit 1\n", encoding="ascii")
+    build.chmod(0o755)
+    result, body = invoke(payload(
+        checkout,
+        checkout / "target" / "debug" / "engine",
+        [str(build), "build", "-p", "engine"],
+        revision,
+    ))
     assert result.returncode == 1
     assert body["failure"]["code"] == "BUILD_FAILED"
+
+
+def test_build_that_changes_head_fails_revision_match(tmp_path: Path) -> None:
+    checkout = repository(tmp_path)
+    command("git", "config", "user.email", "test@example.invalid", cwd=checkout)
+    command("git", "config", "user.name", "Test", cwd=checkout)
+    revision = command("git", "rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    binary = checkout / "target" / "debug" / "engine"
+    build = checkout / "cargo"
+    build.write_text(
+        "#!/bin/sh\n"
+        "git commit --allow-empty -m changed-during-build >/dev/null\n"
+        "mkdir -p target/debug\n"
+        "printf '#!/bin/sh\\n' > target/debug/engine\n"
+        "chmod +x target/debug/engine\n",
+        encoding="ascii",
+    )
+    build.chmod(0o755)
+
+    result, body = invoke(payload(
+        checkout, binary, [str(build), "build", "-p", "engine"], revision
+    ))
+
+    assert result.returncode == 1
+    assert body["failure"]["code"] == "REVISION_MISMATCH"
 
 
 def test_malformed_input_has_exact_failure_shape() -> None:

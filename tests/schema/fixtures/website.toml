@@ -18,6 +18,8 @@ lock_ref = "target-source"
 lock_ref = "platform-source"
 [deployment.sources.engine]
 lock_ref = "engine-source"
+[deployment.engine_revision]
+path = ".control/engine-ref"
 [deployment.packages]
 platform = ["github-devloop", "github-devloop-pr", "github-devloop-integration"]
 host = ["site-board"]
