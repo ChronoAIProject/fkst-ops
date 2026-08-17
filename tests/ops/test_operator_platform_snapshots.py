@@ -131,3 +131,39 @@ clean_stale_launch_platforms "$2"
         assert current.is_dir()
         assert live.is_dir()
         assert not stale.exists()
+
+
+def test_reused_snapshot_must_have_captured_head_even_when_tree_is_identical() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "source"
+        revision_file = source / ".control" / "engine-ref"
+        revision_file.parent.mkdir(parents=True)
+        revision_file.write_text("e" * 40 + "\n", encoding="ascii")
+        run("git", "init", "-q", str(source))
+        run("git", "-C", str(source), "config", "user.email", "test@example.invalid")
+        run("git", "-C", str(source), "config", "user.name", "Test")
+        run("git", "-C", str(source), "add", ".")
+        run("git", "-C", str(source), "commit", "-qm", "platform")
+        platform_revision = run("git", "-C", str(source), "rev-parse", "HEAD").stdout.strip()
+        run("git", "-C", str(source), "commit", "--allow-empty", "-qm", "same tree, different commit")
+        alternate_revision = run("git", "-C", str(source), "rev-parse", "HEAD").stdout.strip()
+        snapshot = root / "runtime" / ".platform" / platform_revision
+        run("git", "clone", "-q", str(source), str(snapshot))
+        run("git", "-C", str(snapshot), "checkout", "--quiet", "--detach", alternate_revision)
+
+        command = f'''eval "$(sed -n '/^launch_platform_snapshot_valid()/,/^}}/p' "{OPERATOR}")"
+assert_engine_pair_at() {{
+  [ "$(git -C "$1" show "HEAD:.control/engine-ref")" = "$3" ]
+}}
+PYTHON={sys.executable!s}
+_repo_root={ROOT!s}
+_self_dir={ROOT / "ops"!s}
+launch_platform_snapshot_valid "$1" "$2" "$3" "$4"
+'''
+        completed = subprocess.run(
+            ["/bin/bash", "-c", command, "test", str(source), str(snapshot), platform_revision, "e" * 40],
+            text=True, capture_output=True, check=False,
+        )
+
+        assert completed.returncode != 0

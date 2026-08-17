@@ -345,9 +345,11 @@ assert_engine_pair_at() { # $1 platform checkout, $2 platform revision, $3 engin
 }
 
 launch_platform_snapshot_valid() { # $1 source, $2 snapshot, $3 P, $4 E
-  local source_tree snapshot_tree status
+  local source_tree snapshot_revision snapshot_tree status
   source_tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$1" "$3" 2>/dev/null) || return 1
-  snapshot_tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$2" "$3" 2>/dev/null) || return 1
+  snapshot_revision=$(git -C "$2" rev-parse --verify HEAD^{commit} 2>/dev/null) || return 1
+  [ "$snapshot_revision" = "$3" ] || return 1
+  snapshot_tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$2" "$snapshot_revision" 2>/dev/null) || return 1
   [ "$source_tree" = "$snapshot_tree" ] || return 1
   status=$(git -C "$2" status --porcelain --untracked-files=no 2>/dev/null) || return 1
   [ -z "$status" ] || return 1

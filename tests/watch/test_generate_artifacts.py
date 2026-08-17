@@ -665,8 +665,10 @@ def test_shared_binary_stem_publishes_each_platform_declared_revision(
     assert result.returncode == 0, result.stderr
     binary_root = home / ".fkst" / "machine" / "bin"
     assert (binary_root / f"engine-{second_revision}").is_file()
+    assert not (binary_root / f"engine-{second_revision}").is_symlink()
     first_revision = git(tmp_path / "target-source", "show", "HEAD:.control/engine-ref")
     assert (binary_root / f"engine-{first_revision}").is_file()
+    assert not (binary_root / f"engine-{first_revision}").is_symlink()
 
 
 def test_regeneration_preserves_advanced_deployment_branch(tmp_path: Path) -> None:
