@@ -395,9 +395,11 @@ sync_to_run_branch /checkout
                     check=True,
                 )
             command = f'''source "{OPERATOR}"
+cfg() {{ :; }}
 ensure_engine_binary_current() {{
   PLATFORM_REVISION={selected_platform_revision}; ENGINE_REVISION={selected_engine_revision}
-  BIN="/bin/true-$ENGINE_REVISION"
+  ENGINE_BINARY_BASE="$HOST/engine"; BIN="$ENGINE_BINARY_BASE-$ENGINE_REVISION"
+  printf '#!/bin/sh\nexit 0\n' > "$BIN"; chmod 755 "$BIN"
   if [ -n "${{RACE_PLATFORM_REVISION:-}}" ]; then
     git -C "$PKGSRC" reset --hard -q "$RACE_PLATFORM_REVISION" || return 1
   fi
@@ -411,6 +413,7 @@ wait_supervise_ready() {{
 }}
 clean_stale_runtime_worktrees() {{ :; }}
 clean_stale_launch_platforms() {{ :; }}
+clean_stale_engine_artifacts() {{ :; }}
 engine_panic_count() {{ echo 0; }}
 REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
 REVISION_SOURCE="$PKGSRC"; ENGINE_REVISION_PATH=.control/engine-ref

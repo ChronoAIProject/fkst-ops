@@ -12,11 +12,31 @@ from pathlib import Path
 
 import pytest
 
+from ops import launch_child
+
 
 ROOT = Path(__file__).resolve().parents[2]
 LOADER = ROOT / "ops" / "launch_child.py"
 LAUNCHD_SOFT_NOFILE = 256
 MAX_FILES_PER_PROCESS = ("/usr/sbin/sysctl", "-n", "kern.maxfilesperproc")
+
+
+def test_lock_failure_has_a_lock_diagnostic(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("FKST_LAUNCH_PLATFORM_LOCK_FD", "0")
+    monkeypatch.setenv("FKST_LAUNCH_ENGINE_LOCK_FD", "0")
+
+    def unsupported(*_args: object) -> None:
+        raise OSError("operation not supported")
+
+    monkeypatch.setattr(launch_child.fcntl, "flock", unsupported)
+    with pytest.raises(SystemExit):
+        launch_child.launch(["/bin/true"])
+
+    diagnostic = capsys.readouterr().err
+    assert "cannot hold inherited launch locks" in diagnostic
+    assert "open-file limit" not in diagnostic
 
 
 def _run_from_launchd_limit(
@@ -29,6 +49,12 @@ def _run_from_launchd_limit(
         import resource
         import sys
 
+        platform_lock = os.open(os.environ["TEST_PLATFORM_LOCK"], os.O_RDWR | os.O_CREAT, 0o600)
+        engine_lock = os.open(os.environ["TEST_ENGINE_LOCK"], os.O_RDWR | os.O_CREAT, 0o600)
+        os.set_inheritable(platform_lock, True)
+        os.set_inheritable(engine_lock, True)
+        os.environ["FKST_LAUNCH_PLATFORM_LOCK_FD"] = str(platform_lock)
+        os.environ["FKST_LAUNCH_ENGINE_LOCK_FD"] = str(engine_lock)
         _, inherited_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         hard = int(os.environ["TEST_AMBIENT_SOFT"]) if os.environ.get("TEST_RESTRICT_HARD") else inherited_hard
         resource.setrlimit(resource.RLIMIT_NOFILE, (int(os.environ["TEST_AMBIENT_SOFT"]), hard))
@@ -69,7 +95,8 @@ def test_real_loader_raises_launchd_limit_and_preserves_composed_environment(
         "PATH": child_path,
         "FKST_CARGO": str(tools / "cargo"),
         "FKST_PYTHON": sys.executable,
-        "FKST_LAUNCH_PLATFORM_LOCK": str(tmp_path / "platform.lock"),
+        "TEST_PLATFORM_LOCK": str(tmp_path / "platform.lock"),
+        "TEST_ENGINE_LOCK": str(tmp_path / "engine.lock"),
     }
     probe = textwrap.dedent(
         """\
@@ -106,7 +133,11 @@ def test_real_loader_raises_launchd_limit_and_preserves_composed_environment(
 @pytest.mark.skipif(sys.platform != "darwin", reason="the deployment loader targets launchd")
 def test_real_loader_refuses_to_start_when_required_limit_cannot_be_set(tmp_path: Path) -> None:
     child_marker = "target-child-started"
-    environment = {**os.environ, "FKST_LAUNCH_PLATFORM_LOCK": str(tmp_path / "platform.lock")}
+    environment = {
+        **os.environ,
+        "TEST_PLATFORM_LOCK": str(tmp_path / "platform.lock"),
+        "TEST_ENGINE_LOCK": str(tmp_path / "engine.lock"),
+    }
     result = _run_from_launchd_limit(
         f"print({child_marker!r}, flush=True)", environment, restrict_hard_limit=True
     )

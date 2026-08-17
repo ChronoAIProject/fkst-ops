@@ -182,19 +182,29 @@ copying are serialized. The Cargo product is copied to the regular file
 replaced. Its v2 receipt binds `E`, the build command, and the published bytes'
 SHA-256 digest, which is recomputed at reuse. A missing or mismatched receipt,
 symlink, or conflicting existing artifact is not current. Only this
-build-from-source case is supported today.
+build-from-source case is supported today. The host consumer recomputes the
+receipt digest again immediately before exec. This check detects incomplete or
+corrupt publication; it is not tamper resistance. Tamper resistance is out of
+scope because a same-user writer can also replace source checkouts,
+declarations, the operator, and a matching receipt.
 
 Launch captures `(P, E)`, selects `<engine_binary>-E`, and materialises a detached
 platform checkout at `$RUNTIME_ROOT/.platform/P`. Reuse requires equal canonical
 tree hashes for `P`, a clean materialised tracked tree, and the expected
 derivation blob; an invalid snapshot is removed and rebuilt. `host_run.sh`
 requires `E`, rejects a binary path naming another revision, and exports `E` to
-the engine process. The loader holds a shared advisory lock outside the snapshot
-through `exec`; reclamation holds the matching exclusive lock across deletion,
-so it uses no process-command census. Different deployments may select different
-`E` values from one binary stem without conflict. A build-receipt failure or a
-later control-publication failure can leave only an unselected revision-named
-artifact, not a mutable pointer or a valid receipt for different bytes.
+the engine process. The foreground launcher opens and holds the platform and
+engine revision lock descriptors before it forks; the executable child inherits
+them through exec. This removes the spawn-to-lock interval with one descriptor
+handoff, which is smaller than a readiness handshake and its protocol. Cleanup
+takes the matching exclusive lock and removes only revisions selected by no
+declaration and held by no live child; it has no age or count policy. A stable
+guard serializes revision-lock creation and removal, so internal cleanup cannot
+split lock identity. The guard path is never unlinked or recreated; external
+maintenance must preserve that inode while operators or children may run.
+Different deployments may select different `E` values from one binary stem
+without conflict. A build-receipt failure or a later control-publication failure
+can leave only an unselected revision-named artifact, which cleanup reclaims.
 
 Artifact hydration compares every pre-existing target, platform, and engine
 checkout's `origin` URL exactly with its declared lock source before fetching or

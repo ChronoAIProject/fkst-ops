@@ -78,6 +78,23 @@ materialise_launch_platform "$1" "$2" "$3" "$4"
         assert tracked.read_text(encoding="ascii") == "e" * 40 + "\n"
 
 
+def test_parent_holds_revision_locks_before_child_creation() -> None:
+    operator = OPERATOR.read_text(encoding="utf-8")
+    loader = (ROOT / "ops" / "launch_child.py").read_text(encoding="utf-8")
+    launch = operator[
+        operator.index("launch_one() {") : operator.index("launch_with_lock_retry() {")
+    ]
+    spawn = loader[
+        loader.index("def spawn_locked_child(") : loader.index("def remove_unlocked_snapshot(")
+    ]
+
+    assert '"$_self_dir/launch_child.py" --spawn' in launch
+    fork = spawn.index("pid = os.fork()")
+    assert spawn.index("open_shared_revision_lock(platform_lock, platform_guard)") < fork
+    assert spawn.index("open_shared_revision_lock(engine_lock, engine_guard)") < fork
+    assert "FKST_LAUNCH_PLATFORM_LOCK=" not in launch
+
+
 def test_reclamation_keeps_current_and_live_referenced_snapshots() -> None:
     with tempfile.TemporaryDirectory() as directory:
         runtime = Path(directory) / "runtime"
@@ -131,6 +148,8 @@ clean_stale_launch_platforms "$2"
         assert current.is_dir()
         assert live.is_dir()
         assert not stale.exists()
+        assert live_lock.is_file()
+        assert not (locks / f"{stale.name}.lock").exists()
 
 
 def test_reused_snapshot_must_have_captured_head_even_when_tree_is_identical() -> None:

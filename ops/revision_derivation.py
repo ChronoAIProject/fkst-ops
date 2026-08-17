@@ -121,6 +121,14 @@ def receipt_path(binary: Path) -> Path:
     return binary.with_name(f".{binary.name}.build-receipt.json")
 
 
+def engine_artifact_lock_path(binary: Path) -> Path:
+    return binary.with_name(f".{binary.name}.launch.lock")
+
+
+def engine_lock_guard_path(binary_base: Path) -> Path:
+    return binary_base.with_name(f".{binary_base.name}.locks.guard")
+
+
 def binary_sha256(binary: Path) -> str:
     digest = hashlib.sha256()
     with binary.open("rb") as stream:
@@ -185,6 +193,67 @@ def build_is_current(
     }
 
 
+def binary_receipt_matches(binary: Path, source_revision: str) -> bool:
+    """Verify that the selected revision receipt describes the current bytes."""
+    if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
+        return False
+    try:
+        document = json.loads(receipt_path(binary).read_text(encoding="ascii"))
+        digest = binary_sha256(binary)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(document, dict)
+        and document.get("schema") == RECEIPT_SCHEMA
+        and document.get("source_revision") == source_revision
+        and document.get("binary_sha256") == digest
+    )
+
+
+def _revision_artifacts(binary_base: Path) -> list[Path]:
+    artifacts: set[Path] = set()
+    prefix = f"{binary_base.name}-"
+    for entry in binary_base.parent.iterdir():
+        name = entry.name
+        if name.startswith(prefix):
+            revision = name.removeprefix(prefix)
+        elif name.startswith(f".{prefix}") and name.endswith(".build-receipt.json"):
+            revision = name.removeprefix(f".{prefix}").removesuffix(".build-receipt.json")
+        elif name.startswith(f".{prefix}") and name.endswith(".launch.lock"):
+            revision = name.removeprefix(f".{prefix}").removesuffix(".launch.lock")
+        else:
+            continue
+        if REVISION.fullmatch(revision):
+            artifacts.add(binary_base.with_name(f"{prefix}{revision}"))
+    return sorted(artifacts)
+
+
+def reclaim_engine_artifacts(binary_base: Path, selected: set[Path]) -> bool:
+    """Remove unselected revision artifacts whose shared launch lock is idle."""
+    retained_live = False
+    binary_base.parent.mkdir(parents=True, exist_ok=True)
+    with engine_lock_guard_path(binary_base).open("a+b") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        for binary in _revision_artifacts(binary_base):
+            if binary in selected:
+                continue
+            lock_path = engine_artifact_lock_path(binary)
+            with lock_path.open("a+b") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    retained_live = True
+                    continue
+                if binary.is_dir() and not binary.is_symlink():
+                    raise RevisionDerivationError(
+                        f"ENGINE_ARTIFACT_RECLAIM_INVALID: expected a file at {binary}"
+                    )
+                binary.unlink(missing_ok=True)
+                receipt_path(binary).unlink(missing_ok=True)
+                lock_path.unlink(missing_ok=True)
+    return not retained_live
+
+
 def publish_engine_product(
     product: Path, binary: Path, source_revision: str, build_command: list[str]
 ) -> None:
@@ -228,6 +297,12 @@ def main(argv: list[str] | None = None) -> int:
     current.add_argument("binary", type=Path)
     current.add_argument("source_revision")
     current.add_argument("build_command_json")
+    selected = subparsers.add_parser("receipt-bytes-current")
+    selected.add_argument("binary", type=Path)
+    selected.add_argument("source_revision")
+    reclaim = subparsers.add_parser("reclaim-engine-artifacts")
+    reclaim.add_argument("binary_base", type=Path)
+    reclaim.add_argument("selected", nargs="*", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "resolve":
@@ -245,6 +320,12 @@ def main(argv: list[str] | None = None) -> int:
                 raise RevisionDerivationError("BUILD_RECEIPT_INPUT_INVALID: build command is invalid")
             if not build_is_current(args.binary, args.source_revision, command):
                 return 1
+        elif args.command == "receipt-bytes-current":
+            if not binary_receipt_matches(args.binary, args.source_revision):
+                return 1
+        elif args.command == "reclaim-engine-artifacts":
+            if not reclaim_engine_artifacts(args.binary_base, set(args.selected)):
+                return 75
     except (OSError, UnicodeError, json.JSONDecodeError, RevisionDerivationError) as exc:
         print(f"engine revision resolution failed: {exc}", file=sys.stderr)
         return 2

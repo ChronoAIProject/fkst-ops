@@ -664,6 +664,16 @@ host_run_require_engine_binary() {
   return 1
 }
 
+host_run_require_engine_receipt() {
+  local tool
+  tool="$(cd "$(dirname "${BASH_SOURCE[0]}")/../ops" 2>/dev/null && pwd)/revision_derivation.py"
+  [ -f "$tool" ] && python3 "$tool" receipt-bytes-current \
+    "$BIN" "$HOST_RUN_EXPECTED_ENGINE_REVISION" && return 0
+  printf 'ENGINE_BINARY_RECEIPT_MISMATCH: revision %s bytes at %s do not match its receipt\n' \
+    "$HOST_RUN_EXPECTED_ENGINE_REVISION" "$BIN" >&2
+  return 1
+}
+
 host_run_require_expected_engine_revision() {
   if [[ ! "$HOST_RUN_EXPECTED_ENGINE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
     echo "ENGINE_REVISION_INVALID: --expected-engine-revision must be a full lowercase Git SHA" >&2
@@ -771,5 +781,10 @@ host_run_supervise_contract() {
   echo "exec: ${args[*]}"
   host_run_require_engine_binary || return $?
   host_run_claim_supervise_slot || return $?
+  host_run_require_engine_receipt || {
+    local receipt_status=$?
+    rm -f "$(host_run_pid_file)"
+    return "$receipt_status"
+  }
   exec "${args[@]}"
 }

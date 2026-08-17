@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -9,7 +11,9 @@ from ops.revision_derivation import (
     RevisionDerivationError,
     assert_pair,
     build_is_current,
+    engine_artifact_lock_path,
     publish_engine_product,
+    reclaim_engine_artifacts,
     receipt_path,
     resolve_pair,
     write_build_receipt,
@@ -109,3 +113,57 @@ def test_receipt_failure_leaves_only_an_unusable_revision_artifact(
     assert binary.read_bytes() == product.read_bytes()
     assert not receipt_path(binary).exists()
     assert not build_is_current(binary, source_revision, command)
+
+
+def test_reclaimer_keeps_selected_and_live_engine_artifacts(tmp_path: Path) -> None:
+    binary_base = tmp_path / "bin" / "engine"
+    binary_base.parent.mkdir()
+    selected = binary_base.with_name(f"engine-{'1' * 40}")
+    live = binary_base.with_name(f"engine-{'2' * 40}")
+    stale = binary_base.with_name(f"engine-{'3' * 40}")
+    command = ["cargo", "build", "-p", "engine"]
+    for binary in (selected, live, stale):
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        binary.chmod(0o755)
+        write_build_receipt(binary, binary.name.rsplit("-", 1)[1], command)
+
+    ready = tmp_path / "holder-ready"
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl,pathlib,sys,time; "
+                "lock=pathlib.Path(sys.argv[1]).open('a+b'); "
+                "fcntl.flock(lock,fcntl.LOCK_SH); pathlib.Path(sys.argv[2]).touch(); "
+                "time.sleep(10)"
+            ),
+            str(engine_artifact_lock_path(live)),
+            str(ready),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        for _ in range(100):
+            if ready.exists():
+                break
+            time.sleep(0.01)
+        assert ready.exists()
+
+        assert not reclaim_engine_artifacts(binary_base, {selected})
+        assert selected.is_file()
+        assert live.is_file()
+        assert receipt_path(live).is_file()
+        assert not stale.exists()
+        assert not receipt_path(stale).exists()
+        assert not engine_artifact_lock_path(stale).exists()
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+
+    assert reclaim_engine_artifacts(binary_base, {selected})
+    assert selected.is_file()
+    assert not live.exists()
+    assert not receipt_path(live).exists()
+    assert not engine_artifact_lock_path(live).exists()

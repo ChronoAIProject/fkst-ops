@@ -358,16 +358,18 @@ launch_platform_snapshot_valid() { # $1 source, $2 snapshot, $3 P, $4 E
 
 materialise_launch_platform() { # $1 source checkout, $2 destination, $3 P, $4 E
   local source="$1" destination="$2" platform_revision="$3" engine_revision="$4"
-  local source_identity temporary lock status
+  local source_identity temporary lock guard status
   mkdir -p "$(dirname "$destination")" || return 1
   lock="$RUNTIME_ROOT/.platform-locks/$platform_revision.lock"
+  guard="$RUNTIME_ROOT/.platform-locks/.identity.guard"
   if [ -e "$destination" ] && ! launch_platform_snapshot_valid "$@"; then
     "$PYTHON" "$_self_dir/launch_child.py" --remove-unlocked-snapshot \
-      "$destination" "$lock" || {
-      status=$?
+      "$destination" "$lock" "$guard"
+    status=$?
+    if [ "$status" -ne 0 ]; then
       [ "$status" -eq 75 ] || echo "LAUNCH_PLATFORM_REBUILD_FAILED: cannot remove invalid snapshot" >&2
       return 1
-    }
+    fi
   fi
   if [ ! -e "$destination" ]; then
     temporary=$(mktemp -d "$(dirname "$destination")/.${platform_revision}.XXXXXX") || return 1
@@ -520,25 +522,68 @@ clean_stale_runtime_worktrees() { # $1 name, $2 current-rt-to-keep
 }
 
 clean_stale_launch_platforms() { # $1 current platform snapshot
-  local keep="$1" d lock status
+  local keep="$1" d lock guard status
+  guard="$RUNTIME_ROOT/.platform-locks/.identity.guard"
   for d in "$RUNTIME_ROOT"/.platform/*; do
     [ -d "$d" ] && [ "$d" != "$keep" ] || continue
     lock="$RUNTIME_ROOT/.platform-locks/$(basename "$d").lock"
-    "$PYTHON" "$_self_dir/launch_child.py" --remove-unlocked-snapshot "$d" "$lock" || {
+    "$PYTHON" "$_self_dir/launch_child.py" --remove-unlocked-snapshot "$d" "$lock" "$guard" || {
       status=$?
       [ "$status" -eq 75 ] && continue
       echo "LAUNCH_PLATFORM_RECLAIM_FAILED: cannot remove $d" >&2
       return 1
     }
   done
+  for lock in "$RUNTIME_ROOT"/.platform-locks/*.lock; do
+    [ -f "$lock" ] || continue
+    d="$RUNTIME_ROOT/.platform/$(basename "$lock" .lock)"
+    [ "$d" = "$keep" ] || [ -d "$d" ] && continue
+    "$PYTHON" "$_self_dir/launch_child.py" --remove-unlocked-snapshot "$d" "$lock" "$guard" || {
+      status=$?
+      [ "$status" -eq 75 ] && continue
+      echo "LAUNCH_PLATFORM_LOCK_RECLAIM_FAILED: cannot remove $lock" >&2
+      return 1
+    }
+  done
+}
+
+clean_stale_engine_artifacts() {
+  local n base existing status seen
+  local bases=() selected=()
+  for n in $(expand all); do
+    cfg "$n" || return 1
+    resolve_engine_pair || return 1
+    selected+=("$BIN")
+    seen=0
+    for existing in ${bases[@]+"${bases[@]}"}; do
+      [ "$existing" = "$ENGINE_BINARY_BASE" ] && seen=1
+    done
+    [ "$seen" -eq 1 ] || bases+=("$ENGINE_BINARY_BASE")
+  done
+  for base in ${bases[@]+"${bases[@]}"}; do
+    "$PYTHON" "$_repo_root/ops/revision_derivation.py" reclaim-engine-artifacts \
+      "$base" "${selected[@]}" || {
+      status=$?
+      [ "$status" -eq 75 ] && continue
+      echo "ENGINE_ARTIFACT_RECLAIM_FAILED: cannot reclaim revisions under $base" >&2
+      return 1
+    }
+  done
 }
 
 launch_one() { # $1 name, $2 restart flag (0|1)
-  local name="$1" restart="${2:-0}" ts log rt launch_platform launch_lock write_posture managed_bot_logins authorized_logins args=()
+  local name="$1" restart="${2:-0}" ts log rt launch_platform launch_lock platform_guard
+  local engine_lock engine_guard pid
+  local write_posture managed_bot_logins authorized_logins args=()
+  clean_stale_engine_artifacts || return 1
+  cfg "$name" || return 1
   ensure_engine_binary_current || return 1
   ts=$(date +%s); log="$LOGDIR/${name}-sv-${ts}.log"; rt="$RUNTIME_ROOT/${name}.${ts}"
   launch_platform="$RUNTIME_ROOT/.platform/$PLATFORM_REVISION"
   launch_lock="$RUNTIME_ROOT/.platform-locks/$PLATFORM_REVISION.lock"
+  platform_guard="$RUNTIME_ROOT/.platform-locks/.identity.guard"
+  engine_lock="$(dirname "$BIN")/.$(basename "$BIN").launch.lock"
+  engine_guard="$(dirname "$ENGINE_BINARY_BASE")/.$(basename "$ENGINE_BINARY_BASE").locks.guard"
   derive_devloop_pkgs_from_workspace "$name" || return 1
   [ -n "$DEVLOOP_PKGS" ] || { echo "[$name] no platform packages declared in fkst.workspace.toml"; return 1; }
   write_posture=$(github_write_posture) || return 1
@@ -548,18 +593,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   authorized_logins=$(printf '%s' "$AUTHORIZED_LOGINS" | "$PYTHON" -c \
     'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
 
-  # Own-session launch: make the supervise its OWN session/process-group leader. CONFIRMED (ps): the
-  # plain `nohup "${args[@]}" &` launch left the supervise in the LAUNCHER's process group (PGID = the
-  # launching shell's, not its own pid) — vulnerable to any group-directed signal to that pgroup
-  # (`kill -- -<pgid>`). Closing that confirmed foreign-pgroup membership is the point of this change.
-  # [ASSUMED-UNVERIFIED: the recurring out-of-band SIGTERM that forced manual restarts ~every few hours
-  # is *inferred* to be such a group signal on launcher/session/background-task teardown — it was not
-  # caught live. This hardens the confirmed vulnerability; it does NOT prove recurrence-elimination,
-  # which must be observed after this lands.] `nohup` only blocks SIGHUP, not group signals. macOS has
-  # no setsid(1), so the selected Python interpreter runs launch_child.py. The loader also states and
-  # verifies the deployment's open-file requirement before its in-place `os.setsid()` + `os.execvp`.
-  # In-place exec means $! below stays the REAL supervise pid and the env-prefix stays scoped to the
-  # launch. A loader failure exits nonzero, so readiness reports the launch failure loud.
+  clean_stale_launch_platforms "$launch_platform" || return 1
   materialise_launch_platform \
     "$PKGSRC" "$launch_platform" "$PLATFORM_REVISION" "$ENGINE_REVISION" || return 1
   [ -x "$launch_platform/scripts/run.sh" ] || {
@@ -583,7 +617,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   [ "$restart" = "1" ] && args+=(--restart)
   printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s\n' \
     "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
-  env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_CARGO="$CARGO" FKST_PYTHON="$DEPLOYMENT_PYTHON" \
+  pid=$(env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_CARGO="$CARGO" FKST_PYTHON="$DEPLOYMENT_PYTHON" \
     FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
     FKST_GITHUB_CREDENTIAL_SOURCE="$credential_source" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
     FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
@@ -595,16 +629,16 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS="$AUTHORIZE_REPO_COLLABORATORS" \
     FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
     FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
-    FKST_WORKTREE_GC_REMOVE=1 FKST_LAUNCH_PLATFORM_LOCK="$launch_lock" PATH="$DEPLOYMENT_CHILD_PATH" \
-    nohup "$PYTHON" "$_self_dir/launch_child.py" "${args[@]}" >> "$log" 2>&1 &
-  local pid=$!
+    FKST_WORKTREE_GC_REMOVE=1 PATH="$DEPLOYMENT_CHILD_PATH" \
+    "$PYTHON" "$_self_dir/launch_child.py" --spawn "$log" "$launch_lock" "$platform_guard" \
+      "$engine_lock" "$engine_guard" "${args[@]}" 2>> "$log" </dev/null) || return 1
+  [[ "$pid" =~ ^[0-9]+$ ]] || { echo "LAUNCH_CHILD_PID_INVALID: $pid" >&2; return 1; }
   ln -sf "$log" "$LOGDIR/${name}-sv.log"
   wait_supervise_ready "$pid" "$log"
   local ready_status=$?
   if [ "$ready_status" -eq 0 ]; then
     # Cleanup separately proves that no orphaned old-runtime writer remains.
     clean_stale_runtime_worktrees "$name" "$rt"
-    clean_stale_launch_platforms "$launch_platform"
     # Committed per-launch verification that the own-session daemonization took effect: a session
     # leader has PGID == PID. If not, setsid silently did not apply and the supervise is back in a
     # foreign pgroup (the bug this launch fixes) — surface it loud rather than pass a false green.
