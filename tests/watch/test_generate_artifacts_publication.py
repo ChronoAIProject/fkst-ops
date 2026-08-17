@@ -12,6 +12,7 @@ import tomllib
 import pytest
 
 from generate_artifacts_test_support import FIXTURES, GIT, ROOT, git, prepared, run_generator, source
+from ops.revision_derivation import build_is_current
 
 
 def test_scratch_machine_root_leaves_live_machine_state_untouched(tmp_path: Path) -> None:
@@ -110,6 +111,51 @@ def test_hydration_failure_preserves_coherent_live_control_state(tmp_path: Path)
     )
     assert scheduled.returncode == 0, scheduled.stderr
     assert len(calls.read_text().splitlines()) == 2
+
+
+def test_publication_failure_leaves_only_revision_addressed_engine_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import watch.generate_artifacts as generator
+
+    repository, home, _ = prepared(tmp_path)
+    machine = tmp_path / "scratch-machine"
+    monkeypatch.setattr(generator, "_verify_mechanism_root", lambda _lock: None)
+    monkeypatch.setattr(
+        generator,
+        "_discover_tools",
+        lambda _declarations: {name: sys.executable for name in ("codex", "gh", "gh-app")},
+    )
+    generator.generate(repository, home, "fkst-bot", machine)
+    selected_before = os.readlink(machine / "control" / "current")
+
+    engine_source = tmp_path / "engine-source"
+    (engine_source / "new-engine-state").write_text("new\n", encoding="ascii")
+    git(engine_source, "add", "new-engine-state")
+    git(engine_source, "commit", "-qm", "new engine")
+    engine_revision = git(engine_source, "rev-parse", "HEAD")
+    platform_source = tmp_path / "target-source"
+    (platform_source / ".control" / "engine-ref").write_text(
+        engine_revision + "\n", encoding="ascii"
+    )
+    git(platform_source, "add", ".control/engine-ref")
+    git(platform_source, "commit", "-qm", "select new engine")
+    git(platform_source, "branch", "-f", "integration", "HEAD")
+
+    def fail_publication(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("injected control publication failure")
+
+    monkeypatch.setattr(generator, "_publish_control_files", fail_publication)
+    with pytest.raises(ValueError, match="injected control publication failure"):
+        generator.generate(repository, home, "fkst-bot", machine)
+
+    binary = machine / "bin" / f"engine-{engine_revision}"
+    assert binary.is_file()
+    assert not binary.is_symlink()
+    assert build_is_current(binary, engine_revision, ["./cargo", "build", "-p", "engine"])
+    assert not (machine / "bin" / "engine").exists()
+    assert not (machine / "bin" / "engine").is_symlink()
+    assert os.readlink(machine / "control" / "current") == selected_before
 
 
 @pytest.mark.parametrize(
