@@ -83,7 +83,7 @@ def make_github_cli_user_gh(
     root: Path, *, login: str = "declared-user", push: str = "true",
     require_github_com_environment: bool = False, fail_call: str = "", token: str = TOKEN,
     mint_signal: Path | None = None, login_started: Path | None = None,
-    login_release: Path | None = None,
+    login_release: Path | None = None, api_status: str = "",
 ) -> tuple[Path, Path]:
     calls = root / "gh-args"
     gh = root / "gh"
@@ -116,7 +116,12 @@ def make_github_cli_user_gh(
     source += environment_checks
     source += (
         "[ \"${GH_TOKEN:-}\" = '" + token + "' ] || exit 42\n"
-        "if [ \"$1 $2 $3 $4\" = 'api /user --jq .login' ]; then\n"
+        + (f"if [ \"$3\" = '-i' ] || [ \"$4\" = '-i' ]; then\n"
+           f"  printf '%s\\n' 'HTTP/2.0 {api_status}'\n"
+           "  printf '\\n'\n"
+           "  exit 1\n"
+           "fi\n" if api_status else "")
+        + "if [ \"$1 $2 $3 $4\" = 'api /user --jq .login' ]; then\n"
         f"  if [ '{fail_call}' = 'user' ]; then\n"
         f"    printf '%s\\n' '{token}'\n"
         f"    printf '%s\\n' '{token}' >&2\n"
@@ -369,7 +374,7 @@ def test_github_cli_user_login_failure_does_not_expose_token() -> None:
         artifacts = generated_artifact_contents(root, gh)
 
     assert result.returncode != 0
-    assert "login-verification-failed" in result.stderr
+    assert "login-verification-unavailable" in result.stderr
     assert TOKEN not in result.stdout
     assert TOKEN not in result.stderr
     assert TOKEN not in arguments
@@ -387,7 +392,7 @@ def test_github_cli_user_repository_failure_does_not_expose_token() -> None:
         artifacts = generated_artifact_contents(root, gh)
 
     assert result.returncode != 0
-    assert "push-verification-failed" in result.stderr
+    assert "push-verification-unavailable" in result.stderr
     assert TOKEN not in result.stdout
     assert TOKEN not in result.stderr
     assert TOKEN not in arguments

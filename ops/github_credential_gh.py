@@ -13,7 +13,17 @@ import sys
 
 
 HEALTH_FACT = "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY"
+# A credential source that could not reach GitHub has refuted nothing. Reporting it as an
+# authentication failure names the wrong cause and, because the operator derives health by
+# counting that class, marks the deployment unhealthy during someone else's outage. This
+# line deliberately asserts no HEALTH: absence of evidence is not a health verdict.
+UNAVAILABLE_FACT = "LEVEL=ERROR tag=FAILURE error_class=github-credential-source-unavailable"
+UNAVAILABLE_CAUSE_MARKER = "-verification-unavailable"
 COMMAND_TIMEOUT_SECONDS = 30
+
+
+def health_fact(error: str) -> str:
+    return UNAVAILABLE_FACT if UNAVAILABLE_CAUSE_MARKER in error else HEALTH_FACT
 
 
 def fail(message: str, error: str, *, command: list[str] | None = None) -> int:
@@ -22,7 +32,7 @@ def fail(message: str, error: str, *, command: list[str] | None = None) -> int:
     caller = frame.f_back
     source = Path(caller.f_code.co_filename).resolve().relative_to(Path(__file__).resolve().parents[1])
     command_text = f" command={shlex.join(command)}" if command else ""
-    print(f"{HEALTH_FACT} MSG={message} origin={source}:{caller.f_lineno}{command_text} raw_error={error}",
+    print(f"{health_fact(error)} MSG={message} origin={source}:{caller.f_lineno}{command_text} raw_error={error}",
           file=sys.stderr)
     return 78
 
