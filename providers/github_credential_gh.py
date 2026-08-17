@@ -215,6 +215,45 @@ def publish_attestation(
                 pass
 
 
+AUTHENTICATION_REFUSAL_STATUSES = frozenset({401, 403})
+
+
+def observed_http_status(real_gh: str, path: str, env: dict[str, str]) -> int | None:
+    """Return the HTTP status GitHub answered with, or None when no answer was observed.
+
+    `gh api` exits 1 for every non-2xx response, so the exit status cannot separate "this
+    token is refused" from "GitHub did not serve the request". The status line that `-i`
+    prints as its first stdout line can.
+    """
+    probe = run([real_gh, "api", path, "-i"], env=env)
+    if isinstance(probe, Exception):
+        return None
+    for line in probe.stdout.splitlines():
+        if not line.startswith("HTTP/"):
+            continue
+        fields = line.split()
+        return int(fields[1]) if len(fields) >= 2 and fields[1].isdigit() else None
+    return None
+
+
+def verification_failure(
+    real_gh: str, kind: str, path: str, env: dict[str, str], command: list[str], detail: str
+) -> int:
+    """Report a failed verification as what was established, not as the exit status.
+
+    Only a status GitHub actually answered with refutes the credential. Anything else —
+    a 5xx, a transport error, an unparseable response — means the question went unanswered,
+    which is not evidence that authentication failed.
+    """
+    status = observed_http_status(real_gh, path, env)
+    answered = "no HTTP status observed" if status is None else f"GitHub answered {status}"
+    if status in AUTHENTICATION_REFUSAL_STATUSES:
+        return fail(f"github-cli-user-{kind}-verification-failed", f"{detail}; {answered}",
+                    command=command)
+    return fail(f"github-cli-user-{kind}-verification-unavailable", f"{detail}; {answered}",
+                command=command)
+
+
 def verify_github_cli_user(real_gh: str, expected: str, target: str, token: str) -> int:
     verification_environment = clean_environment()
     verification_environment["GH_HOST"] = "github.com"
@@ -224,12 +263,12 @@ def verify_github_cli_user(real_gh: str, expected: str, target: str, token: str)
     login_command = [real_gh, "api", "/user", "--jq", ".login"]
     login = run(login_command, env=verification_environment)
     if isinstance(login, Exception):
-        return fail("github-cli-user-login-verification-failed", str(login), command=login_command)
+        return verification_failure(real_gh, "login", "/user", verification_environment,
+                                    login_command, str(login))
     if login.returncode != 0:
-        return fail(
-            "github-cli-user-login-verification-failed",
+        return verification_failure(
+            real_gh, "login", "/user", verification_environment, login_command,
             f"GitHub CLI exited with status {login.returncode}",
-            command=login_command,
         )
     if login.stdout.splitlines() != [expected]:
         return fail(
@@ -241,13 +280,12 @@ def verify_github_cli_user(real_gh: str, expected: str, target: str, token: str)
     permission_command = [real_gh, "api", f"repos/{target}", "--jq", ".permissions.push"]
     permission = run(permission_command, env=verification_environment)
     if isinstance(permission, Exception):
-        return fail("github-cli-user-push-verification-failed", str(permission),
-                    command=permission_command)
+        return verification_failure(real_gh, "push", f"repos/{target}", verification_environment,
+                                    permission_command, str(permission))
     if permission.returncode != 0:
-        return fail(
-            "github-cli-user-push-verification-failed",
+        return verification_failure(
+            real_gh, "push", f"repos/{target}", verification_environment, permission_command,
             f"GitHub CLI exited with status {permission.returncode}",
-            command=permission_command,
         )
     if permission.stdout.splitlines() != ["true"]:
         return fail(
