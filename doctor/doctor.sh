@@ -10,9 +10,35 @@ doctor_failure() {
   printf '  failure %s: %s\n' "$1" "$2"
 }
 
+DOCTOR_PYTHON="${FKST_OPS_PYTHON:-python3}"
+DOCTOR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The managed set is what separates a stray supervise from a declared one, and what
+# durable_health_report iterates. Resolving it from the declaration the entrypoint already
+# exported is the production path; FKST_OPS_DOCTOR_TARGETS stays as a fixture seam only.
+# A test that sets the variable cannot tell a working resolver from an absent one.
 doctor_targets() {
-  [ -n "${FKST_OPS_DOCTOR_TARGETS:-}" ] || return 0
-  printf '%s\n' "$FKST_OPS_DOCTOR_TARGETS"
+  if [ -n "${FKST_OPS_DOCTOR_TARGETS:-}" ]; then
+    printf '%s\n' "$FKST_OPS_DOCTOR_TARGETS"
+    return 0
+  fi
+  [ -n "${FKST_OPS_DECLARATION:-}" ] || return 0
+  [ -n "${FKST_OPS_MACHINE_PROFILE:-}" ] || return 0
+  [ -n "${FKST_OPS_LOCK:-}" ] || return 0
+  PYTHONPATH="$DOCTOR_ROOT${PYTHONPATH:+:$PYTHONPATH}" "$DOCTOR_PYTHON" -m schema.validator \
+    "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK" 2>/dev/null \
+    | "$DOCTOR_PYTHON" -c '
+import json, sys
+try:
+    resolved = json.load(sys.stdin)
+except ValueError:
+    raise SystemExit(0)
+for deployment in resolved.get("deployment", []):
+    machine = deployment["machine"]
+    print("\t".join((
+        deployment["id"], machine["target_checkout"], machine["durable"], machine["logs"],
+    )))
+'
 }
 
 fixture_process_row() {
