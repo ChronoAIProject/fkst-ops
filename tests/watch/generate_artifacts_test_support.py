@@ -94,6 +94,7 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
 def run_generator(
     repository: Path, home: Path, machine_root: Path | None = None,
     bot_login: str | None = "fkst-bot", github_credential_source: str | None = None,
+    integration_branch: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     mechanism = home / "mechanism"
     if not mechanism.exists():
@@ -165,6 +166,8 @@ def run_generator(
         command.extend(["--github-credential-source", github_credential_source])
     if machine_root is not None:
         command.extend(["--machine-state-root", str(machine_root)])
+    if integration_branch is not None:
+        command.extend(["--integration-branch", integration_branch])
     return subprocess.run(
         command, env=environment,
         text=True, capture_output=True, check=False,

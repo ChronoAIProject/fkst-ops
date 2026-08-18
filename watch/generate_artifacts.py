@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -202,10 +203,36 @@ def _discover_tools(declarations: list[tuple[Path, dict[str, Any]]]) -> dict[str
     return discovered
 
 
+DECLARED_BRANCH_PATTERN = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def validate_declared_integration_branch(branch: str) -> str:
+    """Accept only names that the derivation itself could have produced.
+
+    Validating an arbitrary ref by rejection does not converge: a name can satisfy
+    `git check-ref-format` and still resolve as revision syntax at the consumer, and that
+    set is open — `@`, `@{-1}`, `+topic`, `refs/heads/topic` were each found in turn. The
+    accepted character class is closed by construction instead, and is a superset of what
+    `integration-<login>` can yield.
+    """
+    argument = "--integration-branch"
+    if not branch:
+        raise ValueError(f"{argument} must not be empty")
+    if not DECLARED_BRANCH_PATTERN.match(branch):
+        raise ValueError(
+            f"{argument} must start alphanumeric and contain only letters, digits, "
+            "dot, underscore or hyphen"
+        )
+    if ".." in branch or branch.endswith(".") or branch.endswith(".lock"):
+        raise ValueError(f"{argument} must not contain '..' or end with '.' or '.lock'")
+    return branch
+
+
 def _profile_text(
     declarations: list[tuple[Path, dict[str, Any]]], machine_root: Path,
     tools: dict[str, str] | None = None, *, bot_login: str,
     github_credential_source: str | None = None,
+    declared_integration_branch: str | None = None,
 ) -> str:
     base = machine_root
     tools = _discover_tools(declarations) if tools is None else tools
@@ -222,7 +249,11 @@ def _profile_text(
         raise ValueError(
             "--github-credential-source must be github-app or github-cli-user"
         )
-    integration_branch = f"integration-{normalized_login(bot_login)}"
+    integration_branch = (
+        validate_declared_integration_branch(declared_integration_branch)
+        if declared_integration_branch is not None
+        else f"integration-{normalized_login(bot_login)}"
+    )
 
     for declaration_path, declaration in declarations:
         for provider_index, provider in enumerate(declaration.get("provider", [])):
@@ -544,6 +575,7 @@ def _publish_control_files_locked(
 def generate(
     repository: Path, home: Path, bot_login: str, machine_root: Path | None = None,
     github_credential_source: str | None = None,
+    declared_integration_branch: str | None = None,
 ) -> tuple[Path, Path, bool | None, int]:
     repository = repository.resolve()
     home = home.resolve()
@@ -590,6 +622,7 @@ def generate(
     profile_text = _profile_text(
         declarations, machine_root, tools, bot_login=bot_login,
         github_credential_source=github_credential_source,
+        declared_integration_branch=declared_integration_branch,
     )
     machine_defaults = tomllib.loads(profile_text)["defaults"]
     manifest_text = json.dumps({
@@ -646,11 +679,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bot-login", required=True)
     parser.add_argument("--github-credential-source")
     parser.add_argument("--machine-state-root", type=Path)
+    parser.add_argument(
+        "--integration-branch",
+        help="this machine's integration branch; derived from --bot-login when omitted",
+    )
     args = parser.parse_args(argv)
     try:
         profile, launch_agent, live, interval = generate(
             args.deployment_repository, Path.home(), args.bot_login, args.machine_state_root,
-            args.github_credential_source,
+            args.github_credential_source, args.integration_branch,
         )
     except (OSError, ValueError, ValidationError) as exc:
         print(f"artifact generation failed: {exc}", file=sys.stderr)
