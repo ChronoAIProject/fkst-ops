@@ -27,18 +27,7 @@ doctor_targets() {
   [ -n "${FKST_OPS_LOCK:-}" ] || return 0
   PYTHONPATH="$DOCTOR_ROOT${PYTHONPATH:+:$PYTHONPATH}" "$DOCTOR_PYTHON" -m schema.validator \
     "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK" 2>/dev/null \
-    | "$DOCTOR_PYTHON" -c '
-import json, sys
-try:
-    resolved = json.load(sys.stdin)
-except ValueError:
-    raise SystemExit(0)
-for deployment in resolved.get("deployment", []):
-    machine = deployment["machine"]
-    print("\t".join((
-        deployment["id"], machine["target_checkout"], machine["durable"], machine["logs"],
-    )))
-'
+    | "$DOCTOR_PYTHON" "$DOCTOR_ROOT/doctor/targets.py"
 }
 
 fixture_process_row() {
@@ -97,8 +86,8 @@ elapsed_seconds() {
 }
 
 stray_supervise_report() {
-  local managed="" identity project durable log_root pid cmd root stray=0
-  while IFS=$'\t' read -r identity project durable log_root; do
+  local managed="" identity project durable log_root engine pid cmd root stray=0
+  while IFS=$'\t' read -r identity project durable log_root engine; do
     [ -n "$identity" ] || continue
     managed="${managed}${project}"$'\n'
   done < <(doctor_targets)
@@ -184,10 +173,16 @@ sweep_stale_tmp_receipts() {
 }
 
 durable_health_one() {
-  local identity="$1" durable="$2" log_root="$3" snapshot summary now_ms
+  local identity="$1" durable="$2" log_root="$3" engine="$4" snapshot summary now_ms
+  # Resolved per target; FKST_OPS_ENGINE_BINARY remains only as a fixture seam.
+  [ -n "$engine" ] || engine="${FKST_OPS_ENGINE_BINARY:-}"
+  if [ -z "$engine" ]; then
+    doctor_failure "durable.$identity" "engine binary could not be resolved for this target"
+    return 0
+  fi
   if [ ! -e "$durable/delivery.redb" ]; then echo "  $identity: no durable store"; return 0; fi
   now_ms=$(( ${FKST_OPS_DOCTOR_NOW_EPOCH:-$(date +%s)} * 1000 ))
-  if ! snapshot=$("${FKST_OPS_ENGINE_BINARY:?FKST_OPS_ENGINE_BINARY is required}" observe --json --durable-root "$durable" 2>&1); then
+  if ! snapshot=$("$engine" observe --json --durable-root "$durable" 2>&1); then
     doctor_failure "durable.$identity" "observe operation failed: $(printf '%s' "$snapshot" | sed -n '1p')"
     return 0
   fi
@@ -207,10 +202,10 @@ durable_health_one() {
 }
 
 durable_health_report() {
-  local identity project durable log_root
-  while IFS=$'\t' read -r identity project durable log_root; do
+  local identity project durable log_root engine
+  while IFS=$'\t' read -r identity project durable log_root engine; do
     [ -n "$identity" ] || continue
-    durable_health_one "$identity" "$durable" "$log_root"
+    durable_health_one "$identity" "$durable" "$log_root" "$engine"
   done < <(doctor_targets)
 }
 
