@@ -19,6 +19,11 @@ HEALTH_FACT = "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed 
 # line deliberately asserts no HEALTH: absence of evidence is not a health verdict.
 UNAVAILABLE_FACT = "LEVEL=ERROR tag=FAILURE error_class=github-credential-source-unavailable"
 UNAVAILABLE_CAUSE_MARKER = "-verification-unavailable"
+# A call that failed after the credential was already issued has established nothing about
+# authentication. gh does not report the cause through its exit status, and this proxy
+# passes its stderr straight through rather than reading it, so there is no evidence here
+# either way. Name what is known — a call failed — and assert no health verdict.
+CALL_FAILED_FACT = "LEVEL=ERROR tag=FAILURE error_class=github-call-failed"
 COMMAND_TIMEOUT_SECONDS = 30
 
 
@@ -125,9 +130,10 @@ def main() -> int:
     except OSError as error:
         return fail("real-gh-could-not-start", str(error), command=command)
     if completed.returncode != 0:
-        # Authentication failures from gh are not reliably classified by exit status.
-        # Mark every failed GitHub call unhealthy; the next call refreshes independently.
-        print(f"{HEALTH_FACT} MSG=github-call-failed exit={completed.returncode}", file=sys.stderr)
+        # A revoked credential surfaces on the next call whose attestation has expired,
+        # through the verification path that can actually observe the status.
+        print(f"{CALL_FAILED_FACT} MSG=github-call-failed exit={completed.returncode}",
+              file=sys.stderr)
     return completed.returncode
 
 
