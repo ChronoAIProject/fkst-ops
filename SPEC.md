@@ -12,6 +12,10 @@ orchestration. It is parameterized and does not own a concrete deployment.
 Repository Python code uses only the Python standard library. Changing that
 dependency constraint requires a deliberate revision of this specification.
 
+The host-launch layer is migrating into this repository; `docs/host-layer-migration.md`
+records that decision, its sequence, and why the packages-side copies remain until the
+cutover is complete.
+
 `fkst-deployments` owns deployment parameters and composition: source bindings,
 the mechanism pin, engine-revision derivations, package selection, integration policy, target identity, logical
 runtime/durable/log identities, the complete cross-machine managed-bot roster,
