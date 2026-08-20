@@ -37,7 +37,16 @@ def load_provider():
     return module
 
 
+def load_wrapper():
+    spec = importlib.util.spec_from_file_location("github_credential_wrapper_under_test", WRAPPER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 PROVIDER_MODULE = load_provider()
+WRAPPER_MODULE = load_wrapper()
 
 
 def make_tools(root: Path, app_slug: str = "declared-bot") -> tuple[Path, Path, Path]:
@@ -256,14 +265,78 @@ def assert_token_not_written(root: Path, token: str, *, fixtures: set[Path]) -> 
             assert encoded not in path.read_bytes(), path
 
 
-def test_installation_without_declared_target_is_refused_without_exposing_token() -> None:
+def test_installation_repository_probe_nonzero_is_unavailable_without_emitting_credential() -> None:
     with tempfile.TemporaryDirectory() as directory:
         resolver, gh, _ = make_tools(Path(directory))
-        gh.write_text('#!/bin/sh\nexit 1\n', encoding="ascii")
+        message = "distinctive repository probe failure"
+        gh.write_text(
+            f"#!/bin/sh\nprintf '%s' '{message}' >&2\nexit 23\n", encoding="ascii"
+        )
         result = invoke(resolver, gh, "declared-bot[bot]")
     assert result.returncode != 0
-    assert "declared-target-not-accessible-to-installation" in result.stderr
+    assert "github-app-installation-repositories-verification-unavailable" in result.stderr
+    assert message in result.stderr
+    assert f"command={gh} api --paginate /installation/repositories" in result.stderr
     assert TOKEN not in result.stdout + result.stderr
+    assert result.stdout == ""
+
+    fact = WRAPPER_MODULE.health_fact(result.stderr)
+    assert fact == WRAPPER_MODULE.UNAVAILABLE_FACT
+    assert fact != WRAPPER_MODULE.HEALTH_FACT
+
+
+def test_installation_repository_probe_exception_is_unavailable_without_emitting_credential() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        resolver, gh, _ = make_tools(root)
+        message = "distinctive repository probe spawn failure"
+        minted = subprocess.CompletedProcess(
+            [str(resolver), "token", "--target", TARGET], 0, f"{TOKEN}\n", ""
+        )
+        environment = {
+            "FKST_GITHUB_CREDENTIAL_RESOLVER": str(resolver),
+            "FKST_GITHUB_REAL_GH": str(gh),
+            "FKST_GITHUB_BOT_LOGIN": "declared-bot[bot]",
+            "FKST_GITHUB_REPO": TARGET,
+            "FKST_GITHUB_CREDENTIAL_SOURCE": "github-app",
+        }
+        run_results = iter((minted, OSError(message)))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, environment, clear=True), \
+             mock.patch.object(
+                 PROVIDER_MODULE, "run", side_effect=lambda *args, **kwargs: next(run_results)
+             ), \
+             redirect_stdout(stdout), redirect_stderr(stderr):
+            returncode = PROVIDER_MODULE.main()
+        result = subprocess.CompletedProcess(
+            [sys.executable, str(PROVIDER)], returncode, stdout.getvalue(), stderr.getvalue()
+        )
+
+    assert result.returncode != 0
+    assert "github-app-installation-repositories-verification-unavailable" in result.stderr
+    assert message in result.stderr
+    assert f"command={gh} api --paginate /installation/repositories" in result.stderr
+    assert TOKEN not in result.stdout + result.stderr
+    assert result.stdout == ""
+
+
+def test_installation_repository_membership_refusal_does_not_emit_credential() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        resolver, gh, _ = make_tools(Path(directory))
+        gh.write_text(
+            "#!/bin/sh\n"
+            f"[ \"$GH_TOKEN\" = '{TOKEN}' ] || exit 41\n"
+            "printf '%s\\n' 'owner/another-repository'\n",
+            encoding="ascii",
+        )
+        result = invoke(resolver, gh, "declared-bot[bot]")
+
+    assert result.returncode != 0
+    assert "declared-target-not-accessible-to-installation" in result.stderr
+    assert "github-app-installation-repositories-verification-unavailable" not in result.stderr
+    assert TOKEN not in result.stdout + result.stderr
+    assert result.stdout == ""
 
 
 def test_matching_installation_issues_target_bound_json_credential() -> None:

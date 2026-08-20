@@ -344,10 +344,11 @@ def main() -> int:
                               "--jq", ".repositories[].full_name"]
         repositories = run(repository_command, env=verification_environment)
         if isinstance(repositories, Exception):
-            return fail("declared-target-not-accessible-to-installation", str(repositories),
+            return fail("github-app-installation-repositories-verification-unavailable", str(repositories),
                         command=repository_command)
         if repositories.returncode != 0:
-            return fail("declared-target-not-accessible-to-installation", repositories.stderr,
+            return fail("github-app-installation-repositories-verification-unavailable",
+                        repositories.stderr,
                         command=repository_command)
         accessible = set(repositories.stdout.splitlines())
         if target not in accessible:
