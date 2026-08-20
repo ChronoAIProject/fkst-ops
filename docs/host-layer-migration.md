@@ -50,10 +50,13 @@ The copies here are a partial snapshot rather than a mirror: `bin_bootstrap.sh` 
 lines of the platform implementation, so they cannot simply be made live. The complete
 implementations are the platform's, and the migration carries those forward.
 
-Nothing in this repository executes the copies here. Their only references are `tests/host/`
-and one entry in `migration/cross-seam-duplication.allowlist`, which recorded this duplication
-as deliberate — "duplicated because source CI must not change" — and which no code in this
-repository reads.
+Nothing in this repository executes the copies here. They are referenced by `tests/host/`; by one
+entry in `migration/cross-seam-duplication.allowlist`, which recorded this duplication as
+deliberate — "duplicated because source CI must not change" — and which no code in this repository
+reads; and, since the per-target engine-binary fix, by a docstring in `doctor/targets.py` noting
+that it derives the engine binary through the same `ops.revision_derivation` module that
+`host/bin_bootstrap.sh` uses. That last one is prose: `doctor/targets.py` imports the module
+directly and does not run the shell copy.
 
 ## Sequence
 
