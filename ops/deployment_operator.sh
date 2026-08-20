@@ -138,7 +138,7 @@ wait_supervise_ready() { # $1 pid, $2 log
 }
 expand() { [ "${1:-all}" = all ] && echo "$DEPLOYMENT_OPERATOR_DEPLOYMENTS" || echo "$1"; }
 
-invoke_provider() { "$PYTHON" "$_self_dir/invoke_provider.py" "$1" "$2"; }
+invoke_provider() { PATH="$DEPLOYMENT_CHILD_PATH" "$PYTHON" "$_self_dir/invoke_provider.py" "$1" "$2"; }
 
 github_write_posture() {
   case "${GITHUB_WRITE_POSTURE:-}" in
