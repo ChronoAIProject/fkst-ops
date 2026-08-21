@@ -181,6 +181,32 @@ class BootstrapTest(unittest.TestCase):
         self.assertFalse(self.cache.exists())
         self.assertEqual(["status"], self.log.read_text(encoding="utf-8").splitlines())
 
+    def test_dirty_invoking_checkout_reexecutes_clean_pinned_copy_before_delegation(self):
+        marker = self.root / "dirty-operator-executed"
+        runner = self.source / "ops" / "deployment_operator.sh"
+        runner.write_text(
+            "#!/usr/bin/env bash\n"
+            f"touch {str(marker)!r}\n"
+            "exit 73\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update(CALL_LOG=str(self.log), FKST_OPS_CACHE_ROOT=str(self.cache))
+
+        result = run(
+            "bash", str(self.source / "bin" / "fkst-ops"), "--deployment-dir", str(self.deployment),
+            "--declaration", "deployment.toml", "--machine-profile", "machine.toml", "status",
+            cwd=self.deployment, check=False, env=env,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertFalse(marker.exists())
+        pinned = (self.cache / "current").resolve()
+        self.assertNotEqual(self.source.resolve(), pinned)
+        self.assertEqual(
+            ["status"], self.log.read_text(encoding="utf-8").splitlines()
+        )
+
     def test_omitted_deployment_dir_finds_nearest_lock_root(self):
         declaration = self.deployment / "deployments" / "packages.toml"
         declaration.parent.mkdir()
