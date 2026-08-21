@@ -15,6 +15,7 @@ from generate_artifacts_test_support import FIXTURES, GIT, ROOT, git, prepared, 
 from ops.revision_derivation import build_is_current
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_scratch_machine_root_leaves_live_machine_state_untouched(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     live = home / ".fkst" / "machine"
@@ -52,6 +53,7 @@ def test_generation_rejects_repository_root_symlink_to_test_fixture(tmp_path: Pa
     assert not (home / ".fkst" / "machine" / "profile.toml").exists()
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generation_rejects_missing_remote_integration_branch(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     git(tmp_path / "target-source", "branch", "-D", "integration")
@@ -60,6 +62,7 @@ def test_generation_rejects_missing_remote_integration_branch(tmp_path: Path) ->
     assert "remote integration branch integration is missing" in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generation_has_no_deployment_revision_floor(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     source_root = tmp_path / "target-source"
@@ -74,6 +77,7 @@ def test_generation_has_no_deployment_revision_floor(tmp_path: Path) -> None:
     assert git(checkout, "rev-parse", "HEAD") == git(source_root, "rev-parse", "HEAD")
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_hydration_failure_preserves_coherent_live_control_state(tmp_path: Path) -> None:
     repository, home, declaration_data = prepared(tmp_path)
     first = run_generator(repository, home)
@@ -518,6 +522,7 @@ def test_generator_requires_explicit_bot_login_cli_argument(tmp_path: Path) -> N
     assert "required" in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generator_rejects_bot_login_outside_declared_roster(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     result = run_generator(repository, home, bot_login="outside-bot")
@@ -526,6 +531,7 @@ def test_generator_rejects_bot_login_outside_declared_roster(tmp_path: Path) -> 
     assert "managed_bot_logins" in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generator_rejects_bot_login_with_empty_normalized_identity(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     result = run_generator(repository, home, bot_login="[bot]")
@@ -533,6 +539,7 @@ def test_generator_rejects_bot_login_with_empty_normalized_identity(tmp_path: Pa
     assert "--bot-login: must not normalize to an empty identity" in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generator_normalizes_bot_suffix_without_changing_login_case(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     declaration = repository / "deployment.toml"
@@ -556,6 +563,7 @@ def test_generator_normalizes_bot_suffix_without_changing_login_case(tmp_path: P
     assert "is not in" in rejected.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_profileless_missing_machine_bot_login_is_a_typed_generation_error(
     tmp_path: Path,
 ) -> None:
