@@ -71,8 +71,14 @@ host_run_export_codex_repository_roots() {
 }
 
 host_run_resolve_target_platform_roots() {
-  local output line
-  output="$(python3 - "$HOST_RUN_PROJECT_ROOT" "$HOST_RUN_PLATFORM_PACKAGES" "$HOST_RUN_PLATFORM_ROOT" <<'PY'
+  local output line python_bin
+  if [ -n "${FKST_PYTHON:-}" ]; then
+    python_bin="$FKST_PYTHON"
+  else
+    python_bin="python3"
+    echo "warning: FKST_PYTHON is not set; falling back to python3 from PATH for this local host launch" >&2
+  fi
+  output="$("$python_bin" - "$HOST_RUN_PROJECT_ROOT" "$HOST_RUN_PLATFORM_PACKAGES" "$HOST_RUN_PLATFORM_ROOT" <<'PY'
 import re
 import shlex
 import subprocess
@@ -221,6 +227,12 @@ def same_path(left: Path, right: Path) -> bool:
 
 
 def same_repository_history(left: Path, right: Path) -> bool:
+    """True when two checkouts are two views of one repository.
+
+    The operator launches from an immutable snapshot of the platform commit, which is a
+    different tree than --project-root while being the same repository. Path equality
+    cannot express that, so each side must be able to resolve the other's HEAD.
+    """
     left_head = git_output_optional(["rev-parse", "HEAD"], cwd=left)
     right_head = git_output_optional(["rev-parse", "HEAD"], cwd=right)
     if not left_head or not right_head:
@@ -641,23 +653,16 @@ host_run_kill_supervise_pid() {
   return 1
 }
 
-host_run_restart_prior() {
-  local pid_file pid
-  [ "$HOST_RUN_RESTART" -eq 1 ] || return 0
-  pid_file="$(host_run_pid_file)"
-  [ -f "$pid_file" ] || return 0
-  pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
-  case "$pid" in
-    ''|*[!0-9]*)
-      echo "error: malformed supervise pidfile at $pid_file; refusing to launch a second supervise on $HOST_RUN_DURABLE_ROOT" >&2
-      return 1
-      ;;
-    *)
-      host_run_kill_supervise_pid "$pid" "$pid_file"
-      ;;
-  esac
-}
-
+# Verify that BIN is the engine revision the operator declared and that its bytes
+# still match the receipt published beside it. This is corruption detection, not
+# tamper resistance: a writer with access to this tree already owns everything the
+# check could protect. It exists because a build killed partway, a truncated copy, a
+# full disk or an interrupted publication can leave bytes that do not match their
+# receipt, and because the operator's own verification cannot cover the interval
+# between its last check and this exec.
+#
+# The check is self-contained on purpose. It reads only the receipt beside BIN, so it
+# does not depend on any file outside this repository.
 host_run_require_engine_binary() {
   [ -f "$BIN" ] && [ -x "$BIN" ] && return 0
   printf 'ENGINE_BINARY_UNAVAILABLE: declared build path: %s\n' "$BIN" >&2
@@ -688,6 +693,23 @@ host_run_require_expected_engine_revision() {
       ;;
   esac
   export FKST_EXPECTED_ENGINE_REVISION="$HOST_RUN_EXPECTED_ENGINE_REVISION"
+}
+
+host_run_restart_prior() {
+  local pid_file pid
+  [ "$HOST_RUN_RESTART" -eq 1 ] || return 0
+  pid_file="$(host_run_pid_file)"
+  [ -f "$pid_file" ] || return 0
+  pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
+  case "$pid" in
+    ''|*[!0-9]*)
+      echo "error: malformed supervise pidfile at $pid_file; refusing to launch a second supervise on $HOST_RUN_DURABLE_ROOT" >&2
+      return 1
+      ;;
+    *)
+      host_run_kill_supervise_pid "$pid" "$pid_file"
+      ;;
+  esac
 }
 
 host_run_claim_supervise_slot() {
