@@ -191,7 +191,8 @@ checkout_role="deployment-operated"
                              "--machine-config", str(profile), "--lock", str(lock), "board", "fixture"],
                             cwd=tmp_path, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert "github-control through operator" in result.stdout
+    assert "MISSING github-control: plane is not implemented" in result.stdout
+    assert "github-control through operator" not in result.stdout
     assert "engine-durable through operator" in result.stdout
 
     binary.unlink()

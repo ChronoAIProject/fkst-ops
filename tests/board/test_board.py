@@ -16,70 +16,105 @@ def provider(tmp_path: Path, name: str, healthy: bool, body=None) -> str:
             body["result"]["health"] = {"status": "HEALTHY", "anomalies": []}
         code = 0
     else:
-        body = {"version": "fkst.ops.invocation.v1", "ok": False, "failure": {"code": "FETCH_FAILED", "message": "fixture failure", "details": {}}}
+        failure_code = "OBSERVE_FAILED" if name == "engine-durable" else "FETCH_FAILED"
+        body = {"version": "fkst.ops.invocation.v1", "ok": False, "failure": {"code": failure_code, "message": "fixture failure", "details": {}}}
         code = 1
     path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{json.dumps(body)}'\nexit {code}\n", encoding="utf-8")
     path.chmod(0o755)
     return str(path)
 
 
-def run_case(tmp_path: Path, github_ok: bool, engine_ok: bool):
-    github_input = tmp_path / "github.json"
-    engine_input = tmp_path / "engine.json"
-    github_input.write_text("{}", encoding="utf-8")
-    engine_input.write_text("{}", encoding="utf-8")
-    return subprocess.run([
-        sys.executable, str(ROOT / "board" / "board.py"),
-        "--github-provider", provider(tmp_path, "github-control", github_ok),
-        "--engine-provider", provider(tmp_path, "engine-durable", engine_ok),
-        "--github-input", str(github_input), "--engine-input", str(engine_input),
-    ], text=True, stdout=subprocess.PIPE, check=False)
+def run_board(
+    tmp_path: Path,
+    *,
+    github_provider: str | None = None,
+    github_input: Path | None = None,
+    engine_provider: str | None = None,
+    engine_input: Path | None = None,
+):
+    if engine_provider is None:
+        engine_provider = provider(tmp_path, "engine-durable", True)
+    if engine_input is None:
+        engine_input = tmp_path / "engine.json"
+        engine_input.write_text("{}", encoding="utf-8")
+    command = [sys.executable, str(ROOT / "board" / "board.py")]
+    if github_provider is not None:
+        command.extend(["--github-provider", github_provider])
+    if github_input is not None:
+        command.extend(["--github-input", str(github_input)])
+    command.extend(["--engine-provider", engine_provider, "--engine-input", str(engine_input)])
+    return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
 
 
-def test_both_healthy(tmp_path):
-    result = run_case(tmp_path, True, True)
+def test_healthy_engine_renders_missing_github_and_exits_zero(tmp_path):
+    result = run_board(tmp_path)
     assert result.returncode == 0
-    assert "github-control healthy" in result.stdout
+    assert "[github-control]\nMISSING github-control: plane is not implemented\n" in result.stdout
     assert "engine-durable healthy" in result.stdout
+    assert "FAIL github-control" not in result.stdout
 
 
-def test_github_failure_keeps_engine(tmp_path):
-    result = run_case(tmp_path, False, True)
+def test_failing_engine_renders_missing_github_and_fail_and_exits_nonzero(tmp_path):
+    result = run_board(
+        tmp_path, engine_provider=provider(tmp_path, "engine-durable", False)
+    )
     assert result.returncode != 0
-    assert "FAIL github-control" in result.stdout
-    assert "engine-durable healthy" in result.stdout
+    assert "MISSING github-control: plane is not implemented" in result.stdout
+    assert "FAIL engine-durable: OBSERVE_FAILED: fixture failure" in result.stdout
 
 
-def test_engine_failure_keeps_github(tmp_path):
-    result = run_case(tmp_path, True, False)
-    assert result.returncode != 0
-    assert "github-control healthy" in result.stdout
-    assert "FAIL engine-durable" in result.stdout
-
-
-def test_both_failing(tmp_path):
-    result = run_case(tmp_path, False, False)
-    assert result.returncode != 0
-    assert "FAIL github-control" in result.stdout
-    assert "FAIL engine-durable" in result.stdout
-
-
-def test_malformed_board_row_fails_closed_and_exits_nonzero(tmp_path):
-    github_input = tmp_path / "github.json"
-    engine_input = tmp_path / "engine.json"
-    github_input.write_text("{}", encoding="utf-8")
-    engine_input.write_text("{}", encoding="utf-8")
+def test_malformed_engine_row_fails_closed_and_exits_nonzero(tmp_path):
     malformed = {"version": "fkst.ops.invocation.v1", "ok": True, "result": {
-        "view": "github-control", "rows": [{"key": 7, "classification": "ok", "fields": []}],
+        "view": "engine-durable", "rows": [{"key": 7, "classification": "ok", "fields": []}],
+        "health": {"status": "HEALTHY", "anomalies": []},
     }}
-    result = subprocess.run([
-        sys.executable, str(ROOT / "board" / "board.py"),
-        "--github-provider", provider(tmp_path, "github-control", True, malformed),
-        "--engine-provider", provider(tmp_path, "engine-durable", True),
-        "--github-input", str(github_input), "--engine-input", str(engine_input),
-    ], text=True, stdout=subprocess.PIPE, check=False)
+    result = run_board(
+        tmp_path,
+        engine_provider=provider(tmp_path, "engine-durable", True, malformed),
+    )
     assert result.returncode != 0
-    assert "FAIL github-control: invalid provider output" in result.stdout
+    assert "MISSING github-control: plane is not implemented" in result.stdout
+    assert "FAIL engine-durable: invalid provider output" in result.stdout
+
+
+def test_github_compatibility_arguments_are_inert(tmp_path):
+    marker = tmp_path / "github-called"
+    executable = tmp_path / "github-control"
+    executable.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    executable.chmod(0o755)
+    github_input = tmp_path / "github.json"
+    github_input.write_text("not json", encoding="utf-8")
+    result = run_board(
+        tmp_path, github_provider=str(executable), github_input=github_input
+    )
+    assert result.returncode == 0
+    assert "MISSING github-control: plane is not implemented" in result.stdout
+    assert not marker.exists()
+
+
+def test_missing_github_input_is_ignored(tmp_path):
+    missing_input = tmp_path / "does-not-exist.json"
+    result = run_board(
+        tmp_path,
+        github_provider=str(tmp_path / "does-not-exist-provider"),
+        github_input=missing_input,
+    )
+    assert result.returncode == 0
+    assert "MISSING github-control: plane is not implemented" in result.stdout
+    assert "engine-durable healthy" in result.stdout
+
+
+def test_github_compatibility_arguments_are_independently_optional(tmp_path):
+    github_input = tmp_path / "github.json"
+    github_input.write_text("not json", encoding="utf-8")
+    for compatibility_argument in (
+        {"github_provider": str(tmp_path / "does-not-exist-provider")},
+        {"github_input": github_input},
+    ):
+        result = run_board(tmp_path, **compatibility_argument)
+        assert result.returncode == 0
+        assert "MISSING github-control: plane is not implemented" in result.stdout
+        assert "engine-durable healthy" in result.stdout
 
 
 def test_engine_empty_result_fails_selected_contract(tmp_path):
