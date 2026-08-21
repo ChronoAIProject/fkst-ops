@@ -27,6 +27,35 @@ from generate_artifacts_test_support import (
     source,
 )
 
+
+def launch_environment_contract(
+    operator: Path, declaration: Path, profile: Path,
+    lock: Path, deployment: str,
+) -> tuple[str, list[str]]:
+    command = '''source "$1"
+cfg "$2"
+resolve_engine_pair
+resolve_deployment_child_environment
+deployment_child_environment_sha256
+printf '%s\\n' "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}"
+'''
+    environment = {
+        **os.environ,
+        "FKST_OPS_DECLARATION": str(declaration),
+        "FKST_OPS_MACHINE_PROFILE": str(profile),
+        "FKST_OPS_LOCK": str(lock),
+        "FKST_OPS_PYTHON": sys.executable,
+    }
+    result = subprocess.run(
+        ["bash", "-c", command, "test", str(operator), deployment],
+        env=environment, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    identity, *assignments = result.stdout.splitlines()
+    assert len(identity) == 64
+    return identity, assignments
+
+
 @pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
@@ -551,9 +580,17 @@ def test_engine_branch_advance_without_platform_revision_change_skips_build(
     first_mtime = binary.lstat().st_mtime_ns
     log_directory = base / "roots" / machine["logs"]
     supervise_log = log_directory / "packages-sv-1.log"
+    environment_sha256, launched_environment = launch_environment_contract(
+        home / "mechanism" / "ops" / "deployment_operator.sh",
+        declaration_path,
+        base / "profile.toml",
+        repository / "fkst.lock",
+        "packages",
+    )
     supervise_log.write_text(
         f"EVENT=code_provenance github-devloop@{platform_revision[:8]} "
-        f"ENGINE_VER={selected_revision[:8]}\nMSG=event runtime running\n",
+        f"ENGINE_VER={selected_revision[:8]} LAUNCH_ENV_SHA256={environment_sha256}\n"
+        "MSG=event runtime running\n",
         encoding="ascii",
     )
     supervise = subprocess.Popen(
@@ -578,6 +615,15 @@ def test_engine_branch_advance_without_platform_revision_change_skips_build(
     try:
         result = run_generator(repository, home)
         assert result.returncode == 0, result.stderr
+        current_environment_sha256, current_environment = launch_environment_contract(
+            home / "mechanism" / "ops" / "deployment_operator.sh",
+            declaration_path,
+            base / "profile.toml",
+            repository / "fkst.lock",
+            "packages",
+        )
+        assert current_environment == launched_environment
+        assert current_environment_sha256 == environment_sha256
         operator = subprocess.run(
             [
                 str(home / "mechanism" / "bin" / "fkst-ops"),

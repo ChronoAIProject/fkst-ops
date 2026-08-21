@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
+LAUNCH_ENVIRONMENT = ROOT / "ops" / "deployment_launch_environment.sh"
 FKST_OPS = ROOT / "bin" / "fkst-ops"
 MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
@@ -548,6 +549,12 @@ launch_one fixture 0
             )
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             captured = json.loads(capture.read_text(encoding="utf-8"))
+            launch_log = next((root / "logs").glob("fixture-sv-*.log"))
+            marker = next(
+                field for field in launch_log.read_text(encoding="utf-8").split()
+                if field.startswith("LAUNCH_ENV_SHA256=")
+            )
+            captured["launch_environment_sha256"] = marker.partition("=")[2]
             captured["selected_platform_revision"] = selected_platform_revision
             return captured
 
@@ -705,15 +712,17 @@ github_write_posture
     def test_launch_exports_resolved_machine_values_and_declaration_roster(self) -> None:
         source = OPERATOR.read_text(encoding="utf-8")
         launch = source[source.index("launch_one() {") : source.index("launch_with_lock_retry() {")]
+        environment = LAUNCH_ENVIRONMENT.read_text(encoding="utf-8")
         expected = {
             'FKST_RATE_POOL_ROOT="$RATE_POOL"': "rate_pool",
             'FKST_GITHUB_BOT_LOGIN="$BOT"': "bot_login",
-            'FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins"': "managed_bot_logins",
+            'FKST_DEVLOOP_MANAGED_BOT_LOGINS="$DEPLOYMENT_CHILD_MANAGED_BOT_LOGINS"': "managed_bot_logins",
         }
         for export, machine_value in expected.items():
             with self.subTest(machine_value=machine_value):
-                self.assertIn(export, launch)
-        self.assertNotIn("FKST_OPS_PROFILE_MACHINE=", launch)
+                self.assertIn(export, environment)
+        self.assertIn('"${DEPLOYMENT_CHILD_ENVIRONMENT[@]}"', launch)
+        self.assertNotIn("FKST_OPS_PROFILE_MACHINE=", environment)
         captured = self._capture_launch_environment(None)
         self.assertTrue(captured["FKST_RATE_POOL_ROOT"].endswith("/rates"))
         self.assertEqual(captured["FKST_GITHUB_BOT_LOGIN"], "resolved-bot")
@@ -721,6 +730,11 @@ github_write_posture
         self.assertEqual(captured["FKST_GITHUB_REAL_GH"], "/usr/bin/true")
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_SOURCE"], "github-app")
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_RESOLVER"], "/usr/bin/true")
+
+    def test_launch_records_environment_contract_identity(self) -> None:
+        identity = self._capture_launch_environment(None)["launch_environment_sha256"]
+        self.assertEqual(len(identity), 64)
+        self.assertTrue(all(character in "0123456789abcdef" for character in identity))
 
     def test_launch_uses_the_verified_pair_when_platform_advances_before_spawn(self) -> None:
         captured = self._capture_launch_environment(
