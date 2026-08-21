@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Invoke and render the two required board provider planes."""
+"""Invoke and render the implemented board provider planes."""
 
 from __future__ import annotations
 
@@ -48,22 +48,21 @@ def render_plane(name: str, result: dict[str, Any] | None, failure: str | None) 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--github-provider", required=True)
+    parser.add_argument("--github-provider")
     parser.add_argument("--engine-provider", required=True)
-    parser.add_argument("--github-input", required=True, type=Path)
+    parser.add_argument("--github-input", type=Path)
     parser.add_argument("--engine-input", required=True, type=Path)
     args = parser.parse_args()
     try:
-        github_input = json.loads(args.github_input.read_text(encoding="utf-8"))
         engine_input = json.loads(args.engine_input.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    github = invoke(args.github_provider, "fkst.ops.board.github-control.v1", github_input)
     engine = invoke(args.engine_provider, "fkst.ops.board.engine-durable.v1", engine_input)
-    render_plane("github-control", *github)
+    print("[github-control]")
+    print("MISSING github-control: plane is not implemented")
     render_plane("engine-durable", *engine)
-    return 1 if github[1] is not None or engine[1] is not None else 0
+    return 1 if engine[1] is not None else 0
 
 
 if __name__ == "__main__":
