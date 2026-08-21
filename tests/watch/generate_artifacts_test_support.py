@@ -21,6 +21,33 @@ GIT = shutil.which("git")
 assert GIT is not None
 
 
+def path_without(root: Path, *excluded: str) -> str:
+    """Mirror the ambient executable PATH while omitting exact tool names."""
+    directory = root / "selective-path"
+    directory.mkdir()
+    excluded_names = set(excluded)
+    included_names: set[str] = set()
+    for path_entry in os.get_exec_path():
+        source_directory = Path(path_entry or os.curdir)
+        try:
+            # Materialise inside the guard. A PATH entry that does not exist is ordinary -
+            # a hosted runner ships `~/.local/bin` on PATH without creating it - and on the
+            # interpreter this suite runs in CI the failure surfaced from iteration rather
+            # than from the call, so guarding only the call caught nothing there while
+            # appearing to work on the developer's newer interpreter.
+            entries = list(source_directory.iterdir())
+        except OSError:
+            continue
+        for source in entries:
+            if source.name in excluded_names or source.name in included_names:
+                continue
+            if not source.is_file() or not os.access(source, os.X_OK):
+                continue
+            (directory / source.name).symlink_to(source.absolute())
+            included_names.add(source.name)
+    return str(directory)
+
+
 def git(root: Path, *args: str) -> str:
     return subprocess.run(
         [GIT, "-C", str(root), *args], text=True, capture_output=True, check=True
@@ -152,7 +179,6 @@ def run_generator(
         )
         launchctl.chmod(0o755)
     environment = {**os.environ, "HOME": str(home)}
-    environment["PATH"] = os.pathsep.join((environment.get("PATH", ""), str(Path(GIT).parent)))
     environment.pop("GH_TOKEN", None)
     environment.update({
         "FKST_LAUNCHCTL": str(launchctl),
