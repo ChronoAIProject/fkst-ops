@@ -171,13 +171,18 @@ both repositories must contain each other's `HEAD` commit; mutable origin URLs
 do not establish this identity. These are expressible inputs, not authority
 reductions.
 
-Deployment-operated lock entries contain source identity and Git URL only. A
-`resolved` table on such an entry is invalid. The mechanism entry is different:
-its `resolved.rev` and `resolved.tree_sha256` remain required and are enforced by
-exact `HEAD` and canonical tracked-tree equality before execution.
+Deployment-operated lock entries contain source identity and Git URL, with an
+optional `resolved` table. When present, `resolved.rev` and
+`resolved.tree_sha256` are enforced by exact detached `HEAD` and canonical
+tracked-tree equality during source hydration and `sync`; the checkout is not
+advanced to its integration branch. When absent, the source remains
+branch-operated. The mechanism entry is different only in that its `resolved`
+table remains required and its exact pin is enforced before execution.
 
-Target and platform checkouts are branch-operated. The engine checkout must be
-a separate checkout and is detached at `E`. The engine provider accepts exactly
+Target and platform checkouts are branch-operated unless their deployment-
+operated lock entry carries `resolved`; a pinned checkout is detached at its
+declared revision. The engine checkout must be a separate checkout and is
+detached at `E`. The engine provider accepts exactly
 `engine_checkout`, `engine_binary`, `expected_revision`, `operation`, and
 `build_command`; `expected_branch` and every other extra input are invalid. It
 fetches `E` explicitly, checks out `E` detached, verifies `HEAD == E` before and

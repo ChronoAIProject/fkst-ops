@@ -181,10 +181,7 @@ def _validate_lock(lock: dict[str, Any]) -> dict[str, dict[str, Any]]:
         checkout_role = _string(entry, "checkout_role", path)
         if checkout_role not in {"deployment-operated", "mechanism"}:
             _fail(path + ".checkout_role", "must be deployment-operated or mechanism")
-        if checkout_role == "deployment-operated":
-            if "resolved" in entry:
-                _fail(path + ".resolved", "deployment-operated source must not contain resolved")
-        else:
+        if checkout_role == "mechanism" or "resolved" in entry:
             resolved = _table(entry.get("resolved"), f"{path}.resolved")
             _closed(resolved, {"rev", "tree_sha256"}, f"{path}.resolved")
             rev = _string(resolved, "rev", f"{path}.resolved")
@@ -563,6 +560,8 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                 "git": pins[lock_ref]["git"],
                 "checkout_role": pins[lock_ref]["checkout_role"],
             }
+            if "resolved" in pins[lock_ref]:
+                resolved_sources[role]["resolved"] = copy.deepcopy(pins[lock_ref]["resolved"])
 
         engine_revision_path = path + ".engine_revision"
         engine_revision = _table(dep.get("engine_revision"), engine_revision_path)
