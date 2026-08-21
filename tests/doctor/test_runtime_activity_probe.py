@@ -116,6 +116,21 @@ class RuntimeActivityProbeTest(unittest.TestCase):
         self.assertEqual(result.state, "unknown")
         self.assertEqual(result.failure["kind"], "invalid_time")
 
+    def test_artifact_written_during_scan_is_present(self) -> None:
+        fact = ActivityFact(str(self.runtime / "during-scan.diff"), self.now + 1)
+        scan = ActivityScan(str(self.runtime), (fact,), 1)
+        clock = iter((self.now, self.now + 2)).__next__
+
+        result = probe_runtime_activity(
+            self.deployment, self.since, FixtureInstrument(scan), clock=clock
+        )
+
+        self.assertEqual(result.state, "present")
+        self.assertEqual(result.as_dict()["matching_count"], 1)
+        self.assertEqual(result.time["now"], self.now)
+        self.assertEqual(result.time["observation_end"], self.now + 2)
+        self.assertTrue(result.coverage["time_conversion_validated"])
+
 
 if __name__ == "__main__":
     unittest.main()

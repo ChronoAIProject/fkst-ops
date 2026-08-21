@@ -137,6 +137,7 @@ def _failure_result(
     *,
     selector_validated: bool,
     time_validated: bool,
+    observation_end_ns: object | None = None,
 ) -> ProbeResult:
     return ProbeResult(
         probe="runtime_artifact_activity",
@@ -146,6 +147,7 @@ def _failure_result(
         time={
             "basis": "unix_epoch_ns",
             "now": now_ns,
+            "observation_end": observation_end_ns,
             "window_start": since_ns,
             "clock": "time.time_ns",
         },
@@ -223,6 +225,19 @@ def probe_runtime_activity(
             identity, now_ns, since_ns, instrument.name, failure,
             selector_validated=True, time_validated=True,
         )
+    observation_end_ns = now_ns if now_epoch_ns is not None else clock()
+    if type(observation_end_ns) is not int or observation_end_ns < now_ns:
+        failure = ProbeFailure(
+            "invalid_time",
+            "captured observation interval has an invalid closing time",
+            captured_now=now_ns,
+            observation_end=observation_end_ns,
+        )
+        return _failure_result(
+            identity, now_ns, since_ns, instrument.name, failure,
+            selector_validated=True, time_validated=False,
+            observation_end_ns=observation_end_ns,
+        )
     if scan.root != runtime_root:
         failure = ProbeFailure(
             "identity_failure",
@@ -233,6 +248,7 @@ def probe_runtime_activity(
         return _failure_result(
             identity, now_ns, since_ns, instrument.name, failure,
             selector_validated=False, time_validated=True,
+            observation_end_ns=observation_end_ns,
         )
     if not scan.complete or scan.truncated:
         failure = ProbeFailure(
@@ -245,6 +261,7 @@ def probe_runtime_activity(
         return _failure_result(
             identity, now_ns, since_ns, instrument.name, failure,
             selector_validated=True, time_validated=True,
+            observation_end_ns=observation_end_ns,
         )
 
     matching: list[ActivityFact] = []
@@ -270,18 +287,23 @@ def probe_runtime_activity(
             return _failure_result(
                 identity, now_ns, since_ns, instrument.name, failure,
                 selector_validated=False, time_validated=True,
+                observation_end_ns=observation_end_ns,
             )
-        if type(fact.modified_epoch_ns) is not int or not 0 < fact.modified_epoch_ns <= now_ns:
+        if (
+            type(fact.modified_epoch_ns) is not int
+            or not 0 < fact.modified_epoch_ns <= observation_end_ns
+        ):
             failure = ProbeFailure(
                 "invalid_time",
                 "artifact modification time is outside the captured observation interval",
                 observed_path=fact.path,
                 modified=fact.modified_epoch_ns,
-                captured_now=now_ns,
+                captured_now=observation_end_ns,
             )
             return _failure_result(
                 identity, now_ns, since_ns, instrument.name, failure,
                 selector_validated=True, time_validated=False,
+                observation_end_ns=observation_end_ns,
             )
         if fact.modified_epoch_ns >= since_ns:
             matching.append(fact)
@@ -307,6 +329,7 @@ def probe_runtime_activity(
         time={
             "basis": "unix_epoch_ns",
             "now": now_ns,
+            "observation_end": observation_end_ns,
             "window_start": since_ns,
             "clock": "time.time_ns",
         },
