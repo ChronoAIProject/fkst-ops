@@ -71,16 +71,22 @@ empty="__FKST_OPS_EMPTY__"
 def provider(field):
     binding=dep["providers"][field]
     return [binding["executable"],binding["contract"],json.dumps(binding["configuration"],separators=(",",":"))]
+def source_pin(role):
+    value=dep["sources"].get(role, {}).get("resolved")
+    return json.dumps(value,separators=(",",":")) if value is not None else empty
 claim=dep["claim_posture"]
 authorization=dep["author_authorization"]
 derivation=dep["engine_revision"]
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],"1" if dep["github_write_enabled"] else "0",claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],"1" if dep["github_write_enabled"] else "0",claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE GITHUB_WRITE_POSTURE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE GITHUB_WRITE_POSTURE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
+  [ "$TARGET_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && TARGET_SOURCE_PIN=""
+  [ "$PLATFORM_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && PLATFORM_SOURCE_PIN=""
+  [ "$ENGINE_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && ENGINE_SOURCE_PIN=""
   ENGINE_BINARY_BASE="$BIN"
   CARGO="$("$PYTHON" -c 'import json, pathlib, sys; command=json.loads(sys.argv[1])["build_command"]; print(command[0] if pathlib.Path(command[0]).name == "cargo" else "")' "$ENGINE_PROVIDER_CONFIGURATION")" || return 1
 }
@@ -298,6 +304,64 @@ sync_to_run_branch() { # $1 worktree dir
   echo "  $1 -> $head${note:+ ($note)} ($INTEGRATION_BRANCH)"
 }
 
+source_pin_values() { # $1 JSON resolved pin
+  "$PYTHON" -c 'import json,sys; pin=json.loads(sys.argv[1]); print(pin["rev"], pin["tree_sha256"], sep="\t")' "$1"
+}
+
+sync_to_pinned_revision() { # $1 worktree dir, $2 revision, $3 canonical tree hash
+  git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || {
+    echo "  $1 -> PINNED-SOURCE-INVALID: not a git worktree"; return 1;
+  }
+  restore_generated_workspace_scratch "$1"
+  local status
+  status=$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null) || {
+    echo "  $1 -> PINNED-WORKTREE-VERIFY-FAILED"; return 1;
+  }
+  [ -z "$status" ] || {
+    echo "  $1 -> PINNED-WORKTREE-DIRTY"; return 1;
+  }
+  if ! git -C "$1" rev-parse --verify "$2^{commit}" >/dev/null 2>&1; then
+    git -C "$1" fetch origin "$2" -q 2>/dev/null || {
+      echo "  $1 -> PINNED-FETCH-FAILED ($2)"; return 1;
+    }
+  fi
+  git -C "$1" checkout -q --detach "$2" 2>/dev/null || {
+    echo "  $1 -> PINNED-CHECKOUT-FAILED ($2)"; return 1;
+  }
+  local head tree
+  head=$(git -C "$1" rev-parse --verify HEAD^{commit} 2>/dev/null) || {
+    echo "  $1 -> PINNED-REVISION-MISMATCH (missing HEAD; expected $2)"; return 1;
+  }
+  [ "$head" = "$2" ] || {
+    echo "  $1 -> PINNED-REVISION-MISMATCH (got $head, expected $2)"; return 1;
+  }
+  status=$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null) || {
+    echo "  $1 -> PINNED-WORKTREE-VERIFY-FAILED"; return 1;
+  }
+  [ -z "$status" ] || {
+    echo "  $1 -> PINNED-WORKTREE-DIRTY"; return 1;
+  }
+  tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$1" "$2" 2>/dev/null) || {
+    echo "  $1 -> PINNED-TREE-VERIFY-FAILED ($2)"; return 1;
+  }
+  [ "$tree" = "$3" ] || {
+    echo "  $1 -> PINNED-TREE-MISMATCH (got $tree, expected $3)"; return 1;
+  }
+  echo "  $1 -> ${head:0:12} (pinned $2)"
+}
+
+sync_deployment_source() { # $1 worktree dir, $2 optional JSON resolved pin
+  local pin="${2:-}" revision tree
+  if [ -z "$pin" ] || [ "$pin" = "__FKST_OPS_EMPTY__" ]; then
+    sync_to_run_branch "$1"
+    return $?
+  fi
+  IFS=$'\t' read -r revision tree <<<"$(source_pin_values "$pin")" || {
+    echo "  $1 -> PINNED-SOURCE-INVALID"; return 1;
+  }
+  sync_to_pinned_revision "$1" "$revision" "$tree"
+}
+
 # Ensure a checkout's INTEGRATION_BRANCH is >= UPSTREAM_BRANCH (dev) by merging upstream
 # FORWARD into integration and pushing. Why: operator out-of-band fixes land on dev; the
 # deployment runs on integration; the in-pipeline sync_scan ff's dev->integration but can lag
@@ -427,8 +491,19 @@ invoke_engine_build_provider() {
 }
 
 ensure_engine_binary_current() {
-  local response source_revision
+  local response source_revision pinned_revision pinned_tree
   resolve_engine_pair || return $?
+  if [ -n "${ENGINE_SOURCE_PIN:-}" ]; then
+    IFS=$'\t' read -r pinned_revision pinned_tree <<<"$(source_pin_values "$ENGINE_SOURCE_PIN")" || {
+      echo "ENGINE-SOURCE-PIN-INVALID: cannot parse engine source pin" >&2
+      return 1
+    }
+    [ "$pinned_revision" = "$ENGINE_REVISION" ] || {
+      echo "ENGINE-SOURCE-PIN-MISMATCH: expected derived engine revision $ENGINE_REVISION, got $pinned_revision" >&2
+      return 1
+    }
+    sync_to_pinned_revision "$ENGINE_CHECKOUT" "$pinned_revision" "$pinned_tree" || return 1
+  fi
   if engine_build_receipt_current; then
     ENGINE_BUILD_STATUS="current: $BIN@${ENGINE_REVISION:0:8}"
     return 0
@@ -715,10 +790,12 @@ restart_one() {
     ensure_run_checkout "$HOST" "$TARGET_GIT_URL" || return 1
   fi
   derive_devloop_pkgs_from_workspace "$1" || return 1
-  ensure_integration_caught_up "$PKGSRC"                              # keep run branch (integration) >= dev so operator fixes deploy
-  [ "$HOST" != "$PKGSRC" ] && ensure_integration_caught_up "$HOST"
-  sync_to_run_branch "$PKGSRC"
-  [ "$HOST" != "$PKGSRC" ] && sync_to_run_branch "$HOST"
+  [ -n "$PLATFORM_SOURCE_PIN" ] || ensure_integration_caught_up "$PKGSRC"  # pinned sources must not advance
+  if [ "$HOST" != "$PKGSRC" ] && [ -z "$TARGET_SOURCE_PIN" ]; then
+    ensure_integration_caught_up "$HOST"
+  fi
+  sync_deployment_source "$PKGSRC" "$PLATFORM_SOURCE_PIN"
+  [ "$HOST" != "$PKGSRC" ] && sync_deployment_source "$HOST" "$TARGET_SOURCE_PIN"
   # One migration bridge: a supervise launched before the host-run contract has no
   # durable pidfile yet, so --restart has nothing to kill on the first upgraded run.
   [ ! -f "$DUR/.fkst-supervise.pid" ] && { stop_one "$1"; sleep 1; }
@@ -793,11 +870,18 @@ platform_paths_require_restart() {
 
 _proc_stale() {
   cfg "$1" || { echo unknown; return; }
-  local p log procpkg proceng pdev changed_paths; p=$(pidof_df); log=$(latest_log "$1")
+  local p log procpkg proceng pdev changed_paths pin_revision; p=$(pidof_df); log=$(latest_log "$1")
   [ -z "$p" ] && { echo stopped; return; }
   derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
-  git -C "$PKGSRC" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null
-  pdev=$(git -C "$PKGSRC" rev-parse "origin/$INTEGRATION_BRANCH" 2>/dev/null)
+  if [ -n "${PLATFORM_SOURCE_PIN:-}" ]; then
+    IFS=$'\t' read -r pin_revision _ <<<"$(source_pin_values "$PLATFORM_SOURCE_PIN")" || {
+      echo pinned-source-invalid; return;
+    }
+    pdev="$pin_revision"
+  else
+    git -C "$PKGSRC" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null
+    pdev=$(git -C "$PKGSRC" rev-parse "origin/$INTEGRATION_BRANCH" 2>/dev/null)
+  fi
   resolve_engine_pair || { echo engine-revision-failed; return; }
   procpkg=$(grep -aoE "${DEVLOOP_PKGS%% *}@[a-f0-9]+" "$log" 2>/dev/null | tail -1 | cut -d@ -f2)   # any platform pkg's commit reflects the running code
   proceng=$(grep -aoE 'ENGINE_VER=[a-f0-9]+' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
@@ -817,17 +901,36 @@ _proc_stale() {
 # (pkg-stale/engine-stale). Skill/docs-only skew and already-current processes are
 # left running — a restart would only churn in-flight codex for no code change.
 cmd_sync() {
-  local n st failed=0
+  local n st failed=0 platform_pin target_pin
   for n in $(expand "${1:-all}"); do
     cfg "$n" || { failed=1; continue; }
+    # Reap orphaned locks before any checkout work: a lock left by a dead process
+    # blocks every subsequent git operation on that worktree, and the sweep keeps
+    # any lock it cannot prove unheld.
     git_lock_sweep "$n" "$HOST" "$PKGSRC" "$RUNTIME_ROOT" || { failed=1; continue; }
-    echo "[$n] deployment source checkouts -> origin/$INTEGRATION_BRANCH:"
+    platform_pin="${PLATFORM_SOURCE_PIN:-}"
+    target_pin="${TARGET_SOURCE_PIN:-}"
+    if [ -n "$platform_pin" ] || [ -n "$target_pin" ]; then
+      echo "[$n] deployment source checkouts (pinned revisions where declared):"
+    else
+      echo "[$n] deployment source checkouts -> origin/$INTEGRATION_BRANCH:"
+    fi
     derive_devloop_pkgs_from_workspace "$n" || { echo "  $n: config-error"; failed=1; continue; }
-    ensure_integration_caught_up "$PKGSRC"                              # keep run branch (integration) >= dev so operator fixes deploy
-    [ "$HOST" != "$PKGSRC" ] && ensure_integration_caught_up "$HOST"
-    sync_to_run_branch "$PKGSRC" || { failed=1; continue; }
+    [ -n "$platform_pin" ] || ensure_integration_caught_up "$PKGSRC"  # pinned sources must not advance
+    if [ "$HOST" != "$PKGSRC" ] && [ -z "$target_pin" ]; then
+      ensure_integration_caught_up "$HOST"
+    fi
+    if [ -n "$platform_pin" ]; then
+      sync_deployment_source "$PKGSRC" "$platform_pin" || { failed=1; continue; }
+    else
+      sync_to_run_branch "$PKGSRC" || { failed=1; continue; }
+    fi
     if [ "$HOST" != "$PKGSRC" ]; then
-      sync_to_run_branch "$HOST" || { failed=1; continue; }
+      if [ -n "$target_pin" ]; then
+        sync_deployment_source "$HOST" "$target_pin" || { failed=1; continue; }
+      else
+        sync_to_run_branch "$HOST" || { failed=1; continue; }
+      fi
     fi
     echo "[$n] engine BIN:"
     bin_ensure_fresh | sed 's/^/  /' || { failed=1; continue; }

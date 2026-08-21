@@ -286,6 +286,102 @@ sync_to_run_branch /checkout
                 self.assertEqual(result.returncode, status, result.stdout + result.stderr)
                 self.assertIn(marker, result.stdout)
 
+    def test_pinned_source_is_verified_without_advancing_to_integration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "Test"], check=True)
+            (source / "state").write_text("pinned\n", encoding="ascii")
+            subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-qm", "pinned"], check=True)
+            pinned = subprocess.run(
+                ["git", "-C", str(source), "rev-parse", "HEAD"], text=True,
+                capture_output=True, check=True,
+            ).stdout.strip()
+            subprocess.run(["git", "-C", str(source), "branch", "integration"], check=True)
+            checkout = root / "checkout"
+            subprocess.run(["git", "clone", "-q", str(source), str(checkout)], check=True)
+            (source / "state").write_text("advanced\n", encoding="ascii")
+            subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-qm", "advance integration"], check=True)
+            subprocess.run(["git", "-C", str(source), "branch", "-f", "integration", "HEAD"], check=True)
+            advanced = subprocess.run(
+                ["git", "-C", str(source), "rev-parse", "integration"], text=True,
+                capture_output=True, check=True,
+            ).stdout.strip()
+            subprocess.run(["git", "-C", str(checkout), "fetch", "-q", "origin", "integration"], check=True)
+            subprocess.run(
+                ["git", "-C", str(checkout), "checkout", "-q", "-B", "integration", "origin/integration"],
+                check=True,
+            )
+            self.assertEqual(advanced, subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True,
+                capture_output=True, check=True,
+            ).stdout.strip())
+            tree = subprocess.run(
+                [sys.executable, str(ROOT / "bootstrap" / "canonical_tree.py"), str(source), pinned],
+                text=True, capture_output=True, check=True,
+            ).stdout.strip()
+            command = f'''PYTHON="{sys.executable}"
+_repo_root="{ROOT}"
+_self_dir="{ROOT / 'ops'}"
+eval "$(sed -n '/^restore_generated_workspace_scratch()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^sync_to_pinned_revision()/,/^}}/p' "{OPERATOR}")"
+sync_to_pinned_revision "$1" "$2" "$3"
+'''
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(checkout), pinned, tree],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(pinned, subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True,
+                capture_output=True, check=True,
+            ).stdout.strip())
+            self.assertEqual("", subprocess.run(
+                ["git", "-C", str(checkout), "branch", "--show-current"], text=True,
+                capture_output=True, check=True,
+            ).stdout.strip())
+            self.assertNotEqual(pinned, advanced)
+            self.assertIn("(pinned", result.stdout)
+
+    def test_pinned_source_failure_is_typed_and_does_not_fall_back(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "Test"], check=True)
+            (source / "state").write_text("branch\n", encoding="ascii")
+            subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-qm", "branch"], check=True)
+            checkout = root / "checkout"
+            subprocess.run(["git", "clone", "-q", str(source), str(checkout)], check=True)
+            before = subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True,
+                capture_output=True, check=True,
+            ).stdout.strip()
+            missing = "f" * 40
+            command = f'''PYTHON="{sys.executable}"
+_repo_root="{ROOT}"
+_self_dir="{ROOT / 'ops'}"
+eval "$(sed -n '/^restore_generated_workspace_scratch()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^sync_to_pinned_revision()/,/^}}/p' "{OPERATOR}")"
+sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
+'''
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(checkout), missing],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("PINNED-FETCH-FAILED", result.stdout)
+            self.assertEqual(before, subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True,
+                capture_output=True, check=True,
+            ).stdout.strip())
+
     def _capture_launch_environment(
         self, write: str | None, deployment_python: str = "/fixture/resolved/python",
         credential_source: str = "github-app",
