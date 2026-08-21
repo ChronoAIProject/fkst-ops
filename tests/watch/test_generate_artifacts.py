@@ -21,6 +21,7 @@ from generate_artifacts_test_support import (
     GIT,
     ROOT,
     git,
+    path_without,
     prepared,
     run_generator,
     source,
@@ -327,7 +328,10 @@ def test_generation_fails_with_unavailable_declared_tool_named(
         executable = tool_directory / name
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
         executable.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tool_directory))
+    restricted_path = path_without(tmp_path, missing_tool)
+    monkeypatch.setenv("PATH", str(tool_directory) + os.pathsep + restricted_path)
+    assert shutil.which(missing_tool) is None
+    assert all(shutil.which(name) is not None for name in ("git", "mkdir", "chmod"))
 
     result = run_generator(repository, home)
 
@@ -347,7 +351,10 @@ def test_generation_fails_with_unavailable_required_mechanism_tool_named(
         executable = tool_directory / name
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
         executable.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tool_directory))
+    restricted_path = path_without(tmp_path, "gh")
+    monkeypatch.setenv("PATH", str(tool_directory) + os.pathsep + restricted_path)
+    assert shutil.which("gh") is None
+    assert all(shutil.which(name) is not None for name in ("git", "mkdir", "chmod"))
 
     result = run_generator(repository, home)
 
@@ -366,7 +373,10 @@ def test_generation_requires_codex_as_a_path_delivered_mechanism_tool(
         executable = tool_directory / name
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
         executable.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tool_directory))
+    restricted_path = path_without(tmp_path, "codex")
+    monkeypatch.setenv("PATH", str(tool_directory) + os.pathsep + restricted_path)
+    assert shutil.which("codex") is None
+    assert all(shutil.which(name) is not None for name in ("git", "mkdir", "chmod"))
 
     result = run_generator(repository, home)
 
