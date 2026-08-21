@@ -102,7 +102,7 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
                         "packages": {"host": []},
                         "sources": {
                             "target": {"git": "target"},
-                            "platform": {"git": "platform"},
+                            "platform": {"git": "platform"}, "engine": {"git": "engine"},
                         },
                     }
                     for name in ("fails", "stopped")
@@ -223,7 +223,7 @@ stop_one "$1"
                 "packages": {"host": []},
                 "sources": {
                     "target": {"git": "target"},
-                    "platform": {"git": "platform"},
+                    "platform": {"git": "platform"}, "engine": {"git": "engine"},
                 },
             }
 
@@ -385,16 +385,19 @@ sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
                 capture_output=True, check=True,
             ).stdout.strip())
 
-    def _capture_launch_environment(
-        self, write: str | None, deployment_python: str = "/fixture/resolved/python",
+    def _capture_launch_environment(self, write: str | None,
         credential_source: str = "github-app",
         advance_platform_before_spawn: bool = False,
     ) -> dict[str, str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             platform = root / "platform"
-            run_script = platform / "scripts" / "run.sh"
-            run_script.parent.mkdir(parents=True)
+            platform.mkdir()
+            (platform / "packages" / "pkg").mkdir(parents=True)
+            (platform / "packages" / "pkg" / "fkst.toml").write_text(
+                'kind = "package"\nname = "pkg"\n', encoding="ascii"
+            )
+            engine_script = root / "fixture-engine"
             revision_path = platform / ".control" / "engine-ref"
             revision_path.parent.mkdir(parents=True)
             selected_engine_revision = "b" * 40
@@ -440,15 +443,18 @@ sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
                 encoding="ascii",
             )
             fake_python.chmod(0o755)
-            run_script.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os, pathlib, shutil, subprocess, sys, time, tomllib\n"
-                "keys = ['PATH', 'FKST_CARGO', 'FKST_PYTHON', 'FKST_GITHUB_CREDENTIAL_SOURCE', 'FKST_GITHUB_CREDENTIAL_RESOLVER', 'FKST_GITHUB_REAL_GH', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS']\n"
+            engine_script.write_text(
+                f"#!{sys.executable}\n"
+                "import json, os, pathlib, shutil, subprocess, sys, time\n"
+                "keys = ['PATH', 'FKST_CARGO', 'FKST_PYTHON', 'FKST_ENGINE_SOURCE_GIT', 'FKST_GITHUB_CREDENTIAL_SOURCE', 'FKST_GITHUB_CREDENTIAL_RESOLVER', 'FKST_GITHUB_REAL_GH', 'FKST_GITHUB_WRITE', 'FKST_GITHUB_CLAIM_MODE', 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE', 'FKST_RATE_POOL_ROOT', 'FKST_GITHUB_BOT_LOGIN', 'FKST_DEVLOOP_MANAGED_BOT_LOGINS', 'FKST_GITHUB_AUTHORIZED_LOGINS', 'FKST_GITHUB_AUTHORIZE_ORG_MEMBERS', 'FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS', 'FKST_EXPECTED_ENGINE_REVISION', 'FKST_PROJECT_ROOT', 'FKST_RUNTIME_ROOT', 'FKST_DURABLE_ROOT', 'FKST_CODEX_REPOSITORY_ROOTS']\n"
                 "captured = {key: os.environ.get(key) for key in keys}\n"
-                "platform_root = pathlib.Path(sys.argv[sys.argv.index('--platform-root') + 1])\n"
+                "package_root = pathlib.Path(sys.argv[sys.argv.index('--package-root') + 1])\n"
+                "platform_root = package_root.parents[1]\n"
                 "captured['platform_root'] = str(platform_root)\n"
                 "captured['platform_revision'] = subprocess.check_output(['git', '-C', str(platform_root), 'rev-parse', 'HEAD'], text=True).strip()\n"
                 "captured['engine_revision'] = subprocess.check_output(['git', '-C', str(platform_root), 'show', 'HEAD:.control/engine-ref'], text=True).strip()\n"
+                "captured['argv'] = sys.argv\n"
+                "captured['pid'], captured['pgid'] = os.getpid(), os.getpgid(0)\n"
                 "captured['codex'] = shutil.which('codex')\n"
                 "captured['python3'], captured['python3_executable'] = shutil.which('python3'), sys.executable\n"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps(captured))\n"
@@ -457,7 +463,7 @@ sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
                 "time.sleep(4)\n",
                 encoding="ascii",
             )
-            run_script.chmod(0o755)
+            engine_script.chmod(0o755)
             subprocess.run(["git", "init", "-q", str(platform)], check=True)
             subprocess.run(
                 ["git", "-C", str(platform), "config", "user.email", "test@example.invalid"],
@@ -476,6 +482,17 @@ sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
                 capture_output=True,
                 check=True,
             ).stdout.strip()
+            host = root / "host"
+            host.mkdir()
+            (host / "fkst.workspace.toml").write_text(
+                f'[[external_sources]]\nid = "platform"\ngit = {json.dumps(str(platform))}\npackages = ["pkg"]\n',
+                encoding="ascii",
+            )
+            (host / "fkst.lock").write_text(
+                f'[[external_source]]\nid = "platform"\ngit = {json.dumps(str(platform))}\n'
+                f'[external_source.resolved]\nrev = "{selected_platform_revision}"\ntree_sha256 = "sha256-test"\n',
+                encoding="ascii",
+            )
             advanced_platform_revision = ""
             if advance_platform_before_spawn:
                 (platform / "platform-state").write_text("advanced\n", encoding="ascii")
@@ -499,18 +516,14 @@ cfg() {{ :; }}
 ensure_engine_binary_current() {{
   PLATFORM_REVISION={selected_platform_revision}; ENGINE_REVISION={selected_engine_revision}
   ENGINE_BINARY_BASE="$HOST/engine"; BIN="$ENGINE_BINARY_BASE-$ENGINE_REVISION"
-  printf '#!/bin/sh\nexit 0\n' > "$BIN"; chmod 755 "$BIN"
+  cp "$(dirname "$HOST")/fixture-engine" "$BIN"; chmod 755 "$BIN"
+  PYTHONPATH="$_repo_root" "$PYTHON" -c 'import sys; from pathlib import Path; from ops.revision_derivation import write_build_receipt; write_build_receipt(Path(sys.argv[1]), sys.argv[2], ["fixture-build"])' "$BIN" "$ENGINE_REVISION"
   if [ -n "${{RACE_PLATFORM_REVISION:-}}" ]; then
     git -C "$PKGSRC" reset --hard -q "$RACE_PLATFORM_REVISION" || return 1
   fi
 }}
 engine_build_receipt_current() {{ :; }}
 derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=pkg; }}
-wait_supervise_ready() {{
-  local attempts=0
-  while [ ! -f "$CAPTURE" ] && [ "$attempts" -lt 50 ]; do sleep 0.1; attempts=$((attempts + 1)); done
-  [ -f "$CAPTURE" ]
-}}
 clean_stale_runtime_worktrees() {{ :; }}
 clean_stale_launch_platforms() {{ :; }}
 clean_stale_engine_artifacts() {{ :; }}
@@ -518,13 +531,14 @@ engine_panic_count() {{ echo 0; }}
 REPO=example/repo; HOST="$1/host"; PKGSRC="$1/platform"; BIN=/bin/true
 REVISION_SOURCE="$PKGSRC"; ENGINE_REVISION_PATH=.control/engine-ref
 CARGO=/fixture/resolved/cargo
-DEPLOYMENT_PYTHON={deployment_python!s}
+DEPLOYMENT_PYTHON="$FKST_OPS_PYTHON"
 DUR="$1/durable"; RUNTIME_ROOT="$1/runtime"; LOGDIR="$1/logs"
 RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","peer-bot"]'
 AUTHORIZED_LOGINS='["trusted-author","second-author"]'; AUTHORIZE_ORG_MEMBERS=1; AUTHORIZE_REPO_COLLABORATORS=0
 UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
 CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
-LOCAL_PKGS=; GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{json.dumps({"source": credential_source}, separators=(",", ":"))}'
+LOCAL_PKGS=; ENGINE_GIT_URL=https://github.com/Example-Org/engine-core.git
+GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{json.dumps({"source": credential_source}, separators=(",", ":"))}'
 mkdir -p "$HOST" "$DUR" "$RUNTIME_ROOT" "$LOGDIR"
 launch_one fixture 0
 '''
@@ -737,6 +751,7 @@ github_write_posture
         self.assertEqual(captured["FKST_GITHUB_REAL_GH"], "/usr/bin/true")
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_SOURCE"], "github-app")
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_RESOLVER"], "/usr/bin/true")
+        self.assertEqual(captured["FKST_ENGINE_SOURCE_GIT"], "https://github.com/Example-Org/engine-core.git")
 
     def test_launch_records_environment_contract_identity(self) -> None:
         identity = self._capture_launch_environment(None)["launch_environment_sha256"]
@@ -744,14 +759,14 @@ github_write_posture
         self.assertTrue(all(character in "0123456789abcdef" for character in identity))
 
     def test_launch_uses_the_verified_pair_when_platform_advances_before_spawn(self) -> None:
-        captured = self._capture_launch_environment(
-            None, advance_platform_before_spawn=True
-        )
+        captured = self._capture_launch_environment(None, advance_platform_before_spawn=True)
 
         self.assertEqual(captured["selected_platform_revision"], captured["platform_revision"])
         self.assertEqual("b" * 40, captured["engine_revision"])
         self.assertIn("/runtime/.platform/", captured["platform_root"])
         self.assertTrue(captured["platform_root"].endswith(captured["selected_platform_revision"]))
+        self.assertEqual(captured["pid"], captured["pgid"])
+        self.assertEqual(captured["argv"][1], "supervise")
 
     def test_launch_forwards_resolved_github_credential_source(self) -> None:
         captured = self._capture_launch_environment(
@@ -777,7 +792,7 @@ github_write_posture
 
     def test_resolved_python_reaches_launched_process(self) -> None:
         captured = self._capture_launch_environment(None)
-        self.assertEqual(captured["FKST_PYTHON"], "/fixture/resolved/python")
+        self.assertTrue(captured["FKST_PYTHON"].endswith("/python"))
 
     def test_bare_python_fallback_resolves_the_executable_it_actually_runs(self) -> None:
         function = next(

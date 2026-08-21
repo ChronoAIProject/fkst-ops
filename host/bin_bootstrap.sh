@@ -47,19 +47,23 @@ bootstrap_read_pin() {
 }
 
 bootstrap_parse_pin() {
-  local pin="$1" owner repo ref owner_repo
+  local pin="$1" engine_git="${2:-${FKST_ENGINE_SOURCE_GIT:-}}" owner repo ref owner_repo
   if [[ "$pin" == *@* && "$pin" == */* ]]; then
     owner_repo="${pin%@*}"
     ref="${pin#*@}"
     owner="${owner_repo%%/*}"
     repo="${owner_repo#*/}"
   else
-    owner="${FKST_SUBSTRATE_OWNER:-}"
-    repo="${FKST_SUBSTRATE_REPO_NAME:-}"
+    if [[ "$engine_git" =~ ^https://github\.com/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9._-]+)\.git$ ]]; then
+      owner="${BASH_REMATCH[1]}"
+      repo="${BASH_REMATCH[2]}"
+    else
+      bootstrap_die "short engine source pin requires FKST_ENGINE_SOURCE_GIT=https://github.com/<owner>/<repository>.git"
+    fi
     ref="$pin"
   fi
-  [ -n "$owner" ] || bootstrap_die "invalid engine source pin owner: $pin (set FKST_SUBSTRATE_OWNER for a short pin)"
-  [ -n "$repo" ] || bootstrap_die "invalid engine source pin repository: $pin (set FKST_SUBSTRATE_REPO_NAME for a short pin)"
+  [ -n "$owner" ] || bootstrap_die "invalid engine source pin owner: $pin"
+  [ -n "$repo" ] || bootstrap_die "invalid engine source pin repository: $pin"
   [ -n "$ref" ] || bootstrap_die "invalid engine source pin revision: $pin"
   printf '%s\n%s\n%s\n' "$owner" "$repo" "$ref"
 }

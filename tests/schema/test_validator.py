@@ -356,6 +356,8 @@ class ValidatorTests(unittest.TestCase):
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
         source = result["deployment"][0]["sources"]["platform"]
         self.assertEqual(source["git"], "https://invalid.example/target.git")
+        engine = result["deployment"][0]["sources"]["engine"]
+        self.assertEqual(engine["git"], "https://invalid.example/engine.git")
 
     def test_engine_revision_derivation_resolves_without_deployment_source_pins(self) -> None:
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
