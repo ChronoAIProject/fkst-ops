@@ -130,3 +130,29 @@ def test_readonly_miss_does_not_invoke_provider(tmp_path):
     command = f'. "{BOOTSTRAP}"; resolve_bin_contract "$1" readonly'
     result = subprocess.run(["bash", "-c", command, "test", str(tmp_path)], text=True, capture_output=True)
     assert result.returncode != 0
+
+
+def test_short_pin_uses_declared_engine_source_git_not_ambient_owner_repository():
+    command = f'. "{BOOTSTRAP}"; bootstrap_parse_pin short-ref'
+    environment = {
+        **os.environ,
+        "FKST_ENGINE_SOURCE_GIT": "https://github.com/Example-Org/engine-core.git",
+        "FKST_SUBSTRATE_OWNER": "ambient-owner",
+        "FKST_SUBSTRATE_REPO_NAME": "ambient-repository",
+    }
+    result = subprocess.run(
+        ["bash", "-c", command], env=environment, text=True, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["Example-Org", "engine-core", "short-ref"]
+
+
+def test_short_pin_without_declared_engine_source_fails_closed():
+    command = f'. "{BOOTSTRAP}"; bootstrap_parse_pin short-ref'
+    environment = os.environ.copy()
+    environment.pop("FKST_ENGINE_SOURCE_GIT", None)
+    result = subprocess.run(
+        ["bash", "-c", command], env=environment, text=True, capture_output=True
+    )
+    assert result.returncode != 0
+    assert "short engine source pin requires FKST_ENGINE_SOURCE_GIT" in result.stderr
