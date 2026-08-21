@@ -12,64 +12,6 @@ HOST_ENTRY_ENGINE_PACKAGE_ROOT_ARGS=()
 HOST_ENTRY_PLATFORM_PACKAGE_NAMES=()
 HOST_ENTRY_HOST_PACKAGE_NAMES=()
 
-usage() {
-  sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-}
-
-run_self_test_with_optional_lua_coverage() {
-  local coverage_dir="$FKST_RUNTIME_ROOT/lua-coverage" coverage_json out rc
-  rm -rf "$coverage_dir"
-  mkdir -p "$coverage_dir"
-  host_run_require_engine_binary || return $?
-  set +e
-  out="$(cd "$ROOT" && "$BIN" --self-test --coverage "$coverage_dir" 2>&1)"
-  rc=$?
-  set -e
-  if [ "$rc" -eq 0 ]; then
-    printf '%s\n' "$out"
-    coverage_json="$coverage_dir/coverage.json"
-    if [ ! -f "$coverage_json" ]; then
-      echo "error: fkst-framework --self-test --coverage did not write coverage.json in $coverage_dir" >&2
-      return 1
-    fi
-    return $?
-  fi
-  if printf '%s\n' "$out" | grep -Eq "(unknown|unrecognized).*--coverage"; then
-    echo "warning: fkst-framework does not expose --self-test --coverage; skipping Lua coverage ratchet artifact collection" >&2
-    host_run_require_engine_binary || return $?
-    "$BIN" --self-test
-    return $?
-  fi
-  printf '%s\n' "$out" >&2
-  return "$rc"
-}
-
-# Run "$@"; unless verbose, drop advisory PASS lines while preserving the
-# command status and the caller's errexit posture.
-run_quiet_pass() {
-  if [ -n "${verbose:-}${FKST_TEST_VERBOSE:-}" ]; then "$@"; return $?; fi
-  local rc had_e=""
-  case $- in *e*) had_e=1 ;; esac
-  set +e
-  "$@" 2>&1 | grep -vE '^PASS '
-  rc=${PIPESTATUS[0]}
-  if [ -n "$had_e" ]; then set -e; else set +e; fi
-  return "$rc"
-}
-
-# Run "$2..."; unless verbose, keep only lines matching the regex in $1.
-run_quiet_keep() {
-  local keep="$1"; shift
-  if [ -n "${verbose:-}${FKST_TEST_VERBOSE:-}" ]; then "$@"; return $?; fi
-  local rc had_e=""
-  case $- in *e*) had_e=1 ;; esac
-  set +e
-  "$@" 2>&1 | grep -E -- "$keep"
-  rc=${PIPESTATUS[0]}
-  if [ -n "$had_e" ]; then set -e; else set +e; fi
-  return "$rc"
-}
-
 host_entry_engine_args() {
   if [ "${#HOST_ENTRY_ENGINE_PACKAGE_ROOT_ARGS[@]}" -gt 0 ]; then
     printf '%s\n' "${HOST_ENTRY_ENGINE_PACKAGE_ROOT_ARGS[@]}"
@@ -215,7 +157,7 @@ host_entry_add_package_root() {
 host_entry_resolve_root_line() {
   local line="$1" path
   case "$line" in
-    "$HOST_ENTRY_PLATFORM_SOURCE_ID":*) path="$HOST_ENTRY_PLATFORM_ROOT/${line#*:}" ;;
+    "$HOST_ENTRY_PLATFORM_SOURCE_ID":*) path="$HOST_ENTRY_PLATFORM_ROOT/${line#"$HOST_ENTRY_PLATFORM_SOURCE_ID:"}" ;;
     /*) path="$line" ;;
     *) path="$HOST_ENTRY_HOST_ROOT/$line" ;;
   esac
@@ -287,8 +229,8 @@ host_entry_source_ratchet_args() {
 host_entry_run_shared_source_ratchets() {
   host_entry_source_ratchet_args
   echo "=== host source ratchets ==="
-  PYTHONPATH="$HOST_ENTRY_PLATFORM_ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -B "$HOST_ENTRY_PLATFORM_ROOT/scripts/check_repo.py" "${HOST_ENTRY_SOURCE_RATCHET_ARGS[@]}"
+  PYTHONPATH="$ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -B "$ROOT/scripts/check_repo.py" "${HOST_ENTRY_SOURCE_RATCHET_ARGS[@]}"
 }
 
 host_entry_run_engine_conformance() {
@@ -302,7 +244,6 @@ host_entry_run_engine_conformance() {
   if [ "${#engine_args[@]}" -gt 0 ]; then
     cmd+=("${engine_args[@]}")
   fi
-  host_run_require_engine_binary || return $?
   set +e
   if [ -n "${verbose:-}${FKST_TEST_VERBOSE:-}" ]; then
     "${cmd[@]}" >"$output_file" 2>&1
@@ -540,7 +481,6 @@ host_entry_cmd_test() {
           ;;
         1)
           conf_cmd=("$BIN" conformance --project-root "$project_root" --package-root "$pkg")
-          host_run_require_engine_binary || { fail=$((fail + 1)); continue; }
           if ! run_quiet_pass "${conf_cmd[@]}"; then
             fail=$((fail + 1))
             continue
@@ -579,7 +519,6 @@ host_entry_cmd_test() {
       if [ "$run_normal" -eq 1 ]; then
         test_cmd=("$BIN" test --project-root "$normal_project_root" --package-root "$normal_pkg")
         test_cmd+=(--report-json "$report_file")
-        host_run_require_engine_binary || { fail=$((fail + 1)); continue; }
         if ! run_quiet_keep '^FAIL |passed, [0-9]+ failed|panic' "${test_cmd[@]}"; then
           fail=$((fail + 1))
           continue
@@ -600,7 +539,6 @@ host_entry_cmd_test() {
           graph_args+=(--package-root "$graph_root")
         done
         test_cmd=("$BIN" test --project-root "$graph_work" "${graph_args[@]}" --report-json "$report_dir/$name.graph.json")
-        host_run_require_engine_binary || { fail=$((fail + 1)); continue; }
         if ! run_quiet_keep '^FAIL |passed, [0-9]+ failed|panic' "${test_cmd[@]}"; then
           fail=$((fail + 1))
         fi
@@ -651,7 +589,7 @@ host_entry_cmd_supervise() {
     host_names="$(host_entry_join_names "${HOST_ENTRY_HOST_PACKAGE_NAMES[@]}")"
   fi
   if [ -z "$platform_names" ]; then
-    echo "error: host supervise requires at least one platform-source:<path> package root in .fkst/compose/package-roots" >&2
+    echo "error: host supervise requires at least one ${HOST_ENTRY_PLATFORM_SOURCE_ID}:<path> package root in .fkst/compose/package-roots" >&2
     return 1
   fi
 
@@ -666,10 +604,7 @@ host_entry_cmd_supervise() {
 cmd_host() {
   host_entry_parse "$@" || return $?
   local subcommand="${HOST_ENTRY_COMMAND[0]}"
-  if [ -f "$HOST_ENTRY_PLATFORM_ROOT/scripts/test_deadline.sh" ]; then
-    source "$HOST_ENTRY_PLATFORM_ROOT/scripts/test_deadline.sh"
-  fi
-  # Bound host-delegated check/test like the top-level test family so a
+  # Bound host-delegated check/test like the top-level test family (see scripts/test_deadline.sh) so a
   # SIGKILLed-parent orphan self-terminates; NOT supervise, which is long-running by design. Guarded by
   # command -v so a host_entry.sh sourced without test_deadline.sh (isolated tests) is a no-op.
   case "$subcommand" in
