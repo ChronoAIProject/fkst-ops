@@ -41,9 +41,17 @@ def path_without(root: Path, *excluded: str) -> str:
         for source in entries:
             if source.name in excluded_names or source.name in included_names:
                 continue
-            if not source.is_file() or not os.access(source, os.X_OK):
+            try:
+                # Inspecting an entry can fail for reasons that say nothing about this
+                # mirror: a hosted runner carries files on PATH that the test user cannot
+                # stat, and Path.is_file only absorbs ENOENT, ENOTDIR, EBADF and ELOOP, so
+                # EACCES propagates. Guarding the directory listing alone left the per-entry
+                # work unguarded. An entry that cannot be inspected is simply not mirrored.
+                if not source.is_file() or not os.access(source, os.X_OK):
+                    continue
+                (directory / source.name).symlink_to(source.absolute())
+            except OSError:
                 continue
-            (directory / source.name).symlink_to(source.absolute())
             included_names.add(source.name)
     return str(directory)
 
