@@ -81,20 +81,49 @@ printf '#!/bin/sh\nexit 0\n' > target/debug/engine
 chmod +x target/debug/engine
 ''')
     env = os.environ.copy()
-    env.update(FKST_OPS_ENGINE_PROVIDER=str(ROOT / "providers/engine.py"),
+    env.update(CI="1", FKST_OPS_ENGINE_PROVIDER=str(ROOT / "providers/engine.py"),
                FKST_OPS_ENGINE_CHECKOUT=str(checkout), FKST_OPS_ENGINE_BINARY=str(binary),
                FKST_OPS_ENGINE_REVISION_CHECKOUT=str(platform),
                FKST_OPS_ENGINE_REVISION_PATH="control/engine-ref",
                FKST_OPS_ENGINE_CONFIGURATION=json.dumps(
                    {"build_command": [str(build), "build", "-p", "engine"]}
                ))
-    command = f'. "{BOOTSTRAP}"; resolve_bin_contract "$1"; printf "%s" "$RESOLVED_BIN"'
+    command = f'. "{BOOTSTRAP}"; if ! resolve_bin_contract "$1"; then printf "%s" "$RESOLVE_BIN_ERROR" >&2; exit 1; fi; printf "%s" "$RESOLVED_BIN"'
     result = subprocess.run(["bash", "-c", command, "test", str(tmp_path)], env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     revision_binary = Path(f"{binary}-{revision}")
     assert result.stdout == str(revision_binary)
     assert revision_binary.is_file()
     assert os.access(revision_binary, os.X_OK)
+
+
+def test_declared_engine_provider_failure_is_not_an_empty_success(tmp_path):
+    env = os.environ.copy()
+    env.update(
+        CI="1",
+        BIN="",
+        FKST_OPS_ENGINE_PROVIDER=str(ROOT / "providers/engine.py"),
+        FKST_OPS_ENGINE_CHECKOUT=str(tmp_path / "missing-engine-checkout"),
+        FKST_OPS_ENGINE_BINARY=str(tmp_path / "engine"),
+        FKST_OPS_ENGINE_REVISION_CHECKOUT=str(tmp_path / "missing-platform-checkout"),
+        FKST_OPS_ENGINE_REVISION_PATH="control/engine-ref",
+        FKST_OPS_ENGINE_CONFIGURATION=json.dumps({"build_command": ["true"]}),
+    )
+    command = (
+        f'. "{BOOTSTRAP}"; resolve_bin_contract "$1"; rc=$?; '
+        'printf "%s" "$RESOLVED_BIN"; '
+        'printf "resolve_rc=%s error=%s\\n" "$rc" "$RESOLVE_BIN_ERROR" >&2; '
+        'exit "$rc"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "test", str(tmp_path)],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "ENGINE_PROVIDER_FAILED" in result.stderr
 
 
 def test_readonly_miss_does_not_invoke_provider(tmp_path):

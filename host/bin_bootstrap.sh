@@ -101,7 +101,7 @@ resolve_bin_contract() {
 
   if [ -n "${FKST_SUBSTRATE_CHECKOUT:-}" ]; then
     candidate="$FKST_SUBSTRATE_CHECKOUT/target/debug/fkst-framework"
-    if [ -x "$candidate" ]; then
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
       RESOLVED_BIN="$candidate"
       return 0
     fi
@@ -118,7 +118,7 @@ resolve_bin_contract() {
         cache_root="$(bootstrap_cache_root 2>/dev/null || true)"
         if [ -n "${owner:-}" ] && [ -n "${repo:-}" ] && [ -n "${ref:-}" ] && [ -n "$cache_root" ]; then
           cache_bin="$(bootstrap_cache_bin_path "$repo_root" "$cache_root" "$owner" "$repo" "$ref" 2>/dev/null || true)"
-          if [ -x "$cache_bin" ]; then
+          if [ -f "$cache_bin" ] && [ -x "$cache_bin" ]; then
             RESOLVED_BIN="$cache_bin"
             return 0
           fi
@@ -129,17 +129,29 @@ resolve_bin_contract() {
     return 1
   fi
 
-  if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
-    RESOLVE_BIN_ERROR="fkst-framework binary is not executable in CI: ${BIN:-<unset>}"
-    return 1
-  fi
-
   echo "fkst-framework binary not found in \$BIN, .fkst/env, PATH, or FKST_SUBSTRATE_CHECKOUT; checking pinned source cache" >&2
   if [ -n "${FKST_OPS_ENGINE_PROVIDER:-}" ]; then
-    response="$(bootstrap_bin_on_total_miss_ops "$repo_root")" || return $?
-    RESOLVED_BIN="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["binary"])')" || return $?
+    local provider_rc=0
+    response="$(bootstrap_bin_on_total_miss_ops "$repo_root")" || provider_rc=$?
+    if [ "$provider_rc" -ne 0 ]; then
+      RESOLVE_BIN_ERROR="ENGINE_PROVIDER_FAILED: declared engine provider exited with status $provider_rc"
+      return "$provider_rc"
+    fi
+    RESOLVED_BIN="$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["binary"])')" || {
+      RESOLVED_BIN=""
+      RESOLVE_BIN_ERROR="ENGINE_PROVIDER_RESPONSE_INVALID: declared engine provider returned no usable binary"
+      return 1
+    }
   else
+    if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+      RESOLVE_BIN_ERROR="fkst-framework binary is not executable in CI: ${BIN:-<unset>}"
+      return 1
+    fi
     RESOLVED_BIN="$(bootstrap_bin_on_total_miss "$repo_root")" || return $?
+  fi
+  if [ -z "$RESOLVED_BIN" ]; then
+    RESOLVE_BIN_ERROR="ENGINE_BINARY_UNAVAILABLE: binary resolver returned an empty path"
+    return 1
   fi
   resolve_bin_validate_candidate "$RESOLVED_BIN" || return $?
   return 0
