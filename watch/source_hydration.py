@@ -1,4 +1,4 @@
-"""Hydrate branch-operated sources and packages-derived engine builds."""
+"""Hydrate declared source checkouts and packages-derived engine builds."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from ops.revision_derivation import (
     publish_engine_product,
     resolve_pair,
 )
+from bootstrap.canonical_tree import canonical_tree_sha256
 from schema.validator import resolve_machine_default
 
 
@@ -32,6 +33,7 @@ class BranchCheckout:
 class EngineCheckout:
     url: str
     revision: str
+    tree_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,17 @@ def _engine_checkout_valid(root: Path, revision: str) -> bool:
         return False
 
 
+def _exact_checkout_valid(root: Path, spec: EngineCheckout) -> bool:
+    if not _engine_checkout_valid(root, spec.revision):
+        return False
+    if spec.tree_sha256 is None:
+        return True
+    try:
+        return canonical_tree_sha256(root, spec.revision) == spec.tree_sha256
+    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError):
+        return False
+
+
 def _materialise_branch_checkout(destination: Path, spec: BranchCheckout) -> None:
     _safe_source_url(spec.url, destination)
     if destination.exists() or destination.is_symlink():
@@ -183,7 +196,9 @@ def _materialise_branch_checkout(destination: Path, spec: BranchCheckout) -> Non
             shutil.rmtree(temporary)
 
 
-def _materialise_engine_checkout(destination: Path, spec: EngineCheckout) -> None:
+def _materialise_engine_checkout(
+    destination: Path, spec: EngineCheckout, *, allow_attached: bool = False
+) -> None:
     _safe_source_url(spec.url, destination)
     if destination.exists() or destination.is_symlink():
         if not destination.is_dir() or not _clean(destination):
@@ -191,13 +206,13 @@ def _materialise_engine_checkout(destination: Path, spec: EngineCheckout) -> Non
                 f"engine checkout {destination} is not clean; refusing exact-revision update"
             )
         _require_source_identity(destination, spec.url)
-        if _engine_checkout_valid(destination, spec.revision):
+        if _exact_checkout_valid(destination, spec):
             return
         try:
             branch = _git(destination, "branch", "--show-current")
         except (OSError, subprocess.CalledProcessError) as exc:
             raise ValueError(f"cannot inspect engine checkout {destination}: {exc}") from exc
-        if branch:
+        if branch and not allow_attached:
             raise ValueError(
                 f"engine checkout {destination} is attached to branch {branch}; refusing exact-revision update"
             )
@@ -208,7 +223,7 @@ def _materialise_engine_checkout(destination: Path, spec: EngineCheckout) -> Non
             raise ValueError(
                 f"engine checkout {destination} cannot fetch exact revision {spec.revision}: {exc}"
             ) from exc
-        if not _engine_checkout_valid(destination, spec.revision):
+        if not _exact_checkout_valid(destination, spec):
             raise ValueError(
                 f"engine checkout {destination} does not match exact revision {spec.revision}"
             )
@@ -225,7 +240,7 @@ def _materialise_engine_checkout(destination: Path, spec: EngineCheckout) -> Non
         _git(temporary, "fetch", "--no-tags", "origin", spec.revision)
         _git(temporary, "checkout", "--quiet", "--detach", spec.revision)
         _require_source_identity(temporary, spec.url)
-        if not _engine_checkout_valid(temporary, spec.revision):
+        if not _exact_checkout_valid(temporary, spec):
             raise ValueError(
                 f"engine checkout {destination.name} does not match exact revision {spec.revision}"
             )
@@ -261,6 +276,7 @@ def hydrate(
 ) -> None:
     lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     sources = {entry["id"]: entry for entry in lock.get("external_source", [])}
+    exact_specs: dict[str, EngineCheckout] = {}
     branch_specs: dict[str, BranchCheckout] = {}
     preserved_roots: set[str] = set()
     for declaration_path, declaration in declarations:
@@ -276,20 +292,35 @@ def hydrate(
                 source_id = deployment["sources"][role]["lock_ref"]
                 try:
                     entry = sources[source_id]
-                    spec = BranchCheckout(entry["git"], branch)
+                    resolved = entry.get("resolved")
+                    if isinstance(resolved, dict):
+                        spec = EngineCheckout(
+                            entry["git"], resolved["rev"], resolved["tree_sha256"]
+                        )
+                        specs = exact_specs
+                    else:
+                        spec = BranchCheckout(entry["git"], branch)
+                        specs = branch_specs
                 except (KeyError, TypeError) as exc:
                     raise ValueError(
                         f"{declaration_path} deployment[{index}] source {source_id} is incomplete"
                     ) from exc
-                if logical in branch_specs and branch_specs[logical] != spec:
+                if logical in branch_specs or logical in exact_specs:
+                    existing = branch_specs.get(logical, exact_specs.get(logical))
+                    if existing == spec:
+                        continue
                     raise ValueError(
                         f"checkout root {logical} is assigned conflicting sources or branches"
                     )
-                branch_specs[logical] = spec
+                specs[logical] = spec
             for field in ("durable", "runtime", "logs", "rate_pool"):
                 preserved_roots.add(machine[field])
     for logical, spec in branch_specs.items():
         _materialise_branch_checkout(machine_root / "roots" / logical, spec)
+    for logical, spec in exact_specs.items():
+        _materialise_engine_checkout(
+            machine_root / "roots" / logical, spec, allow_attached=True
+        )
 
     engine_builds: dict[str, tuple[EngineCheckout, EngineBuild]] = {}
     for declaration_path, declaration in declarations:
@@ -310,13 +341,27 @@ def hydrate(
             pair = resolve_pair(derivation_root, derivation["path"])
             source_id = deployment["sources"]["engine"]["lock_ref"]
             try:
-                engine_source = sources[source_id]["git"]
+                engine_entry = sources[source_id]
+                engine_source = engine_entry["git"]
             except (KeyError, TypeError) as exc:
                 raise ValueError(
                     f"{declaration_path} deployment[{index}] engine source {source_id} is incomplete"
                 ) from exc
             checkout_name = machine["engine_checkout"]
-            checkout_spec = EngineCheckout(engine_source, pair.engine_revision)
+            resolved_engine = engine_entry.get("resolved")
+            if isinstance(resolved_engine, dict):
+                if resolved_engine["rev"] != pair.engine_revision:
+                    raise ValueError(
+                        f"engine source {source_id} pin {resolved_engine['rev']} does not match "
+                        f"platform-derived engine revision {pair.engine_revision}"
+                    )
+                checkout_spec = EngineCheckout(
+                    engine_source,
+                    pair.engine_revision,
+                    resolved_engine["tree_sha256"],
+                )
+            else:
+                checkout_spec = EngineCheckout(engine_source, pair.engine_revision)
             provider = providers[deployment["providers"]["engine"]]
             command = list(provider["configuration"]["build_command"])
             if Path(command[0]).name == command[0]:
