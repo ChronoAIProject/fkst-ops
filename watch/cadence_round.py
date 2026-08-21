@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -254,8 +255,19 @@ def main() -> int:
 
     failed = False
     for declaration in discovered:
+        # launchd's StartInterval does not stack: it will not begin a round while the previous one
+        # is still running, so a slow round silently degrades the observed cadence to
+        # `round duration + interval`. Nothing in the record distinguished that from launchd
+        # skipping a firing, which left an observed drift - sixteen consecutive intervals of which
+        # only two matched the declared 900 seconds, the longest being 62 minutes - unattributable.
+        # These two durations are what separates the two explanations.
+        sync_started = time.monotonic()
         sync = invoke(entry, repository, declaration, profile, lock, "sync")
+        status_started = time.monotonic()
         status = invoke(entry, repository, declaration, profile, lock, "status")
+        status_finished = time.monotonic()
+        sync_ms = round((status_started - sync_started) * 1000)
+        status_ms = round((status_finished - status_started) * 1000)
         relative_declaration = str(declaration.relative_to(repository))
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         if args.guard_restart_attempt_limit == 0:
@@ -265,6 +277,8 @@ def main() -> int:
                     "timestamp": timestamp,
                     "deployment": relative_declaration,
                     "sync_exit_status": sync.returncode,
+                    "sync_ms": sync_ms,
+                    "status_ms": status_ms,
                     "status_line": status_line(status.stdout),
                 },
             )
@@ -286,6 +300,8 @@ def main() -> int:
                     "deployment": relative_declaration,
                     "deployment_id": identity,
                     "sync_exit_status": sync.returncode,
+                    "sync_ms": sync_ms,
+                    "status_ms": status_ms,
                     "status_line": observed_line,
                 }
                 guard = None
