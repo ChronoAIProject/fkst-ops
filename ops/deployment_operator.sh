@@ -12,6 +12,7 @@ resolve_deployment_python() { "$PYTHON" -c 'import sys; print(sys.executable)'; 
 DEPLOYMENT_PYTHON="$(resolve_deployment_python)" || exit $?
 _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_root="$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+source "$_self_dir/deployment_launch_environment.sh"
 : "${FKST_OPS_DECLARATION:?FKST_OPS_DECLARATION is required}"
 : "${FKST_OPS_MACHINE_PROFILE:?FKST_OPS_MACHINE_PROFILE is required}"
 : "${FKST_OPS_LOCK:?FKST_OPS_LOCK is required}"
@@ -660,7 +661,7 @@ clean_stale_engine_artifacts() {
 launch_one() { # $1 name, $2 restart flag (0|1)
   local name="$1" restart="${2:-0}" ts log rt launch_platform launch_lock platform_guard
   local engine_lock engine_guard pid
-  local write_posture managed_bot_logins authorized_logins args=()
+  local environment_sha256 args=()
   clean_stale_engine_artifacts || return 1
   cfg "$name" || return 1
   ensure_engine_binary_current || return 1
@@ -672,12 +673,9 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   engine_guard="$(dirname "$ENGINE_BINARY_BASE")/.$(basename "$ENGINE_BINARY_BASE").locks.guard"
   derive_devloop_pkgs_from_workspace "$name" || return 1
   [ -n "$DEVLOOP_PKGS" ] || { echo "[$name] no platform packages declared in fkst.workspace.toml"; return 1; }
-  write_posture=$(github_write_posture) || return 1
   authorize_github_writer || return 1
-  managed_bot_logins=$(printf '%s' "$MANAGED_BOT_LOGINS" | "$PYTHON" -c \
-    'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
-  authorized_logins=$(printf '%s' "$AUTHORIZED_LOGINS" | "$PYTHON" -c \
-    'import json,sys; print(",".join(json.load(sys.stdin)))') || return 1
+  resolve_deployment_child_environment || return 1
+  environment_sha256=$(deployment_child_environment_sha256) || return 1
 
   clean_stale_launch_platforms "$launch_platform" || return 1
   materialise_launch_platform \
@@ -701,21 +699,10 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   )
   [ -n "$LOCAL_PKGS" ] && args+=(--host-packages "$LOCAL_PKGS")
   [ "$restart" = "1" ] && args+=(--restart)
-  printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s\n' \
-    "$write_posture" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" "$CLAIM_LABEL_EXCLUSIVE" > "$log"
-  pid=$(env -u GH_TOKEN -u GITHUB_TOKEN BIN="$BIN" FKST_CARGO="$CARGO" FKST_PYTHON="$DEPLOYMENT_PYTHON" \
-    FKST_GITHUB_CREDENTIAL_HELPER="$GITHUB_CREDENTIAL_PROVIDER" \
-    FKST_GITHUB_CREDENTIAL_SOURCE="$credential_source" FKST_GITHUB_CREDENTIAL_RESOLVER="$GITHUB_CREDENTIAL_RESOLVER" \
-    FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_WRITE="$write_posture" \
-    FKST_GITHUB_CLAIM_MODE="$CLAIM_MODE" FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE="$CLAIM_LABEL_EXCLUSIVE" \
-    FKST_RATE_POOL_ROOT="$RATE_POOL" FKST_GITHUB_BOT_LOGIN="$BOT" \
-    FKST_DEVLOOP_MANAGED_BOT_LOGINS="$managed_bot_logins" \
-    FKST_GITHUB_AUTHORIZED_LOGINS="$authorized_logins" \
-    FKST_GITHUB_AUTHORIZE_ORG_MEMBERS="$AUTHORIZE_ORG_MEMBERS" \
-    FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS="$AUTHORIZE_REPO_COLLABORATORS" \
-    FKST_DEVLOOP_UPSTREAM_BRANCH="$UPSTREAM_BRANCH" FKST_DEVLOOP_INTEGRATION_BRANCH="$INTEGRATION_BRANCH" \
-    FKST_DEVLOOP_ROLLUP_MERGE="$ROLLUP_MERGE" FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE" \
-    FKST_WORKTREE_GC_REMOVE=1 PATH="$DEPLOYMENT_CHILD_PATH" \
+  printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s LAUNCH_ENV_SHA256=%s\n' \
+    "$DEPLOYMENT_CHILD_WRITE_POSTURE" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" \
+    "$CLAIM_LABEL_EXCLUSIVE" "$environment_sha256" > "$log"
+  pid=$(env -u GH_TOKEN -u GITHUB_TOKEN "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}" \
     "$PYTHON" "$_self_dir/launch_child.py" --spawn "$log" "$launch_lock" "$platform_guard" \
       "$engine_lock" "$engine_guard" "${args[@]}" 2>> "$log" </dev/null) || return 1
   [[ "$pid" =~ ^[0-9]+$ ]] || { echo "LAUNCH_CHILD_PID_INVALID: $pid" >&2; return 1; }
@@ -850,7 +837,7 @@ status_one() {
 # the code the process loaded at startup (logged code_provenance PKG_VERS/ENGINE_VER), NOT the
 # worktree/BIN file (those can be updated without reloading the process — only a restart reloads).
 # Echoes: stopped | current | skew (dev moved, declared non-executed files only) |
-# pkg-stale (platform code may have changed) | engine-stale.
+# pkg-stale (platform code may have changed) | engine-stale | environment-stale.
 # PKG freshness is vs PKGSRC origin/$INTEGRATION_BRANCH (the run branch the deployment loads);
 # ENGINE freshness is the revision derived from the captured platform commit.
 platform_paths_require_restart() {
@@ -870,7 +857,7 @@ platform_paths_require_restart() {
 
 _proc_stale() {
   cfg "$1" || { echo unknown; return; }
-  local p log procpkg proceng pdev changed_paths pin_revision; p=$(pidof_df); log=$(latest_log "$1")
+  local p log procpkg proceng procenv desiredenv pdev changed_paths pin_revision skew=0; p=$(pidof_df); log=$(latest_log "$1")
   [ -z "$p" ] && { echo stopped; return; }
   derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
   if [ -n "${PLATFORM_SOURCE_PIN:-}" ]; then
@@ -889,16 +876,22 @@ _proc_stale() {
   if [ -n "$procpkg" ] && [ "${pdev:0:${#procpkg}}" != "$procpkg" ]; then
     changed_paths=$(git -C "$PKGSRC" diff --name-only "$procpkg" "$pdev" -- 2>/dev/null) \
       || { echo pkg-stale; return; }
-    if platform_paths_require_restart <<<"$changed_paths"; then echo pkg-stale; else echo skew; fi
-    return
+    if platform_paths_require_restart <<<"$changed_paths"; then echo pkg-stale; return; fi
+    skew=1
   fi
+  procenv=$(grep -aoE 'LAUNCH_ENV_SHA256=[a-f0-9]{64}' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
+  [ -n "$procenv" ] || { echo environment-stale; return; }
+  resolve_deployment_child_environment || { echo environment-contract-error; return; }
+  desiredenv=$(deployment_child_environment_sha256) || { echo environment-contract-error; return; }
+  [ "$procenv" = "$desiredenv" ] || { echo environment-stale; return; }
+  [ "$skew" -eq 0 ] || { echo skew; return; }
   echo current
 }
 
 # cmd_sync: keep deployment-owned sources current in one call. The mechanism checkout is immutable:
 # its version is the deployment lock pin. Advance target/platform run branches, update and rebuild
 # each declared engine through its provider, then AUTO-RESTART only supervises whose RUNNING code may have changed
-# (pkg-stale/engine-stale). Skill/docs-only skew and already-current processes are
+# (pkg-stale/engine-stale/environment-stale). Skill/docs-only skew and already-current processes are
 # left running — a restart would only churn in-flight codex for no code change.
 cmd_sync() {
   local n st failed=0 platform_pin target_pin
@@ -937,7 +930,7 @@ cmd_sync() {
     echo "[$n] supervise:"
     st=$(_proc_stale "$n")
     case "$st" in
-      pkg-stale|engine-stale) echo "  $n: $st -> auto-restart"; restart_one "$n" | sed 's/^/    /' || failed=1 ;;
+      pkg-stale|engine-stale|environment-stale) echo "  $n: $st -> auto-restart"; restart_one "$n" | sed 's/^/    /' || failed=1 ;;
       stopped)                echo "  $n: stopped (use 'start' to launch)" ;;
       *)                      echo "  $n: $st (no restart needed)" ;;
     esac
