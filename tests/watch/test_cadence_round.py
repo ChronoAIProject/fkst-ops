@@ -125,11 +125,19 @@ def test_one_round_writes_one_ledger_line_per_declaration(tmp_path: Path) -> Non
     assert [record["sync_exit_status"] for record in records] == [0, 0]
     assert [record["status_line"] for record in records] == ["status first.toml", "status second.toml"]
     assert all(record["timestamp"].endswith("Z") for record in records)
+    assert all(record["round_started_at"].endswith("Z") for record in records)
+    assert all(
+        isinstance(record["round_started_monotonic"], (int, float))
+        and not isinstance(record["round_started_monotonic"], bool)
+        for record in records
+    )
     assert all(isinstance(record["sync_ms"], int) and record["sync_ms"] >= 0 for record in records)
     assert all(isinstance(record["status_ms"], int) and record["status_ms"] >= 0 for record in records)
     assert all(
         set(record) == {
             "timestamp",
+            "round_started_at",
+            "round_started_monotonic",
             "deployment",
             "sync_exit_status",
             "sync_ms",
