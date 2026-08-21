@@ -25,7 +25,7 @@ doctor_targets() {
   [ -n "${FKST_OPS_DECLARATION:-}" ] || return 0
   [ -n "${FKST_OPS_MACHINE_PROFILE:-}" ] || return 0
   [ -n "${FKST_OPS_LOCK:-}" ] || return 0
-  PYTHONPATH="$DOCTOR_ROOT${PYTHONPATH:+:$PYTHONPATH}" "$DOCTOR_PYTHON" -m schema.validator \
+  PYTHONPATH="$DOCTOR_ROOT${PYTHONPATH:+:$PYTHONPATH}" "$DOCTOR_PYTHON" -P -m schema.validator \
     "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK" 2>/dev/null \
     | "$DOCTOR_PYTHON" "$DOCTOR_ROOT/doctor/targets.py"
 }
