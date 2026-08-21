@@ -138,7 +138,8 @@ Before dispatch, the entry:
 1. reads the deployment-owned mechanism pin;
 2. verifies that the executing or cached checkout's `HEAD` is the pinned full
    revision and that the blobs of that named commit have the pinned canonical
-   tracked-tree hash, hydrating a candidate when necessary;
+   tracked-tree hash, then verifies every tracked path's bytes, file kind, and
+   executable mode against those blobs, hydrating a candidate when necessary;
 3. re-executes the physically pinned entry with bounded recursion; and
 4. validates the declaration, machine references, lock bindings, provider
    kinds and contracts, checkout roots, package roots, and provider entries.
@@ -149,10 +150,10 @@ does not mutate deployment runtime, durable state, or resolved source working
 checkouts. Cache publication and pointer replacement occur only after candidate
 verification and pinned preflight succeed.
 
-This verification does not inspect the checkout's current tracked-file
-contents. Modified or deleted tracked working-tree files can therefore pass
-when `HEAD` and the named commit tree match the lock. Verification of the
-actual executable contents is a required invariant that is not implemented.
+Checkout-owned action metadata and dispatch code are loaded only after this
+verification. Drift in the invoking checkout causes hydration and re-execution
+from a clean pinned copy. Drift in an already published revision checkout is
+refused before delegation, with the changed tracked paths reported.
 
 ## Engine revision authority
 
