@@ -16,9 +16,9 @@ source "$_self_dir/deployment_launch_environment.sh"
 : "${FKST_OPS_DECLARATION:?FKST_OPS_DECLARATION is required}"
 : "${FKST_OPS_MACHINE_PROFILE:?FKST_OPS_MACHINE_PROFILE is required}"
 : "${FKST_OPS_LOCK:?FKST_OPS_LOCK is required}"
-RESOLVED_DECLARATION="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -m schema.validator \
+RESOLVED_DECLARATION="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -P -m schema.validator \
   "$FKST_OPS_DECLARATION" "$FKST_OPS_MACHINE_PROFILE" "$FKST_OPS_LOCK")" || exit $?
-MECHANISM_TOOL_ASSIGNMENTS="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -c '
+MECHANISM_TOOL_ASSIGNMENTS="$(PYTHONPATH="$_repo_root${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -P -c '
 import os, shlex, sys, tomllib
 from pathlib import Path
 from schema.mechanism_tools import MECHANISM_TOOLS

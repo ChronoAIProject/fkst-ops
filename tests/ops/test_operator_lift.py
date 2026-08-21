@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
 LAUNCH_ENVIRONMENT = ROOT / "ops" / "deployment_launch_environment.sh"
 FKST_OPS = ROOT / "bin" / "fkst-ops"
+DOCTOR = ROOT / "doctor" / "doctor.sh"
 MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 class OperatorLiftTest(unittest.TestCase):
@@ -117,6 +118,7 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
             fake_python = tools / "python3"
             fake_python.write_text(
                 "#!/bin/sh\n"
+                "if [ \"$1\" = -P ]; then shift; fi\n"
                 "if [ \"$1\" = -m ] && [ \"$2\" = schema.validator ]; then\n"
                 "  exec cat \"$RESOLVED_FIXTURE\"\n"
                 "else\n"
@@ -430,6 +432,7 @@ sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
             fake_python = root / "python"
             fake_python.write_text(
                 "#!/bin/sh\n"
+                'if [ "$1" = -P ]; then shift; fi\n'
                 'if [ "$1" = -m ] && [ "$2" = schema.validator ]; then\n'
                 '  exec cat "$RESOLVED_FIXTURE"\n'
                 "fi\n"
@@ -665,7 +668,11 @@ invoke_engine_build_provider
         subprocess.run(["bash", "-n", str(FKST_OPS)], check=True)
         source = OPERATOR.read_text(encoding="utf-8")
         entry_source = FKST_OPS.read_text(encoding="utf-8")
-        self.assertIn('\"$PYTHON\" -m schema.validator', source)
+        doctor_source = DOCTOR.read_text(encoding="utf-8")
+        self.assertIn('\"$PYTHON\" -P -m schema.validator', source)
+        self.assertIn('\"$PYTHON\" -P -c \'', source)
+        self.assertIn('\"$PYTHON\" -P -m schema.validator', entry_source)
+        self.assertIn('\"$DOCTOR_PYTHON\" -P -m schema.validator', doctor_source)
         for shell_source in (source, entry_source):
             self.assertEqual(
                 [line for line in shell_source.splitlines() if "python3" in line],
