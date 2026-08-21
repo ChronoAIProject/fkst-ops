@@ -181,6 +181,23 @@ class BootstrapTest(unittest.TestCase):
         self.assertFalse(self.cache.exists())
         self.assertEqual(["status"], self.log.read_text(encoding="utf-8").splitlines())
 
+    def test_pinned_validator_cannot_be_shadowed_from_working_directory(self):
+        shadow = self.deployment / "schema"
+        shadow.mkdir()
+        marker = self.root / "shadow-validator-loaded"
+        (shadow / "__init__.py").write_text("", encoding="ascii")
+        (shadow / "validator.py").write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['SHADOW_VALIDATOR_MARKER']).write_text('loaded\\n')\n",
+            encoding="ascii",
+        )
+
+        result = self.invoke(SHADOW_VALIDATOR_MARKER=str(marker))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertFalse(marker.exists(), "the working-directory schema.validator was imported")
+
     def test_dirty_invoking_checkout_reexecutes_clean_pinned_copy_before_delegation(self):
         marker = self.root / "dirty-operator-executed"
         runner = self.source / "ops" / "deployment_operator.sh"
