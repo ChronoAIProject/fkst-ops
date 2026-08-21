@@ -42,6 +42,7 @@ def declare_machine_branch(
     declaration.write_text(text, encoding="ascii")
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_declared_branch_is_used_instead_of_the_derived_one(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     # Capitals in the login are exactly the case the derivation cannot serve.
@@ -58,6 +59,7 @@ def test_declared_branch_is_used_instead_of_the_derived_one(tmp_path: Path) -> N
     assert machine_defaults(home) == {"release-track": "integration-mixedcase"}
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_omitting_the_flag_still_derives_from_the_login(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     declare_machine_branch(repository)
@@ -83,6 +85,7 @@ def test_omitting_the_flag_still_derives_from_the_login(tmp_path: Path) -> None:
         "",
     ],
 )
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_names_that_could_resolve_as_revision_syntax_are_rejected(
     tmp_path: Path, branch: str
 ) -> None:

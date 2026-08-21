@@ -15,7 +15,9 @@ def executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def test_board_dispatch_contract_carries_validator_actor_and_complete_roster(tmp_path):
+def test_board_dispatch_contract_carries_validator_actor_and_complete_roster(
+    tmp_path, fabricated_mechanism_tools
+):
     mechanism = tmp_path / "mechanism"
     shutil.copytree(
         ROOT,
