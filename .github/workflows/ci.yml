@@ -1,0 +1,52 @@
+name: ci
+
+# This repository had no committed workflow. Every pull request merged here since #36 — including
+# changes to the GitHub App credential provider — landed with no mechanical verification, and the
+# only merge condition anywhere in this fleet is client-side code executed by the same identity
+# that performs the merge.
+#
+# The runner is macOS deliberately. This repository operates macOS appliances: its tests exercise
+# launchctl reconciliation, LaunchAgent property lists, POSIX process groups, and advisory file
+# locks. A Linux runner would fail or skip those for environmental reasons, and a check that is
+# red for reasons unrelated to the change is worse than no check.
+#
+# The job runs the test suite and nothing else. That is not a reduced scope: the suite already
+# contains test_actual_repository_contains_no_concrete_target_names, which runs the zero-target-name
+# scan over this repository's own tracked set. Invoking that scan directly from this file would
+# require naming the concrete repositories in tracked source, which is the exact invariant the scan
+# exists to enforce.
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # tomllib requires 3.11 or newer; the repository is standard-library-only otherwise, so
+      # pytest is the single test-time dependency.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the test runner
+        run: python3 -m pip install --disable-pip-version-check pytest
+
+      - name: Run the mechanism suite
+        run: python3 -m pytest -q
+
