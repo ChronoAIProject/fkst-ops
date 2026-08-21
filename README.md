@@ -41,8 +41,9 @@ the complete binding with:
 
 Use `board`, `status`, `logs`, `restart`, `sync`, or `stop` in place of
 `preflight` to invoke an operator action. `doctor` invokes the separate
-diagnostic and repair sweep. Run `bin/fkst-ops` without the required arguments
-to see its current usage.
+diagnostic and repair sweep. `doctor process <deployment-id>` invokes the
+typed, read-only deployment-process identity probe. Run `bin/fkst-ops` without
+the required arguments to see its current usage.
 
 ## Develop
 
