@@ -261,7 +261,9 @@ def main() -> int:
         # skipping a firing, which left an observed drift - sixteen consecutive intervals of which
         # only two matched the declared 900 seconds, the longest being 62 minutes - unattributable.
         # These two durations are what separates the two explanations.
-        sync_started = time.monotonic()
+        round_started_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        round_started_monotonic = time.monotonic()
+        sync_started = round_started_monotonic
         sync = invoke(entry, repository, declaration, profile, lock, "sync")
         status_started = time.monotonic()
         status = invoke(entry, repository, declaration, profile, lock, "status")
@@ -275,6 +277,8 @@ def main() -> int:
                 ledger,
                 {
                     "timestamp": timestamp,
+                    "round_started_at": round_started_at,
+                    "round_started_monotonic": round_started_monotonic,
                     "deployment": relative_declaration,
                     "sync_exit_status": sync.returncode,
                     "sync_ms": sync_ms,
@@ -297,6 +301,8 @@ def main() -> int:
                 )
                 record: dict[str, object] = {
                     "timestamp": timestamp,
+                    "round_started_at": round_started_at,
+                    "round_started_monotonic": round_started_monotonic,
                     "deployment": relative_declaration,
                     "deployment_id": identity,
                     "sync_exit_status": sync.returncode,
