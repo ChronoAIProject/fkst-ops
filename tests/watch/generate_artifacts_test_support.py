@@ -30,7 +30,12 @@ def path_without(root: Path, *excluded: str) -> str:
     for path_entry in os.get_exec_path():
         source_directory = Path(path_entry or os.curdir)
         try:
-            entries = source_directory.iterdir()
+            # Materialise inside the guard. A PATH entry that does not exist is ordinary -
+            # a hosted runner ships `~/.local/bin` on PATH without creating it - and on the
+            # interpreter this suite runs in CI the failure surfaced from iteration rather
+            # than from the call, so guarding only the call caught nothing there while
+            # appearing to work on the developer's newer interpreter.
+            entries = list(source_directory.iterdir())
         except OSError:
             continue
         for source in entries:
