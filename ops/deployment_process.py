@@ -18,10 +18,9 @@ import re
 import subprocess
 import sys
 import time
-from typing import Callable, Literal, Protocol
+from typing import Callable, Protocol
 
-
-ProbeState = Literal["present", "absent", "unknown"]
+from ops.probe_result import ProbeFailure, ProbeResult, ProbeState
 
 
 class ProcessGone(Exception):
@@ -48,39 +47,6 @@ class ProcessInstrument(Protocol):
 
     def inspect(self, pid: int) -> ProcessFact:
         ...
-
-
-class ProbeFailure(Exception):
-    def __init__(self, kind: str, message: str, **details: object) -> None:
-        super().__init__(message)
-        self.kind = kind
-        self.details = details
-
-    def as_dict(self) -> dict[str, object]:
-        return {"kind": self.kind, "message": str(self), **self.details}
-
-
-@dataclass(frozen=True)
-class ProbeResult:
-    state: ProbeState
-    identity: dict[str, str | None]
-    pid: int | None
-    time: dict[str, object]
-    provenance: dict[str, object]
-    coverage: dict[str, object]
-    failure: dict[str, object] | None = None
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "probe": "deployment_process",
-            "state": self.state,
-            "identity": self.identity,
-            "pid": self.pid,
-            "time": self.time,
-            "provenance": self.provenance,
-            "coverage": self.coverage,
-            "failure": self.failure,
-        }
 
 
 def _identity(deployment: dict[str, object]) -> dict[str, str | None]:
@@ -114,9 +80,10 @@ def _failure_result(
     started_ns: int | None = None,
 ) -> ProbeResult:
     return ProbeResult(
+        probe="deployment_process",
         state="unknown",
         identity=identity,
-        pid=pid,
+        observations={"pid": pid},
         time={
             "basis": "unix_epoch_ns",
             "now": now_ns,
@@ -405,7 +372,7 @@ def probe_deployment_process(
             return _failure_result(identity, now_ns, instrument.name, failure)
         if not candidates:
             return ProbeResult(
-                "absent", identity, None,
+                "deployment_process", "absent", identity, {"pid": None},
                 {"basis": "unix_epoch_ns", "now": now_ns, "process_started": None, "clock": "time.time_ns"},
                 {**base_provenance, "query": "pidfile absent; exact process selector returned empty"}, base_coverage,
             )
@@ -442,7 +409,7 @@ def probe_deployment_process(
             selected.append(fact)
         if not selected:
             return ProbeResult(
-                "absent", identity, None,
+                "deployment_process", "absent", identity, {"pid": None},
                 {"basis": "unix_epoch_ns", "now": now_ns, "process_started": None, "clock": "time.time_ns"},
                 {**base_provenance, "query": "exact candidates exited before kernel inspection"}, base_coverage,
             )
@@ -455,7 +422,7 @@ def probe_deployment_process(
             return _failure_result(identity, now_ns, instrument.name, failure)
         fact = selected[0]
         return ProbeResult(
-            "present", identity, fact.pid,
+            "deployment_process", "present", identity, {"pid": fact.pid},
             {"basis": "unix_epoch_ns", "now": now_ns, "process_started": fact.started_epoch_ns, "clock": "time.time_ns"},
             {**base_provenance, "query": "exact process selector plus exact kernel argv and start time"}, base_coverage,
         )
@@ -463,7 +430,7 @@ def probe_deployment_process(
         fact = instrument.inspect(pid)
     except ProcessGone:
         return ProbeResult(
-            "absent", identity, None,
+            "deployment_process", "absent", identity, {"pid": None},
             {"basis": "unix_epoch_ns", "now": now_ns, "process_started": None, "clock": "time.time_ns"},
             {**base_provenance, "query": "pidfile selected pid; kernel reports it absent"}, base_coverage,
         )
@@ -476,7 +443,7 @@ def probe_deployment_process(
         return _failure_result(identity, now_ns, instrument.name, failure, pid=pid, started_ns=fact.started_epoch_ns)
     if fact.state == "Z":
         return ProbeResult(
-            "absent", identity, None,
+            "deployment_process", "absent", identity, {"pid": None},
             {"basis": "unix_epoch_ns", "now": now_ns, "process_started": fact.started_epoch_ns, "clock": "time.time_ns"},
             {**base_provenance, "query": "pidfile selected a zombie process"}, base_coverage,
         )
@@ -509,7 +476,7 @@ def probe_deployment_process(
         )
         return _failure_result(identity, now_ns, instrument.name, failure, pid=pid, started_ns=fact.started_epoch_ns)
     return ProbeResult(
-        "present", identity, pid,
+        "deployment_process", "present", identity, {"pid": pid},
         {"basis": "unix_epoch_ns", "now": now_ns, "process_started": fact.started_epoch_ns, "clock": "time.time_ns"},
         {**base_provenance, "query": "pidfile-selected pid plus exact kernel argv and start time"}, base_coverage,
     )

@@ -8,16 +8,18 @@ import json
 import sys
 import time
 
-from ops.deployment_process import ProbeFailure, ProbeResult, probe_deployment_process
+from ops.deployment_process import probe_deployment_process
+from ops.probe_result import ProbeFailure, ProbeResult
 from schema.validator import ValidationError, load_and_resolve
 
 
 def _resolution_failure(deployment_id: str, message: str) -> ProbeResult:
     failure = ProbeFailure("resolution_failure", message, requested_deployment=deployment_id)
     return ProbeResult(
+        "deployment_process",
         "unknown",
         {"deployment": None, "target_identity": None, "project_root": None, "durable_root": None},
-        None,
+        {"pid": None},
         {"basis": "unix_epoch_ns", "now": time.time_ns(), "process_started": None,
          "clock": "time.time_ns"},
         {"configuration": "schema.validator", "pid_claim": None, "process_instrument": None},

@@ -9,9 +9,9 @@ import unittest
 from ops.deployment_process import (
     InstrumentFailure,
     ProcessFact,
-    ProbeState,
     probe_deployment_process,
 )
+from ops.probe_result import ProbeState
 
 
 class FixtureInstrument:
@@ -73,7 +73,7 @@ class DeploymentProcessProbeTest(unittest.TestCase):
             self.deployment, FixtureInstrument(self.fact()), now_epoch_ns=self.now
         )
         self.assert_state("present", result)
-        self.assertEqual(result.pid, 4101)
+        self.assertEqual(result.as_dict()["pid"], 4101)
         self.assertEqual(result.identity["project_root"], str(self.project))
         self.assertEqual(result.time["now"], self.now)
         self.assertEqual(result.time["process_started"], self.now - 1)
@@ -86,7 +86,7 @@ class DeploymentProcessProbeTest(unittest.TestCase):
             self.deployment, FixtureInstrument(), now_epoch_ns=self.now
         )
         self.assert_state("absent", result)
-        self.assertIsNone(result.pid)
+        self.assertIsNone(result.as_dict()["pid"])
         self.assertTrue(result.coverage["complete"])
         self.assertIsNone(result.failure)
 
@@ -101,7 +101,7 @@ class DeploymentProcessProbeTest(unittest.TestCase):
         self.assertEqual(result.failure["kind"], "instrument_failure")
         self.assertIn("fixture instrument unavailable", result.failure["message"])
         self.assertFalse(result.coverage["complete"])
-        self.assertEqual(result.pid, 4101)
+        self.assertEqual(result.as_dict()["pid"], 4101)
 
     def test_wrong_identity_is_unknown_instead_of_substring_present(self) -> None:
         self.write_pid(4101)

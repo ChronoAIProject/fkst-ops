@@ -41,9 +41,16 @@ the complete binding with:
 
 Use `board`, `status`, `logs`, `restart`, `sync`, or `stop` in place of
 `preflight` to invoke an operator action. `doctor` invokes the separate
-diagnostic and repair sweep. `doctor process <deployment-id>` invokes the
-typed, read-only deployment-process identity probe. Run `bin/fkst-ops` without
-the required arguments to see its current usage.
+diagnostic and repair sweep. Its typed, read-only question probes are invoked as:
+
+```sh
+doctor process <deployment-id>
+doctor runtime-activity --since-epoch-ns <unix-epoch-ns> <deployment-id>
+doctor completion <absolute-run-root>
+doctor github-activity --since-utc <RFC3339-UTC-Z> <deployment-id> <entity-number>
+```
+
+Run `bin/fkst-ops` without the required arguments to see its current usage.
 
 ## Develop
 
