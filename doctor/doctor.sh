@@ -30,6 +30,18 @@ doctor_targets() {
     | "$DOCTOR_PYTHON" "$DOCTOR_ROOT/doctor/targets.py"
 }
 
+doctor_process_probe() {
+  [ "$#" -eq 1 ] || { echo "usage: doctor/doctor.sh process <deployment-id>" >&2; return 2; }
+  [ -n "${FKST_OPS_DECLARATION:-}" ] || { echo "error: FKST_OPS_DECLARATION is required" >&2; return 2; }
+  [ -n "${FKST_OPS_MACHINE_PROFILE:-}" ] || { echo "error: FKST_OPS_MACHINE_PROFILE is required" >&2; return 2; }
+  [ -n "${FKST_OPS_LOCK:-}" ] || { echo "error: FKST_OPS_LOCK is required" >&2; return 2; }
+  PYTHONPATH="$DOCTOR_ROOT${PYTHONPATH:+:$PYTHONPATH}" "$DOCTOR_PYTHON" \
+    "$DOCTOR_ROOT/doctor/process_probe.py" \
+    --declaration "$FKST_OPS_DECLARATION" \
+    --machine-profile "$FKST_OPS_MACHINE_PROFILE" \
+    --lock "$FKST_OPS_LOCK" "$1"
+}
+
 fixture_process_row() {
   local pid="$1"
   awk -F '\t' -v pid="$pid" '$1 == pid && $7 == 1 { print; exit }' \
@@ -210,7 +222,12 @@ durable_health_report() {
 }
 
 doctor_main() {
-  [ "$#" -eq 0 ] || { echo "usage: doctor/doctor.sh" >&2; return 2; }
+  if [ "${1:-}" = process ]; then
+    shift
+    doctor_process_probe "$@"
+    return $?
+  fi
+  [ "$#" -eq 0 ] || { echo "usage: doctor/doctor.sh [process <deployment-id>]" >&2; return 2; }
   echo "stray supervises (unmanaged):"; stray_supervise_report
   echo "leaked test-proc reaper:"; reap_leaked_test_procs
   echo "stale temporary receipt sweep:"; sweep_stale_tmp_receipts
