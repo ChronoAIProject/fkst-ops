@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -460,7 +461,13 @@ sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
                 "open(os.environ['CAPTURE'], 'w').write(json.dumps(captured))\n"
                 "print('EVENT=code_provenance ENGINE_VER=test PKG_VERS=pkg@test', flush=True)\n"
                 "print('MSG=event runtime running', flush=True)\n"
-                "time.sleep(4)\n",
+                # The stub must outlive the operator's post-readiness stability window by a margin
+                # that does not depend on machine speed. It is reaped explicitly below, so this is a
+                # backstop against a leaked process, NOT the mechanism that ends it. A short sleep
+                # here raced `wait_supervise_ready`, whose 30 iterations each spawn ps/awk/grep/sleep:
+                # 3.39s idle on a developer machine against a 4s stub, and over 4s on a loaded CI
+                # runner, where the stub exited first and the launch was reported as a failed start.
+                "time.sleep(300)\n",
                 encoding="ascii",
             )
             engine_script.chmod(0o755)
@@ -560,20 +567,45 @@ launch_one fixture 0
             command = command.replace(
                 "CLAIM_MODE=label;", f"GITHUB_WRITE_POSTURE={write or '0'}; CLAIM_MODE=label;"
             )
-            result = subprocess.run(
-                ["bash", "-c", command, "test", str(root)],
-                env=env, text=True, capture_output=True, check=False, timeout=10,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            captured = json.loads(capture.read_text(encoding="utf-8"))
-            launch_log = next((root / "logs").glob("fixture-sv-*.log"))
-            marker = next(
-                field for field in launch_log.read_text(encoding="utf-8").split()
-                if field.startswith("LAUNCH_ENV_SHA256=")
-            )
-            captured["launch_environment_sha256"] = marker.partition("=")[2]
-            captured["selected_platform_revision"] = selected_platform_revision
-            return captured
+            try:
+                # 60s is a backstop against a pathological hang, not a budget the launch is
+                # expected to approach: the readiness wait alone takes over 3s of ps/grep/sleep
+                # iterations, and that cost scales with how loaded the machine is.
+                result = subprocess.run(
+                    ["bash", "-c", command, "test", str(root)],
+                    env=env, text=True, capture_output=True, check=False, timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                captured = json.loads(capture.read_text(encoding="utf-8"))
+                launch_log = next((root / "logs").glob("fixture-sv-*.log"))
+                marker = next(
+                    field for field in launch_log.read_text(encoding="utf-8").split()
+                    if field.startswith("LAUNCH_ENV_SHA256=")
+                )
+                captured["launch_environment_sha256"] = marker.partition("=")[2]
+                captured["selected_platform_revision"] = selected_platform_revision
+                return captured
+            finally:
+                self._reap_launched_stub(capture)
+
+    @staticmethod
+    def _reap_launched_stub(capture: Path) -> None:
+        """Kill the stub engine launched by the fixture, whatever the test outcome.
+
+        `launch_child.py` calls `os.setsid()`, so the stub owns a process group that is never this
+        interpreter's. The guard below still refuses to signal our own group, because a fixture that
+        could kill the test runner is worse than a leaked stub.
+        """
+        try:
+            group = int(json.loads(capture.read_text(encoding="utf-8"))["pgid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        if group in (0, os.getpgid(0)):
+            return
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     def test_sync_never_touches_hydrated_mechanism_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
