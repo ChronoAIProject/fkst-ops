@@ -618,3 +618,27 @@ def test_engine_checkout_is_materialised_detached(tmp_path: Path) -> None:
     )
     assert git(checkout, "rev-parse", "HEAD") == revision
     assert git(checkout, "branch", "--show-current") == ""
+
+
+def test_pinned_deployment_checkout_detaches_an_existing_branch_and_checks_tree(
+    tmp_path: Path,
+) -> None:
+    from watch.source_hydration import EngineCheckout, _materialise_engine_checkout
+
+    source_root = tmp_path / "platform-source"
+    revision, tree = source(source_root, {"state": "pinned\n"})
+    git(source_root, "branch", "integration")
+    checkout = tmp_path / "platform-checkout"
+    subprocess.run([GIT, "clone", "-q", str(source_root), str(checkout)], check=True)
+    _materialise_engine_checkout(
+        checkout, EngineCheckout(str(source_root), revision, tree), allow_attached=True
+    )
+    assert git(checkout, "rev-parse", "HEAD") == revision
+    assert git(checkout, "branch", "--show-current") == ""
+
+    with pytest.raises(ValueError, match="does not match exact revision"):
+        _materialise_engine_checkout(
+            checkout,
+            EngineCheckout(str(source_root), revision, "sha256-" + "0" * 64),
+            allow_attached=True,
+        )

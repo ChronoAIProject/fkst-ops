@@ -367,12 +367,24 @@ class ValidatorTests(unittest.TestCase):
         )
         self.assertNotIn("pin", deployment["sources"]["engine"])
 
-    def test_deployment_operated_source_forbids_resolved_pin(self) -> None:
+    def test_deployment_operated_source_accepts_optional_resolved_pin(self) -> None:
         self.lock["external_source"][0]["resolved"] = {
             "rev": "1" * 40,
             "tree_sha256": "sha256-" + "1" * 64,
         }
-        self.reject("deployment-operated source must not contain resolved")
+        resolved = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(
+            resolved["deployment"][0]["sources"]["target"]["resolved"],
+            self.lock["external_source"][0]["resolved"],
+        )
+
+    def test_mechanism_source_still_requires_resolved_pin(self) -> None:
+        mechanism = next(
+            entry for entry in self.lock["external_source"]
+            if entry["checkout_role"] == "mechanism"
+        )
+        del mechanism["resolved"]
+        self.reject("resolved.*must be a table")
 
     def test_engine_revision_has_no_literal_revision_input(self) -> None:
         self.declaration["deployment"][0]["engine_revision"]["revision"] = "1" * 40
