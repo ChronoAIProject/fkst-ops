@@ -466,9 +466,10 @@ eval "$(sed -n '/^cmd_sync()/,/^}}/p' "{OPERATOR}")"
 expand() {{ printf 'deployment-a\\n'; }}
 cfg() {{
   UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
-  HOST=/target; PKGSRC=/platform; ENGINE_CHECKOUT=/engine; BIN=/engine/bin
+  HOST=/target; PKGSRC=/platform; RUNTIME_ROOT=/runtime; ENGINE_CHECKOUT=/engine; BIN=/engine/bin
   ENGINE_PROVIDER=/provider; ENGINE_CONTRACT=contract; ENGINE_PROVIDER_CONFIGURATION='{{}}'
 }}
+git_lock_sweep() {{ :; }}
 derive_devloop_pkgs_from_workspace() {{ :; }}
 ensure_integration_caught_up() {{ :; }}
 sync_to_run_branch() {{ printf 'synced:%s\\n' "$1"; }}

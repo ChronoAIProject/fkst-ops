@@ -92,6 +92,17 @@ derive_devloop_pkgs_from_workspace() { # $1 name
   DEVLOOP_PKGS="$output"
 }
 
+git_lock_sweep() { # $1 deployment name; remaining arguments are repository/worktree roots
+  local name="$1" root_args=() lsof_args=() root
+  shift
+  [ -n "${LSOF:-}" ] && lsof_args+=(--lsof "$LSOF")
+  for root in "$@"; do
+    root_args+=(--root "$root")
+  done
+  "$PYTHON" "$_self_dir/git_lock_sweep.py" "${lsof_args[@]}" "${root_args[@]}" \
+    | sed "s/^/[$name] /"
+}
+
 pidof_df() { pgrep -f -- "supervise --project-root ${HOST} " 2>/dev/null; }
 latest_log() { ls -t "$LOGDIR/${1}-sv-"*.log 2>/dev/null | head -1; }
 engine_panic_count() { # $1 supervise log; count engine panics, excluding child stderr= blobs
@@ -809,6 +820,7 @@ cmd_sync() {
   local n st failed=0
   for n in $(expand "${1:-all}"); do
     cfg "$n" || { failed=1; continue; }
+    git_lock_sweep "$n" "$HOST" "$PKGSRC" "$RUNTIME_ROOT" || { failed=1; continue; }
     echo "[$n] deployment source checkouts -> origin/$INTEGRATION_BRANCH:"
     derive_devloop_pkgs_from_workspace "$n" || { echo "  $n: config-error"; failed=1; continue; }
     ensure_integration_caught_up "$PKGSRC"                              # keep run branch (integration) >= dev so operator fixes deploy
