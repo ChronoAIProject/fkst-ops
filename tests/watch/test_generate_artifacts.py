@@ -26,6 +26,7 @@ from generate_artifacts_test_support import (
     source,
 )
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
     result = run_generator(repository, home)
@@ -65,6 +66,7 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     assert "cadence_schedule=enabled live=yes interval_seconds=300" in result.stdout
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_machine_integration_reference_generates_resolves_and_hydrates_branch(
     tmp_path: Path,
 ) -> None:
@@ -103,6 +105,7 @@ def test_machine_integration_reference_generates_resolves_and_hydrates_branch(
     assert git(engine_checkout, "branch", "--show-current") == ""
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_machine_credential_source_uses_explicit_github_cli_user_selection(
     tmp_path: Path,
 ) -> None:
@@ -129,6 +132,7 @@ def test_machine_credential_source_uses_explicit_github_cli_user_selection(
     assert provider["configuration"] == {"source": "github-cli-user"}
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_machine_credential_source_requires_explicit_selection(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     declaration = repository / "deployment.toml"
@@ -146,6 +150,7 @@ def test_machine_credential_source_requires_explicit_selection(tmp_path: Path) -
     assert "--github-credential-source is required" in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_machine_credential_source_rejects_invalid_explicit_selection(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     declaration = repository / "deployment.toml"
@@ -165,6 +170,7 @@ def test_machine_credential_source_rejects_invalid_explicit_selection(tmp_path: 
     assert "--github-credential-source must be github-app or github-cli-user" in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_literal_github_app_source_does_not_require_explicit_selection(
     tmp_path: Path,
 ) -> None:
@@ -178,6 +184,7 @@ def test_literal_github_app_source_does_not_require_explicit_selection(
     assert profile_data["defaults"] == {}
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_literal_github_app_source_rejects_invalid_explicit_selection(
     tmp_path: Path,
 ) -> None:
@@ -191,6 +198,7 @@ def test_literal_github_app_source_rejects_invalid_explicit_selection(
     assert "--github-credential-source must be github-app or github-cli-user" in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -254,6 +262,7 @@ def test_provider_uses_every_declared_tool_from_profile_with_restricted_path(
         )
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_operator_cfg_loads_discovered_cargo_from_generated_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -367,17 +376,11 @@ def test_generation_requires_codex_as_a_path_delivered_mechanism_tool(
 
 
 def test_undeclared_cargo_does_not_affect_discovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fabricated_mechanism_tools: dict[str, str],
 ) -> None:
-    tool_directory = tmp_path / "mechanism-tools"
-    tool_directory.mkdir()
-    for name in ("codex", "gh", "gh-app"):
-        executable = tool_directory / name
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
-        executable.chmod(0o755)
-    monkeypatch.setattr(shutil, "which", lambda name: (
-        str(tool_directory / name) if name in {"codex", "gh", "gh-app"} else None
-    ))
+    monkeypatch.setattr(shutil, "which", fabricated_mechanism_tools.get)
 
     repository, _, _ = prepared(tmp_path)
     declaration = tomllib.loads((repository / "deployment.toml").read_text(encoding="ascii"))
@@ -385,12 +388,13 @@ def test_undeclared_cargo_does_not_affect_discovery(
     tools = _discover_tools([(repository / "deployment.toml", declaration)])
 
     assert tools == {
-        name: str(tool_directory / name)
+        name: fabricated_mechanism_tools[name]
         for name, tool in MECHANISM_TOOLS.items()
         if tool.required
     }
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generation_activates_and_deactivates_declared_schedule(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     declaration = repository / "deployment.toml"
@@ -454,6 +458,7 @@ def test_guard_restart_attempt_limit_must_match_across_declarations(
     )
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_dirty_checkout_is_refused_without_destroying_work(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
     assert run_generator(repository, home).returncode == 0
@@ -466,6 +471,7 @@ def test_dirty_checkout_is_refused_without_destroying_work(tmp_path: Path) -> No
     assert tracked.read_text() == "tampered\n"
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_regeneration_preserves_accumulated_state_and_skips_settled_build(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
     assert run_generator(repository, home).returncode == 0
@@ -482,6 +488,7 @@ def test_regeneration_preserves_accumulated_state_and_skips_settled_build(tmp_pa
     assert binary.lstat().st_mtime_ns == first_mtime
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_engine_branch_advance_without_platform_revision_change_skips_build(
     tmp_path: Path,
 ) -> None:
@@ -592,6 +599,7 @@ def test_engine_branch_advance_without_platform_revision_change_skips_build(
     assert binary.lstat().st_mtime_ns == first_mtime
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generation_reports_malformed_engine_derivation_without_traceback(
     tmp_path: Path,
 ) -> None:
@@ -609,6 +617,7 @@ def test_generation_reports_malformed_engine_derivation_without_traceback(
     assert "Traceback" not in result.stderr
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_shared_binary_stem_publishes_each_platform_declared_revision(
     tmp_path: Path,
 ) -> None:
@@ -671,6 +680,7 @@ def test_shared_binary_stem_publishes_each_platform_declared_revision(
     assert not (binary_root / f"engine-{first_revision}").is_symlink()
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_regeneration_preserves_advanced_deployment_branch(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
     assert run_generator(repository, home).returncode == 0
@@ -687,6 +697,7 @@ def test_regeneration_preserves_advanced_deployment_branch(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("state", ["wrong-branch", "behind", "diverged"])
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_regeneration_refuses_non_reproducible_checkout_states(
     tmp_path: Path, state: str
 ) -> None:

@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import unittest
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -45,6 +47,7 @@ def byte_tree(root: Path) -> str:
     return digest.hexdigest()
 
 
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 class NPlusOneAcceptanceTest(unittest.TestCase):
     def test_one_declaration_and_pin_leave_fkst_ops_byte_identical(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
