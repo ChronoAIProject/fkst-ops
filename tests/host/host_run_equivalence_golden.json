@@ -53,7 +53,7 @@
       "FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS": "0",
       "FKST_GITHUB_PROXY_POLL_LABEL_PREFIX": "fkst-dev:",
       "FKST_GITHUB_REPO": "ExampleOrg/fkst-packages",
-      "FKST_GITHUB_WRITE": "0",
+      "FKST_GITHUB_WRITE": "1",
       "FKST_RATE_POOL_ROOT": "$ROOT/deployment-operator/rate-pools",
       "FKST_RUNTIME_ROOT": "$ROOT/deployment-operator/deployment-operator-rt-packages.1760000000"
     }
@@ -112,7 +112,7 @@
       "FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS": "0",
       "FKST_GITHUB_PROXY_POLL_LABEL_PREFIX": "fkst-dev:",
       "FKST_GITHUB_REPO": "ExampleOrg/fkst-substrate",
-      "FKST_GITHUB_WRITE": "0",
+      "FKST_GITHUB_WRITE": "1",
       "FKST_RATE_POOL_ROOT": "$ROOT/deployment-operator/rate-pools",
       "FKST_RUNTIME_ROOT": "$ROOT/deployment-operator/deployment-operator-rt-substrate.1760000000"
     }
@@ -165,7 +165,7 @@
       "FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS": "0",
       "FKST_GITHUB_PROXY_POLL_LABEL_PREFIX": "fkst-dev:",
       "FKST_GITHUB_REPO": "ExampleOrg/fkst-website",
-      "FKST_GITHUB_WRITE": "0",
+      "FKST_GITHUB_WRITE": "1",
       "FKST_RATE_POOL_ROOT": "$ROOT/deployment-operator/rate-pools",
       "FKST_RUNTIME_ROOT": "$ROOT/deployment-operator/deployment-operator-rt-website.1760000000"
     }

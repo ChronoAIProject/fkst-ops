@@ -78,10 +78,10 @@ def source_pin(role):
 claim=dep["claim_posture"]
 authorization=dep["author_authorization"]
 derivation=dep["engine_revision"]
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],"1" if dep["github_write_enabled"] else "0",claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty," ".join(dep["packages"].get("platform",[])) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty," ".join(dep["packages"].get("platform",[])) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE GITHUB_WRITE_POSTURE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS DECLARED_PLATFORM_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS DECLARED_PLATFORM_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
@@ -167,13 +167,6 @@ wait_supervise_ready() { # $1 pid, $2 log
 expand() { [ "${1:-all}" = all ] && echo "$DEPLOYMENT_OPERATOR_DEPLOYMENTS" || echo "$1"; }
 
 invoke_provider() { PATH="$DEPLOYMENT_CHILD_PATH" "$PYTHON" "$_self_dir/invoke_provider.py" "$1" "$2"; }
-
-github_write_posture() {
-  case "${GITHUB_WRITE_POSTURE:-}" in
-    0|1) printf '%s\n' "$GITHUB_WRITE_POSTURE" ;;
-    *) echo "error: validated declaration did not resolve github_write_enabled" >&2; return 1 ;;
-  esac
-}
 
 resolve_github_writer() {
   local auth_report resolved
@@ -681,7 +674,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   [ -n "$LOCAL_PKGS" ] && args+=(--host-packages "$LOCAL_PKGS")
   [ "$restart" = "1" ] && args+=(--restart)
   printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s LAUNCH_ENV_SHA256=%s\n' \
-    "$DEPLOYMENT_CHILD_WRITE_POSTURE" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" \
+    "1" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" \
     "$CLAIM_LABEL_EXCLUSIVE" "$environment_sha256" > "$log"
   pid=$(env -u GH_TOKEN -u GITHUB_TOKEN "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}" \
     "$PYTHON" "$_self_dir/launch_child.py" --spawn "$log" "$launch_lock" "$platform_guard" \

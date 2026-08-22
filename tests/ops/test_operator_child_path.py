@@ -223,7 +223,7 @@ def test_provider_child_reaches_sibling_of_declared_build_tool(
     invoke_provider_start = invoke_provider_definitions[0].start()
     invoke_provider = source[
         invoke_provider_start:
-        source.index("\ngithub_write_posture()", invoke_provider_start)
+        source.index("\nresolve_github_writer()", invoke_provider_start)
     ]
     invoke_engine_start = source.index("invoke_engine_build_provider()")
     invoke_engine = source[

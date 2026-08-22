@@ -83,7 +83,6 @@ guard_restart_attempt_limit=3
 [[deployment]]
 id="fixture"
 target_identity="owner/target"
-github_write_enabled=false
 managed_bot_logins=["Local-Bot", "peer-bot[bot]"]
 [deployment.claim_posture]
 mode="assignee"

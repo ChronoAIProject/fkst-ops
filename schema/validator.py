@@ -480,12 +480,15 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     for index, raw in enumerate(deployments):
         path = f"declaration.deployment[{index}]"
         dep = _table(raw, path)
+        # `github_write_enabled` is accepted and ignored, not honoured. Writing is unconditional,
+        # so the field selects nothing — there is no second behaviour to keep. It stays in the
+        # allowed set only because the schema and the declarations that feed it live in separate
+        # repositories with no transaction between them: requiring its absence here would reject
+        # every declaration until fkst-deployments merged, and requiring its presence was the
+        # defect. It is removed once no declaration carries it.
         _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "engine_revision", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
-        github_write_enabled = dep.get("github_write_enabled")
-        if not isinstance(github_write_enabled, bool):
-            _fail(path + ".github_write_enabled", "must be a boolean")
         claim_path = path + ".claim_posture"
         claim = _table(dep.get("claim_posture"), claim_path)
         _closed(claim, {"mode", "label_exclusive"}, claim_path)
@@ -614,7 +617,6 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
         resolved: dict[str, Any] = {
             "id": identity,
             "target_identity": target,
-            "github_write_enabled": github_write_enabled,
             "claim_posture": {"mode": claim_mode, "label_exclusive": claim_label_exclusive},
             "managed_bot_logins": copy.deepcopy(managed_bot_logins),
             "author_authorization": {

@@ -6,7 +6,6 @@ guard_restart_attempt_limit = 3
 [[deployment]]
 id = "packages"
 target_identity = "ChronoAIProject/fkst-packages"
-github_write_enabled = false
 managed_bot_logins = ["fkst-bot"]
 
 [deployment.author_authorization]
