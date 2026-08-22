@@ -290,7 +290,7 @@ sync_to_run_branch /checkout
                 self.assertEqual(result.returncode, status, result.stdout + result.stderr)
                 self.assertIn(marker, result.stdout)
 
-    def test_pinned_source_is_verified_without_advancing_to_integration(self) -> None:
+    def test_pinned_source_enforces_head_without_policing_tracked_edits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "source"
@@ -324,19 +324,12 @@ sync_to_run_branch /checkout
                 ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True,
                 capture_output=True, check=True,
             ).stdout.strip())
-            tree = subprocess.run(
-                [sys.executable, str(ROOT / "bootstrap" / "canonical_tree.py"), str(source), pinned],
-                text=True, capture_output=True, check=True,
-            ).stdout.strip()
-            command = f'''PYTHON="{sys.executable}"
-_repo_root="{ROOT}"
-_self_dir="{ROOT / 'ops'}"
-eval "$(sed -n '/^restore_generated_workspace_scratch()/,/^}}/p' "{OPERATOR}")"
+            command = f'''\
 eval "$(sed -n '/^sync_to_pinned_revision()/,/^}}/p' "{OPERATOR}")"
-sync_to_pinned_revision "$1" "$2" "$3"
+sync_to_pinned_revision "$1" "$2"
 '''
             result = subprocess.run(
-                ["bash", "-c", command, "test", str(checkout), pinned, tree],
+                ["bash", "-c", command, "test", str(checkout), pinned],
                 text=True, capture_output=True, check=False,
             )
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -350,6 +343,14 @@ sync_to_pinned_revision "$1" "$2" "$3"
             ).stdout.strip())
             self.assertNotEqual(pinned, advanced)
             self.assertIn("(pinned", result.stdout)
+
+            (checkout / "state").write_text("operator edit\n", encoding="ascii")
+            repeated = subprocess.run(
+                ["bash", "-c", command, "test", str(checkout), pinned],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(0, repeated.returncode, repeated.stdout + repeated.stderr)
+            self.assertEqual("operator edit\n", (checkout / "state").read_text(encoding="ascii"))
 
     def test_pinned_source_failure_is_typed_and_does_not_fall_back(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -368,12 +369,9 @@ sync_to_pinned_revision "$1" "$2" "$3"
                 capture_output=True, check=True,
             ).stdout.strip()
             missing = "f" * 40
-            command = f'''PYTHON="{sys.executable}"
-_repo_root="{ROOT}"
-_self_dir="{ROOT / 'ops'}"
-eval "$(sed -n '/^restore_generated_workspace_scratch()/,/^}}/p' "{OPERATOR}")"
+            command = f'''\
 eval "$(sed -n '/^sync_to_pinned_revision()/,/^}}/p' "{OPERATOR}")"
-sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
+sync_to_pinned_revision "$1" "$2"
 '''
             result = subprocess.run(
                 ["bash", "-c", command, "test", str(checkout), missing],
@@ -497,7 +495,7 @@ sync_to_pinned_revision "$1" "$2" "sha256-{'0' * 64}"
             )
             (host / "fkst.lock").write_text(
                 f'[[external_source]]\nid = "platform"\ngit = {json.dumps(str(platform))}\n'
-                f'[external_source.resolved]\nrev = "{selected_platform_revision}"\ntree_sha256 = "sha256-test"\n',
+                f'[external_source.resolved]\nrev = "{selected_platform_revision}"\n',
                 encoding="ascii",
             )
             advanced_platform_revision = ""

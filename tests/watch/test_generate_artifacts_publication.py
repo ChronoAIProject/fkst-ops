@@ -89,7 +89,7 @@ def test_hydration_failure_preserves_coherent_live_control_state(tmp_path: Path)
     before = {path: path.read_bytes() for path in (profile, manifest, launch_agent)}
 
     checkout = machine / "roots" / declaration_data["deployment"][0]["machine"]["target_checkout"]
-    (checkout / "providers" / "engine-board").write_text("unusable\n", encoding="ascii")
+    git(checkout, "checkout", "-qb", "personal")
     failed = run_generator(repository, home)
     assert failed.returncode == 2
     assert {path: path.read_bytes() for path in before} == before
@@ -471,7 +471,7 @@ def test_existing_checkout_with_wrong_origin_is_rejected(
     )
 
     declared = tmp_path / "declared"
-    revision, _ = source(declared, {"entry": "fixture\n"})
+    revision = source(declared, {"entry": "fixture\n"})
     git(declared, "branch", "integration")
     alternate = tmp_path / "alternate"
     subprocess.run([GIT, "clone", "-q", str(declared), str(alternate)], check=True)
@@ -611,7 +611,7 @@ def test_engine_checkout_is_materialised_detached(tmp_path: Path) -> None:
     from watch.source_hydration import EngineCheckout, _materialise_engine_checkout
 
     engine = tmp_path / "engine-source"
-    revision, _ = source(engine, {"bin/entry": "#!/bin/sh\nexit 0\n"})
+    revision = source(engine, {"bin/entry": "#!/bin/sh\nexit 0\n"})
     checkout = tmp_path / "engine-checkout"
     _materialise_engine_checkout(
         checkout, EngineCheckout(str(engine), revision)
@@ -620,25 +620,25 @@ def test_engine_checkout_is_materialised_detached(tmp_path: Path) -> None:
     assert git(checkout, "branch", "--show-current") == ""
 
 
-def test_pinned_deployment_checkout_detaches_an_existing_branch_and_checks_tree(
+def test_pinned_deployment_checkout_detaches_an_existing_branch(
     tmp_path: Path,
 ) -> None:
     from watch.source_hydration import EngineCheckout, _materialise_engine_checkout
 
     source_root = tmp_path / "platform-source"
-    revision, tree = source(source_root, {"state": "pinned\n"})
+    revision = source(source_root, {"state": "pinned\n"})
     git(source_root, "branch", "integration")
     checkout = tmp_path / "platform-checkout"
     subprocess.run([GIT, "clone", "-q", str(source_root), str(checkout)], check=True)
     _materialise_engine_checkout(
-        checkout, EngineCheckout(str(source_root), revision, tree), allow_attached=True
+        checkout, EngineCheckout(str(source_root), revision), allow_attached=True
     )
     assert git(checkout, "rev-parse", "HEAD") == revision
     assert git(checkout, "branch", "--show-current") == ""
 
-    with pytest.raises(ValueError, match="does not match exact revision"):
-        _materialise_engine_checkout(
-            checkout,
-            EngineCheckout(str(source_root), revision, "sha256-" + "0" * 64),
-            allow_attached=True,
-        )
+    state = checkout / "state"
+    state.write_text("operator edit\n", encoding="ascii")
+    _materialise_engine_checkout(
+        checkout, EngineCheckout(str(source_root), revision), allow_attached=True
+    )
+    assert state.read_text(encoding="ascii") == "operator edit\n"

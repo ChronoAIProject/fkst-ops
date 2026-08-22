@@ -167,17 +167,12 @@ github-bot="Local-Bot[bot]"
         ["git", "-C", str(mechanism), "rev-parse", "HEAD"],
         check=True, text=True, capture_output=True,
     ).stdout.strip()
-    mechanism_tree = subprocess.run(
-        ["python3", str(mechanism / "bootstrap" / "canonical_tree.py"), str(mechanism), mechanism_rev],
-        check=True, text=True, capture_output=True,
-    ).stdout.strip()
     lock.write_text(f'''[[external_source]]
 id="fkst-ops"
 git="{mechanism}"
 checkout_role="mechanism"
 [external_source.resolved]
 rev="{mechanism_rev}"
-tree_sha256="{mechanism_tree}"
 [[external_source]]
 id="source"
 git="https://invalid.example/source.git"

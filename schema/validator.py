@@ -47,7 +47,6 @@ MACHINE_KINDS = {
 }
 PROFILE_MACHINE_FIELDS = {"rate_pool", "bot_login"}
 _SHA = re.compile(r"^[0-9a-f]{40}$")
-_TREE_SHA = re.compile(r"^sha256-[0-9a-f]{64}$")
 
 
 class ValidationError(ValueError):
@@ -183,13 +182,10 @@ def _validate_lock(lock: dict[str, Any]) -> dict[str, dict[str, Any]]:
             _fail(path + ".checkout_role", "must be deployment-operated or mechanism")
         if checkout_role == "mechanism" or "resolved" in entry:
             resolved = _table(entry.get("resolved"), f"{path}.resolved")
-            _closed(resolved, {"rev", "tree_sha256"}, f"{path}.resolved")
+            _closed(resolved, {"rev"}, f"{path}.resolved")
             rev = _string(resolved, "rev", f"{path}.resolved")
-            tree = _string(resolved, "tree_sha256", f"{path}.resolved")
             if not _SHA.fullmatch(rev):
                 _fail(f"{path}.resolved.rev", "must be a full lowercase Git SHA")
-            if not _TREE_SHA.fullmatch(tree):
-                _fail(f"{path}.resolved.tree_sha256", "must be a canonical SHA-256 pin")
         if identity in result:
             _fail(path + ".id", f"duplicate lock identity: {identity}")
         result[identity] = entry

@@ -1,1 +1,0 @@
-run_self_test_with_optional_lua_coverage | host/host_entry.sh | source-id:fkst%2Dpackages/scripts/run.sh | duplicated because source CI must not change (constraint C4/S3) | engine self-test invocation belongs to the engine contract; remove this entry when the encoded source location exposes it or becomes a deployment

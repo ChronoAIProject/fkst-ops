@@ -316,20 +316,12 @@ sync_to_run_branch() { # $1 worktree dir
 }
 
 source_pin_values() { # $1 JSON resolved pin
-  "$PYTHON" -c 'import json,sys; pin=json.loads(sys.argv[1]); print(pin["rev"], pin["tree_sha256"], sep="\t")' "$1"
+  "$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["rev"])' "$1"
 }
 
-sync_to_pinned_revision() { # $1 worktree dir, $2 revision, $3 canonical tree hash
+sync_to_pinned_revision() { # $1 worktree dir, $2 revision
   git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || {
     echo "  $1 -> PINNED-SOURCE-INVALID: not a git worktree"; return 1;
-  }
-  restore_generated_workspace_scratch "$1"
-  local status
-  status=$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null) || {
-    echo "  $1 -> PINNED-WORKTREE-VERIFY-FAILED"; return 1;
-  }
-  [ -z "$status" ] || {
-    echo "  $1 -> PINNED-WORKTREE-DIRTY"; return 1;
   }
   if ! git -C "$1" rev-parse --verify "$2^{commit}" >/dev/null 2>&1; then
     git -C "$1" fetch origin "$2" -q 2>/dev/null || {
@@ -339,38 +331,26 @@ sync_to_pinned_revision() { # $1 worktree dir, $2 revision, $3 canonical tree ha
   git -C "$1" checkout -q --detach "$2" 2>/dev/null || {
     echo "  $1 -> PINNED-CHECKOUT-FAILED ($2)"; return 1;
   }
-  local head tree
+  local head
   head=$(git -C "$1" rev-parse --verify HEAD^{commit} 2>/dev/null) || {
     echo "  $1 -> PINNED-REVISION-MISMATCH (missing HEAD; expected $2)"; return 1;
   }
   [ "$head" = "$2" ] || {
     echo "  $1 -> PINNED-REVISION-MISMATCH (got $head, expected $2)"; return 1;
   }
-  status=$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null) || {
-    echo "  $1 -> PINNED-WORKTREE-VERIFY-FAILED"; return 1;
-  }
-  [ -z "$status" ] || {
-    echo "  $1 -> PINNED-WORKTREE-DIRTY"; return 1;
-  }
-  tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$1" "$2" 2>/dev/null) || {
-    echo "  $1 -> PINNED-TREE-VERIFY-FAILED ($2)"; return 1;
-  }
-  [ "$tree" = "$3" ] || {
-    echo "  $1 -> PINNED-TREE-MISMATCH (got $tree, expected $3)"; return 1;
-  }
   echo "  $1 -> ${head:0:12} (pinned $2)"
 }
 
 sync_deployment_source() { # $1 worktree dir, $2 optional JSON resolved pin
-  local pin="${2:-}" revision tree
+  local pin="${2:-}" revision
   if [ -z "$pin" ] || [ "$pin" = "__FKST_OPS_EMPTY__" ]; then
     sync_to_run_branch "$1"
     return $?
   fi
-  IFS=$'\t' read -r revision tree <<<"$(source_pin_values "$pin")" || {
+  revision=$(source_pin_values "$pin") || {
     echo "  $1 -> PINNED-SOURCE-INVALID"; return 1;
   }
-  sync_to_pinned_revision "$1" "$revision" "$tree"
+  sync_to_pinned_revision "$1" "$revision"
 }
 
 # Ensure a checkout's INTEGRATION_BRANCH is >= UPSTREAM_BRANCH (dev) by merging upstream
@@ -430,16 +410,11 @@ assert_engine_pair_at() { # $1 platform checkout, $2 platform revision, $3 engin
     "$1" "$ENGINE_REVISION_PATH" "$2" "$3"
 }
 
-launch_platform_snapshot_valid() { # $1 source, $2 snapshot, $3 P, $4 E
-  local source_tree snapshot_revision snapshot_tree status
-  source_tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$1" "$3" 2>/dev/null) || return 1
-  snapshot_revision=$(git -C "$2" rev-parse --verify HEAD^{commit} 2>/dev/null) || return 1
-  [ "$snapshot_revision" = "$3" ] || return 1
-  snapshot_tree=$("$PYTHON" "$_repo_root/bootstrap/canonical_tree.py" "$2" "$snapshot_revision" 2>/dev/null) || return 1
-  [ "$source_tree" = "$snapshot_tree" ] || return 1
-  status=$(git -C "$2" status --porcelain --untracked-files=no 2>/dev/null) || return 1
-  [ -z "$status" ] || return 1
-  assert_engine_pair_at "$2" "$3" "$4" >/dev/null 2>&1
+launch_platform_snapshot_valid() { # $1 snapshot, $2 P, $3 E
+  local snapshot_revision
+  snapshot_revision=$(git -C "$1" rev-parse --verify HEAD^{commit} 2>/dev/null) || return 1
+  [ "$snapshot_revision" = "$2" ] || return 1
+  assert_engine_pair_at "$1" "$2" "$3" >/dev/null 2>&1
 }
 
 materialise_launch_platform() { # $1 source checkout, $2 destination, $3 P, $4 E
@@ -448,7 +423,7 @@ materialise_launch_platform() { # $1 source checkout, $2 destination, $3 P, $4 E
   mkdir -p "$(dirname "$destination")" || return 1
   lock="$RUNTIME_ROOT/.platform-locks/$platform_revision.lock"
   guard="$RUNTIME_ROOT/.platform-locks/.identity.guard"
-  if [ -e "$destination" ] && ! launch_platform_snapshot_valid "$@"; then
+  if [ -e "$destination" ] && ! launch_platform_snapshot_valid "$2" "$3" "$4"; then
     "$PYTHON" "$_self_dir/launch_child.py" --remove-unlocked-snapshot \
       "$destination" "$lock" "$guard"
     status=$?
@@ -476,16 +451,16 @@ materialise_launch_platform() { # $1 source checkout, $2 destination, $3 P, $4 E
       echo "LAUNCH_PLATFORM_SNAPSHOT_FAILED: cannot bind captured platform source identity" >&2
       return 1
     }
-    launch_platform_snapshot_valid "$source" "$temporary" "$platform_revision" "$engine_revision" || {
+    launch_platform_snapshot_valid "$temporary" "$platform_revision" "$engine_revision" || {
       rm -rf "$temporary"
-      echo "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH: materialised tree does not match captured commit" >&2
+      echo "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH: materialised snapshot HEAD does not match captured platform revision or platform/engine pair assertion failed" >&2
       return 1
     }
     "$PYTHON" -c 'import os,sys; os.rename(sys.argv[1],sys.argv[2])' \
       "$temporary" "$destination" 2>/dev/null || rm -rf "$temporary"
   fi
-  launch_platform_snapshot_valid "$@" || {
-    echo "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH: captured platform tree changed" >&2
+  launch_platform_snapshot_valid "$2" "$3" "$4" || {
+    echo "LAUNCH_PLATFORM_SNAPSHOT_MISMATCH: captured snapshot HEAD does not match captured platform revision or platform/engine pair assertion failed" >&2
     return 1
   }
 }
@@ -502,10 +477,10 @@ invoke_engine_build_provider() {
 }
 
 ensure_engine_binary_current() {
-  local response source_revision pinned_revision pinned_tree
+  local response source_revision pinned_revision
   resolve_engine_pair || return $?
   if [ -n "${ENGINE_SOURCE_PIN:-}" ]; then
-    IFS=$'\t' read -r pinned_revision pinned_tree <<<"$(source_pin_values "$ENGINE_SOURCE_PIN")" || {
+    pinned_revision=$(source_pin_values "$ENGINE_SOURCE_PIN") || {
       echo "ENGINE-SOURCE-PIN-INVALID: cannot parse engine source pin" >&2
       return 1
     }
@@ -513,7 +488,7 @@ ensure_engine_binary_current() {
       echo "ENGINE-SOURCE-PIN-MISMATCH: expected derived engine revision $ENGINE_REVISION, got $pinned_revision" >&2
       return 1
     }
-    sync_to_pinned_revision "$ENGINE_CHECKOUT" "$pinned_revision" "$pinned_tree" || return 1
+    sync_to_pinned_revision "$ENGINE_CHECKOUT" "$pinned_revision" || return 1
   fi
   if engine_build_receipt_current; then
     ENGINE_BUILD_STATUS="current: $BIN@${ENGINE_REVISION:0:8}"
@@ -867,7 +842,7 @@ _proc_stale() {
   [ -z "$p" ] && { echo stopped; return; }
   derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
   if [ -n "${PLATFORM_SOURCE_PIN:-}" ]; then
-    IFS=$'\t' read -r pin_revision _ <<<"$(source_pin_values "$PLATFORM_SOURCE_PIN")" || {
+    pin_revision=$(source_pin_values "$PLATFORM_SOURCE_PIN") || {
       echo pinned-source-invalid; return;
     }
     pdev="$pin_revision"

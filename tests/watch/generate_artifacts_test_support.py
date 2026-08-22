@@ -10,10 +10,6 @@ import subprocess
 import sys
 import tomllib
 
-from bootstrap.canonical_tree import canonical_tree_sha256
-
-
-
 ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = ROOT / "watch" / "generate_artifacts.py"
 FIXTURES = ROOT / "tests" / "schema" / "fixtures"
@@ -62,7 +58,7 @@ def git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def source(root: Path, files: dict[str, str]) -> tuple[str, str]:
+def source(root: Path, files: dict[str, str]) -> str:
     root.mkdir()
     git(root, "init", "-q")
     git(root, "config", "user.email", "test@example.invalid")
@@ -75,8 +71,7 @@ def source(root: Path, files: dict[str, str]) -> tuple[str, str]:
             path.chmod(0o755)
     git(root, "add", ".")
     git(root, "commit", "-qm", "fixture")
-    revision = git(root, "rev-parse", "HEAD")
-    return revision, canonical_tree_sha256(root, revision)
+    return git(root, "rev-parse", "HEAD")
 
 
 def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
@@ -95,13 +90,13 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     }), encoding="ascii")
 
     engine = tmp_path / "engine-source"
-    engine_pin = source(engine, {
+    engine_revision = source(engine, {
         "bin/build-provider": "#!/bin/sh\nexit 0\n",
         "cargo": "#!/bin/sh\nmkdir -p target/debug\nprintf '#!/bin/sh\\nexit 0\\n' > target/debug/engine\nchmod +x target/debug/engine\n",
     })
     target = tmp_path / "target-source"
-    target_pin = source(target, {
-        ".control/engine-ref": engine_pin[0] + "\n",
+    target_revision = source(target, {
+        ".control/engine-ref": engine_revision + "\n",
         "packages/github-devloop/entry": "x",
         "packages/github-devloop-pr/entry": "x",
         "packages/github-devloop-integration/entry": "x",
@@ -111,16 +106,16 @@ def prepared(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     git(target, "branch", "integration")
     git(engine, "branch", "integration")
     lock = ""
-    for identity, path, pin in (
-        ("target-source", target, target_pin), ("engine-source", engine, engine_pin),
-        ("fkst-ops", ROOT, ("4" * 40, "sha256-" + "4" * 64)),
+    for identity, path, revision in (
+        ("target-source", target, target_revision),
+        ("engine-source", engine, engine_revision),
+        ("fkst-ops", ROOT, "4" * 40),
     ):
         checkout_role = "mechanism" if identity == "fkst-ops" else "deployment-operated"
         lock += (f'[[external_source]]\nid = "{identity}"\ngit = "{path}"\n'
                  f'checkout_role = "{checkout_role}"\n')
         if checkout_role == "mechanism":
-            lock += (f'[external_source.resolved]\nrev = "{pin[0]}"\n'
-                     f'tree_sha256 = "{pin[1]}"\n')
+            lock += f'[external_source.resolved]\nrev = "{revision}"\n'
         lock += "\n"
     (repository / "fkst.lock").write_text(lock)
     return repository, home, tomllib.loads((repository / "deployment.toml").read_text())
@@ -140,22 +135,11 @@ def run_generator(
         git(mechanism, "add", ".")
         git(mechanism, "commit", "-qm", "fixture mechanism")
         revision = git(mechanism, "rev-parse", "HEAD")
-        environment = os.environ.copy()
-        environment["PATH"] = str(Path(GIT).parent)
-        prior_path = os.environ.get("PATH")
-        os.environ["PATH"] = environment["PATH"]
-        try:
-            tree = canonical_tree_sha256(mechanism, revision)
-        finally:
-            if prior_path is None:
-                os.environ.pop("PATH", None)
-            else:
-                os.environ["PATH"] = prior_path
         lock_path = repository / "fkst.lock"
         lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
         for entry in lock["external_source"]:
             if entry["id"] == "fkst-ops":
-                entry["resolved"] = {"rev": revision, "tree_sha256": tree}
+                entry["resolved"] = {"rev": revision}
         lines = []
         for entry in lock["external_source"]:
             lines.extend([
@@ -165,7 +149,6 @@ def run_generator(
             if entry["checkout_role"] == "mechanism":
                 lines.extend([
                     "[external_source.resolved]", f'rev = "{entry["resolved"]["rev"]}"',
-                    f'tree_sha256 = "{entry["resolved"]["tree_sha256"]}"',
                 ])
             lines.append("")
         lock_path.write_text("\n".join(lines), encoding="ascii")

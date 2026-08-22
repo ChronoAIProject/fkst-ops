@@ -59,12 +59,6 @@ class ZeroTargetNamesTest(unittest.TestCase):
                 self.assertEqual(1, result.returncode)
                 self.assertIn(f"{relative}: concrete target name: {name}", result.stderr)
 
-    def test_unenumerated_exclusion_is_scan_failure(self):
-        self.write("source.py", NAMES[0])
-        result = self.invoke("--exclude", "source.py")
-        self.assertEqual(2, result.returncode)
-        self.assertIn("unenumerated exclusion", result.stderr)
-
     def test_enumerated_fixtures_are_excluded(self):
         for index, relative in enumerate(SCHEMA_FIXTURES):
             self.write(relative, NAMES[index % len(NAMES)])

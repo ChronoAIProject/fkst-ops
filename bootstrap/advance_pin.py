@@ -13,12 +13,6 @@ import tempfile
 import tomllib
 from urllib.parse import urlsplit
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from bootstrap.canonical_tree import canonical_tree_sha256
-
-
 _FULL_REVISION = re.compile(r"[0-9a-f]{40}")
 
 
@@ -53,7 +47,7 @@ def _source_url(lock: dict[str, object], source_id: str) -> str:
     return url
 
 
-def _updated_text(text: str, source_id: str, revision: str, tree: str) -> str:
+def _updated_text(text: str, source_id: str, revision: str) -> str:
     chunks = re.split(r"(?m)(?=^\[\[external_source\]\]\s*$)", text)
     changed = 0
     for index, chunk in enumerate(chunks):
@@ -70,11 +64,21 @@ def _updated_text(text: str, source_id: str, revision: str, tree: str) -> str:
         chunk, rev_count = re.subn(
             r'(?m)^(rev\s*=\s*)"[^"]*"[ \t]*$', rf'\1"{revision}"', chunk
         )
-        chunk, tree_count = re.subn(
-            r'(?m)^(tree_sha256\s*=\s*)"[^"]*"[ \t]*$', rf'\1"{tree}"', chunk
+        chunk = re.sub(
+            r'''(?m)^[ \t]*tree_sha256[ \t]*=[ \t]*(?:"[^"]*"|'[^']*')'''
+            r"[ \t]*(?:#[^\r\n]*)?(?:\r?\n|\Z)",
+            "",
+            chunk,
         )
-        if rev_count != 1 or tree_count != 1:
-            raise ValueError(f"external_source(id={source_id}) needs one resolved rev and tree_sha256")
+        updated_entry = tomllib.loads(chunk)["external_source"][0]
+        resolved = updated_entry.get("resolved")
+        if isinstance(resolved, dict) and "tree_sha256" in resolved:
+            raise ValueError(
+                f"external_source(id={source_id}) uses an unsupported TOML spelling "
+                "for legacy tree_sha256"
+            )
+        if rev_count != 1:
+            raise ValueError(f"external_source(id={source_id}) needs one resolved rev")
         chunks[index] = chunk
         changed += 1
     if changed != 1:
@@ -84,7 +88,7 @@ def _updated_text(text: str, source_id: str, revision: str, tree: str) -> str:
     return updated
 
 
-def advance(lock_path: Path, source_id: str, requested_revision: str) -> tuple[str, str]:
+def advance(lock_path: Path, source_id: str, requested_revision: str) -> str:
     text = lock_path.read_text(encoding="utf-8")
     lock = tomllib.loads(text)
     url = _source_url(lock, source_id)
@@ -99,15 +103,14 @@ def advance(lock_path: Path, source_id: str, requested_revision: str) -> tuple[s
         revision = _run(checkout, "rev-parse", "--verify", requested_revision + "^{commit}")
         if not _FULL_REVISION.fullmatch(revision):
             raise ValueError("source resolved the requested revision to a non-canonical commit id")
-        tree = canonical_tree_sha256(checkout, revision)
-    updated = _updated_text(text, source_id, revision, tree)
+    updated = _updated_text(text, source_id, revision)
     temporary_lock = lock_path.with_name(f".{lock_path.name}.{os.getpid()}.tmp")
     try:
         temporary_lock.write_text(updated, encoding="utf-8")
         os.replace(temporary_lock, lock_path)
     finally:
         temporary_lock.unlink(missing_ok=True)
-    return revision, tree
+    return revision
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,13 +120,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--revision", required=True)
     args = parser.parse_args(argv)
     try:
-        revision, tree = advance(args.lock, args.source, args.revision)
+        revision = advance(args.lock, args.source, args.revision)
     except (OSError, ValueError, tomllib.TOMLDecodeError, subprocess.CalledProcessError) as exc:
         print(f"pin advance failed: {exc}", file=sys.stderr)
         return 2
     print(f"source={args.source}")
     print(f"revision={revision}")
-    print(f"tree_sha256={tree}")
     return 0
 
 

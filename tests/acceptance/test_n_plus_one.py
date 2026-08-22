@@ -116,7 +116,6 @@ git = "{mechanism}"
 checkout_role = "mechanism"
 [external_source.resolved]
 rev = "0000000000000000000000000000000000000000"
-tree_sha256 = "sha256-{'0' * 64}"
 [[external_source]]
 id = "target-source"
 git = "{target}"

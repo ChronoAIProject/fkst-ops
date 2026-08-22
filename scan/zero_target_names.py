@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Every exclusion is enumerated by exact path. Categories, directories, globs and implicit
-# exclusions are forbidden: an unenumerated exclusion is a scan failure.
+# exclusions are forbidden.
 # Documents are excluded only when naming the origin repository is what makes their evidence
 # verifiable — a doctrine or design anchor that cannot be traced back to its incident is worth
 # nothing. Executable source is never excluded on that ground.
@@ -58,10 +58,7 @@ def tracked_paths(root: Path) -> list[str]:
     return paths
 
 
-def scan(root: Path, names: list[str], requested_exclusions: set[str]) -> list[str]:
-    unknown = requested_exclusions - EXCLUDED_PATHS
-    if unknown:
-        raise ValueError("unenumerated exclusion(s): " + ", ".join(sorted(unknown)))
+def scan(root: Path, names: list[str]) -> list[str]:
     findings: list[str] = []
     for relative in tracked_paths(root):
         if relative in EXCLUDED_PATHS:
@@ -80,11 +77,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--name", action="append", required=True)
-    parser.add_argument("--exclude", action="append", default=[])
     args = parser.parse_args()
     try:
-        findings = scan(args.root, args.name, set(args.exclude))
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        findings = scan(args.root, args.name)
+    except (OSError, subprocess.CalledProcessError) as exc:
         print(f"error: zero-target-name scan failed: {exc}", file=sys.stderr)
         return 2
     if findings:

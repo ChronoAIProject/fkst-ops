@@ -372,7 +372,6 @@ class ValidatorTests(unittest.TestCase):
     def test_deployment_operated_source_accepts_optional_resolved_pin(self) -> None:
         self.lock["external_source"][0]["resolved"] = {
             "rev": "1" * 40,
-            "tree_sha256": "sha256-" + "1" * 64,
         }
         resolved = validate_and_resolve(self.declaration, self.machine, self.lock)
         self.assertEqual(
@@ -546,8 +545,19 @@ class ValidatorTests(unittest.TestCase):
             entry for entry in self.lock["external_source"]
             if entry["checkout_role"] == "mechanism"
         )
-        del mechanism["resolved"]["tree_sha256"]
-        self.reject("tree_sha256.*non-empty string")
+        del mechanism["resolved"]["rev"]
+        self.reject("resolved.rev.*non-empty string")
+
+    def test_resolved_pin_accepts_only_rev(self) -> None:
+        mechanism = next(
+            entry for entry in self.lock["external_source"]
+            if entry["checkout_role"] == "mechanism"
+        )
+        self.assertNotIn("tree_sha256", mechanism["resolved"])
+        validate_and_resolve(self.declaration, self.machine, self.lock)
+
+        mechanism["resolved"]["tree_sha256"] = "sha256-" + "1" * 64
+        self.reject(r"resolved: unknown field: tree_sha256")
 
     def test_rejects_unknown_declaration_field(self) -> None:
         self.declaration["surprise"] = True

@@ -64,46 +64,28 @@ for source in sources:
     if source.get("id") != "fkst-ops":
         continue
     revision = source.get("resolved", {}).get("rev")
-    tree = source.get("resolved", {}).get("tree_sha256")
     url = source.get("git")
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         print("error: fkst-ops lock entry needs resolved.rev as a full lowercase git SHA", file=sys.stderr)
         raise SystemExit(1)
-    if not isinstance(tree, str) or not re.fullmatch(r"sha256-[0-9a-f]{64}", tree):
-        print("error: fkst-ops lock entry needs canonical resolved.tree_sha256", file=sys.stderr)
-        raise SystemExit(1)
     if not isinstance(url, str) or not url or "\t" in url or "\n" in url:
         print("error: fkst-ops lock entry needs git", file=sys.stderr)
         raise SystemExit(1)
-    print(url, revision, tree, sep="\t")
+    print(url, revision, sep="\t")
     raise SystemExit(0)
 print("error: fkst.lock is missing external_source(id=fkst-ops)", file=sys.stderr)
 raise SystemExit(1)
 PY
 }
 
-verify_checkout() {
-  verify_checkout_details "$@" >/dev/null
-}
-
-verify_checkout_details() {
-  "$PYTHON" - "$1" "$2" "$3" <<'PY'
-import hashlib
-import os
-import stat
-import struct
+checkout_at_revision() {
+  "$PYTHON" - "$1" "$2" <<'PY'
 import subprocess
 import sys
 from pathlib import Path
 
-root, revision, expected_tree = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+root, revision = Path(sys.argv[1]), sys.argv[2]
 git_env = {"PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1", "HOME": "/dev/null"}
-
-def git(*args: str) -> bytes:
-    return subprocess.run(
-        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
-        env=git_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-    ).stdout
 
 try:
     head_result = subprocess.run(
@@ -112,58 +94,15 @@ try:
     )
     head = head_result.stdout.decode("ascii").strip() if head_result.returncode == 0 else ""
     if head != revision:
-        print(f"error: fkst-ops resolved.rev mismatch: expected {revision}, got {head or 'missing'}")
+        print(
+            f"error: fkst-ops resolved.rev mismatch: expected {revision}, got {head or 'missing'}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
-
-    entries = []
-    for raw in git("ls-tree", "-r", "-z", "--full-tree", revision).split(b"\0"):
-        if not raw:
-            continue
-        metadata, path = raw.split(b"\t", 1)
-        mode, kind, object_id = metadata.split(b" ", 2)
-        if kind != b"blob":
-            raise RuntimeError(f"tracked path {path!r} is not a blob")
-        entries.append((path, mode, object_id))
-
-    digest = hashlib.sha256()
-    drifted = []
-    for path, mode, object_id in sorted(entries):
-        blob = git("cat-file", "blob", object_id.decode("ascii"))
-        for field in (path, mode, hashlib.sha256(blob).digest()):
-            digest.update(struct.pack(">Q", len(field)))
-            digest.update(field)
-        materialised = root / os.fsdecode(path)
-        try:
-            metadata = materialised.lstat()
-            if mode == b"120000":
-                actual = os.fsencode(os.readlink(materialised))
-                valid_mode = stat.S_ISLNK(metadata.st_mode)
-            else:
-                actual = materialised.read_bytes()
-                actual_mode = b"100755" if metadata.st_mode & stat.S_IXUSR else b"100644"
-                valid_mode = stat.S_ISREG(metadata.st_mode) and actual_mode == mode
-            if not valid_mode or actual != blob:
-                drifted.append(os.fsdecode(path))
-        except OSError:
-            drifted.append(os.fsdecode(path))
-
-    actual_tree = "sha256-" + digest.hexdigest()
-    if actual_tree != expected_tree:
-        print(f"error: fkst-ops tree_sha256 mismatch: expected {expected_tree}, got {actual_tree}")
-        raise SystemExit(1)
-    if drifted:
-        print("error: fkst-ops tracked checkout differs from the pinned revision; refusing to execute:")
-        print("\n".join(sorted(set(drifted))))
-        print("Restore or replace the cached checkout so its tracked files match the pinned revision, then retry.")
-        raise SystemExit(1)
-except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError) as exc:
-    print(f"error: fkst-ops checkout verification failed: {exc}")
+except OSError as exc:
+    print(f"error: cannot inspect fkst-ops checkout: {exc}", file=sys.stderr)
     raise SystemExit(1)
 PY
-}
-
-report_verification_failure() {
-  verify_checkout_details "$@" >&2 || true
 }
 
 replace_pointer() {
@@ -175,8 +114,8 @@ os.replace(sys.argv[1], sys.argv[2])
 PY
 }
 
-IFS=$'\t' read -r repo_url revision expected_tree < <(read_pin)
-if ! verify_checkout "$ROOT" "$revision" "$expected_tree"; then
+IFS=$'\t' read -r repo_url revision < <(read_pin)
+if ! checkout_at_revision "$ROOT" "$revision" 2>/dev/null; then
   if [ "${FKST_OPS_REEXEC_DEPTH:-0}" != 0 ]; then
     echo "error: fkst-ops re-exec target is not the physically pinned checkout" >&2
     exit 1
@@ -193,16 +132,13 @@ if ! verify_checkout "$ROOT" "$revision" "$expected_tree"; then
   trap cleanup EXIT
 
   if [ -L "$current" ] && cached="$(readlink "$current")" && [ -d "$cached/.git" ]; then
-    verify_checkout "$cached" "$revision" "$expected_tree" &&
+    checkout_at_revision "$cached" "$revision" 2>/dev/null &&
       FKST_OPS_REEXEC_DEPTH=1 exec "$cached/bin/fkst-ops" "${original_argv[@]}"
   fi
 
   verified="$cache_root/checkouts/$revision"
   if [ -e "$verified" ]; then
-    verify_checkout "$verified" "$revision" "$expected_tree" || {
-      report_verification_failure "$verified" "$revision" "$expected_tree"
-      exit 1
-    }
+    checkout_at_revision "$verified" "$revision" || exit 1
     if [ "$preflight" -eq 1 ]; then
       FKST_OPS_REEXEC_DEPTH=1 "$verified/bin/fkst-ops" "${original_argv[@]}"
       exit 0
@@ -217,10 +153,7 @@ if ! verify_checkout "$ROOT" "$revision" "$expected_tree"; then
   candidate="$(mktemp -d "$cache_root/checkouts/.partial.XXXXXX")"
   git clone --quiet --no-checkout "$repo_url" "$candidate"
   git -C "$candidate" checkout --quiet "$revision"
-  if ! verify_checkout "$candidate" "$revision" "$expected_tree"; then
-    report_verification_failure "$candidate" "$revision" "$expected_tree"
-    exit 1
-  fi
+  checkout_at_revision "$candidate" "$revision" || exit 1
   if [ "$preflight" -eq 1 ]; then
     FKST_OPS_REEXEC_DEPTH=1 "$candidate/bin/fkst-ops" "${original_argv[@]}"
   else
@@ -233,10 +166,7 @@ if ! verify_checkout "$ROOT" "$revision" "$expected_tree"; then
     exit 1
   fi
   if [ -e "$verified" ]; then
-    verify_checkout "$verified" "$revision" "$expected_tree" || {
-      report_verification_failure "$verified" "$revision" "$expected_tree"
-      exit 1
-    }
+    checkout_at_revision "$verified" "$revision" || exit 1
     rm -rf "$candidate"
     candidate=""
   else
