@@ -56,6 +56,10 @@ class ValidatorTests(unittest.TestCase):
                 (platform / "packages" / package).mkdir(parents=True, exist_ok=True)
             for package in deployment["packages"].get("host", []):
                 (target / ".fkst" / "local-packages" / package).mkdir(parents=True, exist_ok=True)
+            for entry in deployment.get("package_sources", []):
+                root = Path(self.machine["roots"][entry["checkout"]])
+                for package in entry["packages"]:
+                    (root / "packages" / package).mkdir(parents=True, exist_ok=True)
             entries = {"target-source": target, "platform-source": platform, "engine-source": engine}
             for provider in declaration["provider"]:
                 lock_ref, relative = provider["implementation"].split(":", 1)
@@ -83,7 +87,14 @@ class ValidatorTests(unittest.TestCase):
         website_declaration = load("website.toml")
         self._prepare_deployment_paths(website_declaration)
         website = validate_and_resolve(website_declaration, self.machine, self.lock)
-        self.assertEqual(website["deployment"][0]["packages"]["host"], ["site-board"])
+        self.assertEqual(website["deployment"][0]["packages"]["host"], [])
+        # The website topology is the one that carries no packages inside its target: its Lua
+        # comes from a second package source named by the declaration.
+        self.assertEqual(
+            [(entry["lock_ref"], entry["packages"]) for entry in website["deployment"][0]["package_sources"]],
+            [("package-source", ["site-board"])],
+        )
+        self.assertTrue(website["deployment"][0]["package_sources"][0]["checkout"].startswith("/"))
 
     def test_a_declaration_still_carrying_the_retired_write_field_resolves(self) -> None:
         """Accepted and ignored, so the two repositories need not merge in the same instant.
@@ -585,6 +596,30 @@ class ValidatorTests(unittest.TestCase):
         self.declaration["deployment"][0]["machine"]["target_checkout"] = "srv/target"
         self.reject("logical name, not a path")
 
+    def test_rejects_whitespace_and_control_characters_in_machine_roots(self) -> None:
+        for label, value in (
+            ("space", "/srv/package source"),
+            ("tab", "/srv/package\tsource"),
+            ("carriage-return", "/srv/package\rsource"),
+            ("newline", "/srv/package\nsource"),
+            ("nul", "/srv/package\x00source"),
+        ):
+            with self.subTest(label=label):
+                self.machine["roots"]["packages-host"] = value
+                self.reject(
+                    r"machine_profile\.roots\.packages-host: "
+                    r"must not contain control characters or whitespace"
+                )
+
+    def test_rejects_whitespace_and_control_characters_in_machine_binaries(self) -> None:
+        for label, suffix in (("space", " "), ("tab", "\t"), ("newline", "\n")):
+            with self.subTest(label=label):
+                self.machine["binaries"]["engine"] += suffix
+                self.reject(
+                    r"machine_profile\.binaries\.engine: "
+                    r"must not contain control characters or whitespace"
+                )
+
     def test_rejects_missing_provider_binding(self) -> None:
         del self.declaration["deployment"][0]["providers"]["engine"]
         self.reject("providers.engine.*non-empty string")
@@ -618,6 +653,56 @@ class ValidatorTests(unittest.TestCase):
     def test_rejects_missing_resolved_package_root(self) -> None:
         self.declaration["deployment"][0]["packages"]["platform"].append("missing-package")
         self.reject("resolved root does not exist")
+
+    def test_rejects_package_source_name_outside_engine_grammar(self) -> None:
+        declaration = load("website.toml")
+        declaration["deployment"][0]["package_sources"][0]["packages"] = ["site.board"]
+        self._prepare_deployment_paths(declaration)
+        self.declaration = declaration
+
+        self.reject(r"package name must match \[A-Za-z0-9_-\]\+")
+
+    def test_rejects_reserved_host_package_source_name(self) -> None:
+        declaration = load("website.toml")
+        declaration["deployment"][0]["package_sources"][0]["packages"] = ["host"]
+        self._prepare_deployment_paths(declaration)
+        self.declaration = declaration
+
+        self.reject("package name 'host' is reserved")
+
+    def test_rejects_ere_syntax_before_the_staleness_probe(self) -> None:
+        declaration = load("website.toml")
+        declaration["deployment"][0]["package_sources"][0]["packages"] = ["site.*"]
+        self._prepare_deployment_paths(declaration)
+        self.declaration = declaration
+
+        self.reject(r"package name must match \[A-Za-z0-9_-\]\+")
+
+    def test_rejects_package_source_parent_traversal_even_when_target_exists(self) -> None:
+        declaration = load("website.toml")
+        package_source = declaration["deployment"][0]["package_sources"][0]
+        package_source["packages"] = ["../../outside"]
+        source_root = Path(self.machine["roots"][package_source["checkout"]])
+        escaped_target = (source_root / "packages" / "../../outside").resolve()
+        self._prepare_deployment_paths(declaration)
+        self.assertTrue(escaped_target.is_dir())
+        self.declaration = declaration
+
+        self.reject(r"package name must match \[A-Za-z0-9_-\]\+")
+
+    def test_rejects_package_source_symlink_outside_its_checkout(self) -> None:
+        declaration = load("website.toml")
+        package_source = declaration["deployment"][0]["package_sources"][0]
+        self._prepare_deployment_paths(declaration)
+        source_root = Path(self.machine["roots"][package_source["checkout"]])
+        package_root = source_root / "packages" / package_source["packages"][0]
+        package_root.rmdir()
+        outside = Path(self.temp.name) / "outside-package"
+        outside.mkdir()
+        package_root.symlink_to(outside, target_is_directory=True)
+        self.declaration = declaration
+
+        self.reject("package root must be a direct child of its declared source")
 
     def test_accepts_absent_absolute_engine_build_path(self) -> None:
         binary = Path(self.temp.name) / "not-built-yet"

@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
+SOURCE_CONTROL = ROOT / "ops" / "deployment_source_control.sh"
 
 
 class OperatorRestartDetectionTest(unittest.TestCase):
@@ -21,6 +22,8 @@ class OperatorRestartDetectionTest(unittest.TestCase):
     ) -> str:
         command = f'''eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
+eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
 cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; PLATFORM_SOURCE_PIN=; return 0; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$TEST_LOG"; }}
@@ -46,7 +49,7 @@ _proc_stale deployment
                 f" LAUNCH_ENV_SHA256={running_sha256}" if running_sha256 is not None else ""
             )
             log.write_text(
-                "EVENT=code_provenance platform-package@11111111 "
+                "EVENT=code_provenance PKG_VERS=platform-package@11111111 "
                 f"ENGINE_VER=aaaaaaaa{marker}\n"
                 f"CONTROL_GENERATION={running_generation}\n",
                 encoding="ascii",
@@ -104,6 +107,8 @@ printf '%s\\n' "$@" | platform_paths_require_restart
     def test_proc_stale_fails_closed_when_git_diff_fails(self) -> None:
         command = f'''eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
+eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
 cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; return 0; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$TEST_LOG"; }}
@@ -123,7 +128,7 @@ _proc_stale "$2"
         with tempfile.TemporaryDirectory() as temp_dir:
             log = Path(temp_dir) / "supervise.log"
             log.write_text(
-                "EVENT=code_provenance github-devloop@11111111 ENGINE_VER=aaaaaaaa\n",
+                "EVENT=code_provenance PKG_VERS=github-devloop@11111111 ENGINE_VER=aaaaaaaa\n",
                 encoding="ascii",
             )
             result = subprocess.run(
@@ -132,6 +137,45 @@ _proc_stale "$2"
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "pkg-stale")
+
+    def test_exact_package_lookup_does_not_interpret_ere_syntax(self) -> None:
+        command = f'''eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
+eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
+PYTHON=python3
+cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PLATFORM_SOURCE_PIN=; return 0; }}
+pidof_df() {{ echo 123; }}
+latest_log() {{ echo "$TEST_LOG"; }}
+derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS='site.*'; }}
+resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
+package_source_moved() {{ :; }}
+resolve_deployment_child_environment() {{ :; }}
+deployment_child_environment_sha256() {{ printf '%s\n' {'1' * 64!r}; }}
+git() {{
+  case "$*" in
+    *" fetch "*) return 0 ;;
+    *" rev-parse "*) echo 11111111; return 0 ;;
+  esac
+  return 1
+}}
+TEST_LOG="$1"
+_proc_stale deployment
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log = Path(temp_dir) / "supervise.log"
+            log.write_text(
+                "EVENT=code_provenance PKG_VERS=site-board@11111111 ENGINE_VER=aaaaaaaa "
+                f"LAUNCH_ENV_SHA256={'1' * 64}\n",
+                encoding="ascii",
+            )
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(log)],
+                text=True, capture_output=True, check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "current")
 
     def test_changed_launch_environment_is_stale(self) -> None:
         self.assertEqual(
@@ -158,6 +202,54 @@ _proc_stale "$2"
             "current",
         )
 
+    def test_adding_a_declared_package_source_changes_proc_identity(self) -> None:
+        command = f'''source "{ROOT / 'ops' / 'deployment_launch_environment.sh'}"
+eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
+eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
+PYTHON=python3; DEPLOYMENT_PYTHON=/bin/python3; DEPLOYMENT_CHILD_PATH=/bin
+BIN=/engine; CARGO=/cargo; ENGINE_GIT_URL=git://engine
+GITHUB_CREDENTIAL_PROVIDER=/credential
+GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
+REPO=example/repo; CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
+RATE_POOL=/rate; BOT=bot; MANAGED_BOT_LOGINS='["bot"]'; AUTHORIZED_LOGINS='[]'
+AUTHORIZE_ORG_MEMBERS=0; AUTHORIZE_REPO_COLLABORATORS=0
+UPSTREAM_BRANCH=main; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
+GITHUB_DEVLOOP_PROFILE='{{}}'; LOCAL_PKGS=; DEVLOOP_PKGS=platform-package
+github_write_posture() {{ echo 0; }}
+DECLARED_PACKAGE_SOURCES='[]'
+resolve_deployment_child_environment
+RUNNING_SHA256=$(deployment_child_environment_sha256)
+TEST_LOG="$1"
+printf 'EVENT=code_provenance PKG_VERS=platform-package@11111111 ENGINE_VER=aaaaaaaa LAUNCH_ENV_SHA256=%s\n' \
+  "$RUNNING_SHA256" > "$TEST_LOG"
+DESIRED_PACKAGE_SOURCES='[{{"root":"/extra","packages":["site-board"]}}]'
+cfg() {{ PKGSRC=/platform; PLATFORM_SOURCE_PIN=; DECLARED_PACKAGE_SOURCES="$DESIRED_PACKAGE_SOURCES"; }}
+pidof_df() {{ echo 123; }}
+latest_log() {{ echo "$TEST_LOG"; }}
+derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=platform-package; }}
+resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
+package_source_moved() {{ :; }}
+git() {{
+  case "$*" in
+    *" fetch "*) return 0 ;;
+    *" rev-parse "*) echo 11111111; return 0 ;;
+  esac
+  return 1
+}}
+_proc_stale deployment
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "supervise.log"
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(log)],
+                text=True, capture_output=True, check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "environment-stale")
+
     def test_sync_restarts_environment_stale_supervise(self) -> None:
         command = f'''eval "$(sed -n '/^cmd_sync()/,/^}}/p' "{OPERATOR}")"
 expand() {{ echo deployment; }}
@@ -170,6 +262,9 @@ git_lock_sweep() {{ :; }}
 derive_devloop_pkgs_from_workspace() {{ :; }}
 ensure_integration_caught_up() {{ :; }}
 sync_to_run_branch() {{ :; }}
+sync_declared_package_sources() {{ :; }}
+declared_package_source_checkouts() {{ :; }}
+ensure_declared_package_source_checkouts() {{ :; }}
 bin_ensure_fresh() {{ echo current; }}
 _proc_stale() {{ echo environment-stale; }}
 restart_one() {{ echo "restarted:$1"; }}

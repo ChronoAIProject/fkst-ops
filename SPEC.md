@@ -163,6 +163,12 @@ does not mutate deployment runtime, durable state, or resolved source working
 checkouts. Cache publication and pointer replacement occur only after candidate
 verification and pinned preflight succeed.
 
+Every machine-profile root is a non-empty absolute path containing neither a
+character Python recognizes as whitespace nor a Unicode control character in
+the `Cc` category. Root values cross tab-separated sync/probe records and
+newline-separated launch-argument records; admitting those characters would
+change record or argument cardinality instead of preserving the declared path.
+
 Checkout-owned action metadata and dispatch code are loaded only after this
 revision-identity verification. The mechanism intentionally executes such code,
 including `ops/deployment_operator.sh`, from an invoking or cached checkout whose
@@ -239,6 +245,67 @@ Artifact hydration compares every pre-existing target, platform, and engine
 checkout's `origin` URL exactly with its declared lock source before fetching or
 accepting it. A different origin fails with `CHECKOUT_SOURCE_MISMATCH`; matching
 content at the requested SHA does not substitute for declared provenance.
+
+## Declared package sources
+
+A deployment may extend its platform and host package composition with this
+closed declaration table, repeated once for each additional source:
+
+```toml
+[[deployment.package_sources]]
+lock_ref = "package-source"
+checkout = "package-source-root"
+packages = ["site-board", "site-radar"]
+```
+
+`lock_ref` selects a deployment-operated lock entry, `checkout` is a logical
+machine-profile root name, and `packages` is the non-empty list supplied from
+that checkout's `packages/` directory. A lock entry with `resolved.rev` is
+hydrated and synced at that exact detached revision;
+an entry without `resolved` tracks the deployment's resolved integration branch.
+`restart` and `sync` both ensure these checkouts exist and then apply the same
+exact-pin or integration-branch rule before launch or staleness decisions.
+
+Hydration preflights all selected declarations before mutating a source root.
+Its conflict identity contains the logical root, lock source id, and
+materialisation specification. A root therefore cannot be both the exact
+platform-derived engine checkout and a branch-tracking package source, even
+when both bindings repeat the same root and lock id. Pre-hydrated target,
+platform, and package bindings that reuse a root must have the same source and
+the same integration branch or lock-declared exact pin.
+
+At launch, each resolved binding becomes three distinct arguments:
+`--package-source`, its absolute checkout root, and its space-separated package
+names. The host-run contract resolves each named package directly beneath that
+root's `packages/` directory. The launch-environment SHA-256 includes the
+resolved package-source JSON, as well as the platform and host package lists, so
+a changed source root, URL, pin, or package composition makes a running process
+`environment-stale` even when the ordinary child environment is unchanged.
+
+Running provenance is the last parsed `PKG_VERS=` field in the supervise log,
+interpreted as semicolon-separated exact `name@version` bindings. Staleness
+probes one declared package name per additional source because packages from a
+single checkout share its commit. For an exact source the desired version is
+`resolved.rev`; for a branch source it is the fetched integration-branch head.
+The logged version may be an unambiguous prefix of that revision. A comparable
+revision at a different commit is `pkg-stale` and requires reload, with no
+documentation-only exemption. `<revision>-dirty`, `unknown`, and malformed or
+unreadable provenance produce the distinct diagnostic verdicts
+`pkg-provenance-dirty`, `pkg-provenance-unknown`, and `pkg-provenance-invalid`.
+Fetch and revision-lookup failures are also invalid provenance evidence. These
+states do not trigger restart because restart cannot make them comparable.
+`sync` automatically restarts a running deployment for `pkg-stale` or
+`environment-stale`.
+
+Validation rejects an unknown, mechanism-owned, repeated, or already
+deployment-bound lock id; an unresolved, shared, or non-directory checkout
+root; a package directory that is absent or not a direct child of that root's
+`packages/` directory; an empty or duplicate package list; package names
+outside `[A-Za-z0-9_-]+`; the reserved name `host`; and package-name collisions
+anywhere in the composed platform, host, and additional-source set. These
+failures keep one source per checkout, one source per lock binding, and one
+package name per loaded root. The machine-profile root character rule above
+keeps the downstream record and launch transports lossless.
 
 ## Cross-repository adoption order
 

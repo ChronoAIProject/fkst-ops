@@ -19,3 +19,8 @@ git = "https://invalid.example/ops.git"
 checkout_role = "mechanism"
 [external_source.resolved]
 rev = "4444444444444444444444444444444444444444"
+
+[[external_source]]
+id = "package-source"
+git = "https://invalid.example/packages-extra.git"
+checkout_role = "deployment-operated"

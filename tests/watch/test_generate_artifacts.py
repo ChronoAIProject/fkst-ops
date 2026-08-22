@@ -34,6 +34,7 @@ def launch_environment_contract(
     command = '''source "$1"
 cfg "$2"
 resolve_engine_pair
+derive_devloop_pkgs_from_workspace "$2"
 resolve_deployment_child_environment
 deployment_child_environment_sha256
 printf '%s\\n' "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}"
@@ -93,6 +94,32 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
     assert profile_argument.parent.parent.name == "generations"
     assert profile_argument.read_bytes() == profile.read_bytes()
     assert "cadence_schedule=enabled live=yes interval_seconds=300" in result.stdout
+
+
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
+def test_package_sources_table_reports_located_validation_error(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration_path = repository / "deployment.toml"
+    declaration_path.write_text(
+        declaration_path.read_text(encoding="ascii").replace(
+            "[deployment.engine_revision]",
+            "[deployment.package_sources]\n"
+            'lock_ref = "target-source"\n'
+            'checkout = "extra-packages"\n'
+            'packages = ["site-board"]\n\n'
+            "[deployment.engine_revision]",
+        ),
+        encoding="ascii",
+    )
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert (
+        f"{declaration_path} deployment[0].package_sources: must be an array of tables"
+        in result.stderr
+    )
 
 
 @pytest.mark.usefixtures("fabricated_mechanism_tools")
@@ -586,7 +613,7 @@ def test_engine_branch_advance_without_platform_revision_change_skips_build(
         "packages",
     )
     supervise_log.write_text(
-        f"EVENT=code_provenance github-devloop@{platform_revision[:8]} "
+        f"EVENT=code_provenance PKG_VERS=github-devloop@{platform_revision[:8]} "
         f"ENGINE_VER={selected_revision[:8]} LAUNCH_ENV_SHA256={environment_sha256}\n"
         "MSG=event runtime running\n",
         encoding="ascii",

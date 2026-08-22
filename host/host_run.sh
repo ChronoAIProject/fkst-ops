@@ -14,10 +14,14 @@ HOST_RUN_RUNTIME_IS_EXPLICIT=0
 HOST_RUN_RESTART=0
 HOST_RUN_EXPECTED_ENGINE_REVISION=""
 HOST_RUN_PACKAGE_ROOTS=()
+# Parallel arrays retain each additional source's root and package names without a delimiter that
+# could also occur in a checkout path. The caller has already decided each name-to-root binding.
+HOST_RUN_PACKAGE_SOURCE_ROOTS=()
+HOST_RUN_PACKAGE_SOURCE_NAMES=()
 
 host_run_usage() {
   cat >&2 <<'EOF'
-usage: scripts/run.sh supervise --project-root <HOST> --platform-root <PKGSRC> --platform-packages "<names>" --expected-engine-revision <sha> [--host-packages "<names>"] --durable-root <path> [--runtime-root <fresh-scratch-root>] [--restart]
+usage: scripts/run.sh supervise --project-root <HOST> --platform-root <PKGSRC> --platform-packages "<names>" --expected-engine-revision <sha> [--host-packages "<names>"] [--package-source <root> "<names>"]... --durable-root <path> [--runtime-root <fresh-scratch-root>] [--restart]
    or: scripts/run.sh supervise <package>
 EOF
 }
@@ -430,6 +434,8 @@ host_run_parse_supervise_args() {
   HOST_RUN_RUNTIME_IS_EXPLICIT=0
   HOST_RUN_RESTART=0
   HOST_RUN_EXPECTED_ENGINE_REVISION=""
+  HOST_RUN_PACKAGE_SOURCE_ROOTS=()
+  HOST_RUN_PACKAGE_SOURCE_NAMES=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -451,6 +457,18 @@ host_run_parse_supervise_args() {
       --host-packages)
         [ "$#" -ge 2 ] || { echo "error: --host-packages requires a package list" >&2; return 2; }
         HOST_RUN_HOST_PACKAGES="$2"; shift 2 ;;
+      --package-source)
+        [ "$#" -ge 3 ] || { echo "error: --package-source requires <root> <names>" >&2; return 2; }
+        case "$2" in
+          /*) ;;
+          *) echo "error: --package-source root must be absolute: $2" >&2; return 2 ;;
+        esac
+        [ -n "$3" ] || { echo "error: --package-source names must not be empty: $2" >&2; return 2; }
+        # Normalised here, like every other root in this contract: two spellings of one
+        # directory would reach the engine as two package roots.
+        HOST_RUN_PACKAGE_SOURCE_ROOTS+=("$(host_run_abs_path "$2")")
+        HOST_RUN_PACKAGE_SOURCE_NAMES+=("$3")
+        shift 3 ;;
       --durable-root)
         [ "$#" -ge 2 ] || { echo "error: --durable-root requires a path" >&2; return 2; }
         HOST_RUN_DURABLE_ROOT="$2"; shift 2 ;;
@@ -570,7 +588,7 @@ host_run_validate_local_iteration_test_command_for() {
 host_run_validate_local_iteration_test_command() {
   host_run_validate_local_iteration_test_command_for \
     "$HOST_RUN_PROJECT_ROOT" \
-    "$HOST_RUN_PLATFORM_PACKAGES $HOST_RUN_HOST_PACKAGES"
+    "$HOST_RUN_PLATFORM_PACKAGES $HOST_RUN_HOST_PACKAGES $(host_run_package_source_names | tr '\n' ' ')"
 }
 
 host_run_host_package_base() {
@@ -585,21 +603,77 @@ host_run_host_package_base() {
   printf '%s/.fkst/local-packages\n' "$HOST_RUN_PROJECT_ROOT"
 }
 
-host_run_add_named_roots() {
-  local base="$1" kind="$2" names="$3" name path
+host_run_register_package_names() {
+  local LC_ALL=C names="$1" name existing
   for name in $names; do
+    case "$name" in
+      host)
+        echo "error: package name 'host' is reserved" >&2
+        return 1
+        ;;
+      *[!A-Za-z0-9_-]*)
+        echo "error: invalid package name '$name': must match [A-Za-z0-9_-]+" >&2
+        return 1
+        ;;
+    esac
+    for existing in ${HOST_RUN_PACKAGE_NAMES[@]+"${HOST_RUN_PACKAGE_NAMES[@]}"}; do
+      [ "$existing" != "$name" ] || {
+        echo "error: duplicate package name '$name' across launch roots" >&2
+        return 1
+      }
+    done
+    HOST_RUN_PACKAGE_NAMES+=("$name")
+  done
+}
+
+host_run_add_named_roots() {
+  local base="$1" kind="$2" names="$3" name path base_physical path_physical
+  host_run_register_package_names "$names" || return 1
+  for name in $names; do
+    # Validated names are one path segment, and the physical-parent check also rejects symlinks
+    # that would redirect a package root outside the source named by the caller.
     path="$base/$name"
     [ -d "$path" ] || { echo "error: missing $kind package '$name' at $path" >&2; return 1; }
+    base_physical="$(cd "$base" 2>/dev/null && pwd -P)" || return 1
+    path_physical="$(cd "$path" 2>/dev/null && pwd -P)" || return 1
+    [ "${path_physical%/*}" = "$base_physical" ] || {
+      echo "error: $kind package '$name' is not a direct child of $base" >&2
+      return 1
+    }
     HOST_RUN_PACKAGE_ROOTS+=("$path")
   done
 }
 
 host_run_build_package_roots() {
+  local index
   HOST_RUN_PACKAGE_ROOTS=()
+  HOST_RUN_PACKAGE_NAMES=()
+  # The resolver may derive these names from the target workspace fallback, so this launch
+  # boundary is the first layer that can enforce one bare name across every emitted root.
+  host_run_register_package_names "$HOST_RUN_PLATFORM_PACKAGES" || return 1
   host_run_resolve_target_platform_roots || return 1
   if [ -n "$HOST_RUN_HOST_PACKAGES" ]; then
     host_run_add_named_roots "$(host_run_host_package_base)" "host" "$HOST_RUN_HOST_PACKAGES" || return 1
   fi
+  for ((index=0; index<${#HOST_RUN_PACKAGE_SOURCE_ROOTS[@]}; index++)); do
+    host_run_add_named_roots "${HOST_RUN_PACKAGE_SOURCE_ROOTS[$index]}/packages" \
+      "package source" "${HOST_RUN_PACKAGE_SOURCE_NAMES[$index]}" || return 1
+  done
+}
+
+# Every root the run loads from, so a caller can grant the same set to a codex worker.
+host_run_package_source_roots() {
+  local root
+  for root in ${HOST_RUN_PACKAGE_SOURCE_ROOTS+"${HOST_RUN_PACKAGE_SOURCE_ROOTS[@]}"}; do
+    printf '%s\n' "$root"
+  done
+}
+
+host_run_package_source_names() {
+  local names
+  for names in ${HOST_RUN_PACKAGE_SOURCE_NAMES+"${HOST_RUN_PACKAGE_SOURCE_NAMES[@]}"}; do
+    printf '%s\n' "$names"
+  done
 }
 
 host_run_pid_file() {
@@ -789,6 +863,10 @@ host_run_supervise_contract() {
   export FKST_DURABLE_ROOT="$HOST_RUN_DURABLE_ROOT"
   export FKST_PROJECT_ROOT="$HOST_RUN_PROJECT_ROOT"
   local repository_roots=("$HOST_RUN_PROJECT_ROOT" "$HOST_RUN_PLATFORM_ROOT")
+  local source_root
+  while IFS= read -r source_root; do
+    [ -n "$source_root" ] && repository_roots+=("$source_root")
+  done < <(host_run_package_source_roots)
   if [ -n "${BIN_REPOSITORY_ROOT:-}" ]; then
     repository_roots+=("$BIN_REPOSITORY_ROOT")
   fi
