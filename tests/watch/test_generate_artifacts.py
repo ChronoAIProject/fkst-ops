@@ -123,6 +123,31 @@ def test_package_sources_table_reports_located_validation_error(tmp_path: Path) 
 
 
 @pytest.mark.usefixtures("fabricated_mechanism_tools")
+def test_local_test_command_rejects_record_separator_with_located_error(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration_path = repository / "deployment.toml"
+    declaration_path.write_text(
+        declaration_path.read_text(encoding="ascii").replace(
+            'rollup_merge = "enabled"',
+            'rollup_merge = "enabled"\nlocal_test_command = "npm\\trun check"',
+        ),
+        encoding="ascii",
+    )
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert (
+        f"{declaration_path} deployment[0].integration.local_test_command: "
+        "must not contain control characters or whitespace other than ordinary spaces"
+        in result.stderr
+    )
+
+
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_machine_integration_reference_generates_resolves_and_hydrates_branch(
     tmp_path: Path,
 ) -> None:

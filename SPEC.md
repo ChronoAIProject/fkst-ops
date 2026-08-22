@@ -52,6 +52,24 @@ That actor must be a member of every operated deployment's declared
 This is the one-machine/one-bot-app cardinality contract, not a per-deployment
 multi-actor facility.
 
+## Declared local iteration gate
+
+The closed `deployment.integration` table accepts an optional
+`local_test_command` string naming that target's local CI-equivalent gate. The
+operator carries a declared value only to that deployment child as
+`FKST_DEVLOOP_LOCAL_TEST_COMMAND`; it is part of the launch-environment digest,
+so changing it makes an existing child environment-stale. When the field is
+omitted, the operator adds no per-deployment value and the host launch layer
+retains its `scripts/run.sh test-affected` default and existing behavior.
+
+The value must be non-empty and may contain ordinary ASCII spaces for arguments,
+but admission rejects control characters and every other whitespace character.
+This preserves the tab-separated cfg record and shell environment transport.
+Admission does not replace the host launch boundary: the host still rejects
+multi-step commands, invalid shell syntax, quoted leading words, and commands
+whose executable is not runnable from the target checkout. There is no new
+process-wide environment override for this declaration parameter.
+
 The platform has two distinct managed-bot classifiers, and fkst-ops does not
 attempt to make them agree:
 
