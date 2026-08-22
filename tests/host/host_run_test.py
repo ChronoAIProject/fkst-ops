@@ -218,7 +218,14 @@ class HostRunTest(unittest.TestCase):
         finally:
             h.close()
 
-    def test_host_supervise_requires_target_workspace_manifest(self) -> None:
+    def test_a_target_without_a_manifest_resolves_against_the_platform_root(self) -> None:
+        """An absent manifest is legal: the declaration owns the composition.
+
+        This case previously asserted the opposite, that the manifest was required. That was
+        the contract, and changing it is the point: a target repository whose composition is
+        declared elsewhere has nothing to describe, so the platform root the caller already
+        passed is the only place its packages can come from.
+        """
         h = HostRunHarness()
         try:
             result = h.run_helper(
@@ -232,8 +239,11 @@ class HostRunTest(unittest.TestCase):
                     """
                 )
             )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("target fkst.workspace.toml is required for host supervise", result.stderr)
+            # The fixture requests no platform packages, so there are no roots to emit; what
+            # this discriminates is the contract itself. Before the change this exited non-zero
+            # with "target fkst.workspace.toml is required for host supervise".
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("fkst.workspace.toml is required", result.stderr)
         finally:
             h.close()
 
