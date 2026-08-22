@@ -22,7 +22,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def resolved_engine_binary(deployment: dict) -> str:
-    """Return `<engine_binary>-<derived revision>`, or empty when it cannot be derived."""
+    """Return `<engine_binary>-<derived revision>`, or empty when it cannot be derived.
+
+    The revision is derived from the platform checkout, which is where the operator derives it
+    (`ops/deployment_operator.sh` passes `machine["platform_checkout"]` as `REVISION_SOURCE`).
+    The two checkouts coincide for a deployment whose target is its own platform, and diverge
+    for one whose target is the engine repository: an engine does not pin itself, so the
+    revision file exists only on the platform side and deriving from the target cannot succeed.
+    """
     machine = deployment["machine"]
     specification = deployment.get("engine_revision")
     if not isinstance(specification, dict):
@@ -30,10 +37,13 @@ def resolved_engine_binary(deployment: dict) -> str:
     path = specification.get("path")
     if not isinstance(path, str) or not path:
         return ""
+    source = machine.get("platform_checkout")
+    if not isinstance(source, str) or not source:
+        return ""
     try:
         completed = subprocess.run(
             [sys.executable, str(ROOT / "ops" / "revision_derivation.py"), "resolve",
-             machine["target_checkout"], path],
+             source, path],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
         )
     except OSError:
