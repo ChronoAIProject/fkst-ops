@@ -18,10 +18,12 @@ continuing after an individual declaration failure while making the round fail.
 The proposed interface accepted the deployment repository, machine profile,
 ledger, and operator entry through arguments or corresponding `FKST_WATCH_*`
 environment variables. It preserved the incoming environment and did not set
-`FKST_GITHUB_WRITE`. The proposal placed cadence policy in deployment data,
-required declarations in one deployment repository to agree on a positive
-interval, discovered machine paths, and generated a LaunchAgent from a
-committed template rather than an operator-authored plist.
+`FKST_GITHUB_WRITE` at the cadence boundary. Current declared deployment
+execution sets that host fact to `1` for every child; declarations have no
+write posture to select. The proposal placed cadence timing policy in
+deployment data, required declarations in one deployment repository to agree
+on a positive interval, discovered machine paths, and generated a LaunchAgent
+from a committed template rather than an operator-authored plist.
 
 The proposal also generated `.fkst/machine-profile.toml`, mapped logical roots
 and binaries under a conventional machine base, derived authenticated identity

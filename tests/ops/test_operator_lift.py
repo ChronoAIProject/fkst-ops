@@ -99,7 +99,6 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
                             "integration_branch": "integration",
                             "rollup_merge": "merge",
                         },
-                        "github_write_enabled": False,
                         "packages": {"host": []},
                         "sources": {
                             "target": {"git": "target"},
@@ -220,7 +219,6 @@ stop_one "$1"
                     "integration_branch": "integration",
                     "rollup_merge": "enabled",
                 },
-                "github_write_enabled": False,
                 "packages": {"host": []},
                 "sources": {
                     "target": {"git": "target"},
@@ -384,7 +382,7 @@ sync_to_pinned_revision "$1" "$2"
                 capture_output=True, check=True,
             ).stdout.strip())
 
-    def _capture_launch_environment(self, write: str | None,
+    def _capture_launch_environment(self,
         credential_source: str = "github-app",
         advance_platform_before_spawn: bool = False,
     ) -> dict[str, str]:
@@ -562,9 +560,6 @@ launch_one fixture 0
             env["RESOLVED_FIXTURE"] = str(resolved_fixture)
             env["RACE_PLATFORM_REVISION"] = advanced_platform_revision
             env.pop("FKST_GITHUB_WRITE", None)
-            command = command.replace(
-                "CLAIM_MODE=label;", f"GITHUB_WRITE_POSTURE={write or '0'}; CLAIM_MODE=label;"
-            )
             try:
                 # 60s is a backstop against a pathological hang, not a budget the launch is
                 # expected to approach: the readiness wait alone takes over 3s of ps/grep/sleep
@@ -737,28 +732,8 @@ invoke_engine_build_provider
         self.assertNotIn('GH_TOKEN="$GITHUB_TOKEN_DISCOVERED"', source)
         self.assertIn('FKST_GITHUB_REAL_GH="$REAL_GH"', source)
 
-    def test_restart_without_operator_environment_reproduces_declared_write_posture(self) -> None:
-        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
-eval "$(sed -n '/^github_write_posture()/,/^}}/p' "{OPERATOR}")"
-github_write_posture
-'''
-        absent = os.environ.copy()
-        absent.pop("FKST_GITHUB_WRITE", None)
-        enabled = subprocess.run(
-            ["bash", "-c", "GITHUB_WRITE_POSTURE=1\n" + command], env=absent,
-            text=True, capture_output=True, check=False,
-        )
-        missing = subprocess.run(["bash", "-c", command], env=absent, text=True, capture_output=True, check=False)
-        ambient_opposite = subprocess.run(
-            ["bash", "-c", "GITHUB_WRITE_POSTURE=1\n" + command],
-            env={**absent, "FKST_GITHUB_WRITE": "0"}, text=True, capture_output=True, check=False,
-        )
-        self.assertEqual((enabled.returncode, enabled.stdout), (0, "1\n"))
-        self.assertEqual((ambient_opposite.returncode, ambient_opposite.stdout), (0, "1\n"))
-        self.assertNotEqual(missing.returncode, 0)
-
-        self.assertEqual(self._capture_launch_environment(None)["FKST_GITHUB_WRITE"], "0")
-        self.assertEqual(self._capture_launch_environment("1")["FKST_GITHUB_WRITE"], "1")
+    def test_deployment_child_always_enables_github_writes(self) -> None:
+        self.assertEqual(self._capture_launch_environment()["FKST_GITHUB_WRITE"], "1")
 
     def test_launch_exports_resolved_machine_values_and_declaration_roster(self) -> None:
         source = OPERATOR.read_text(encoding="utf-8")
@@ -774,7 +749,7 @@ github_write_posture
                 self.assertIn(export, environment)
         self.assertIn('"${DEPLOYMENT_CHILD_ENVIRONMENT[@]}"', launch)
         self.assertNotIn("FKST_OPS_PROFILE_MACHINE=", environment)
-        captured = self._capture_launch_environment(None)
+        captured = self._capture_launch_environment()
         self.assertTrue(captured["FKST_RATE_POOL_ROOT"].endswith("/rates"))
         self.assertEqual(captured["FKST_GITHUB_BOT_LOGIN"], "resolved-bot")
         self.assertEqual(captured["FKST_DEVLOOP_MANAGED_BOT_LOGINS"], "resolved-bot,peer-bot")
@@ -784,12 +759,12 @@ github_write_posture
         self.assertEqual(captured["FKST_ENGINE_SOURCE_GIT"], "https://github.com/Example-Org/engine-core.git")
 
     def test_launch_records_environment_contract_identity(self) -> None:
-        identity = self._capture_launch_environment(None)["launch_environment_sha256"]
+        identity = self._capture_launch_environment()["launch_environment_sha256"]
         self.assertEqual(len(identity), 64)
         self.assertTrue(all(character in "0123456789abcdef" for character in identity))
 
     def test_launch_uses_the_verified_pair_when_platform_advances_before_spawn(self) -> None:
-        captured = self._capture_launch_environment(None, advance_platform_before_spawn=True)
+        captured = self._capture_launch_environment(advance_platform_before_spawn=True)
 
         self.assertEqual(captured["selected_platform_revision"], captured["platform_revision"])
         self.assertEqual("b" * 40, captured["engine_revision"])
@@ -799,29 +774,27 @@ github_write_posture
         self.assertEqual(captured["argv"][1], "supervise")
 
     def test_launch_forwards_resolved_github_credential_source(self) -> None:
-        captured = self._capture_launch_environment(
-            None, credential_source="github-cli-user"
-        )
+        captured = self._capture_launch_environment(credential_source="github-cli-user")
 
         self.assertEqual(captured["FKST_GITHUB_CREDENTIAL_SOURCE"], "github-cli-user")
 
     def test_declared_author_authorization_reaches_launched_process(self) -> None:
-        captured = self._capture_launch_environment(None)
+        captured = self._capture_launch_environment()
         self.assertEqual(captured["FKST_GITHUB_AUTHORIZED_LOGINS"], "trusted-author,second-author")
         self.assertEqual(captured["FKST_GITHUB_AUTHORIZE_ORG_MEMBERS"], "1")
         self.assertEqual(captured["FKST_GITHUB_AUTHORIZE_REPO_COLLABORATORS"], "0")
 
     def test_declared_claim_posture_reaches_launched_process(self) -> None:
-        captured = self._capture_launch_environment(None)
+        captured = self._capture_launch_environment()
         self.assertEqual(captured["FKST_GITHUB_CLAIM_MODE"], "label")
         self.assertEqual(captured["FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE"], "0")
 
     def test_resolved_cargo_reaches_launched_process(self) -> None:
-        captured = self._capture_launch_environment(None)
+        captured = self._capture_launch_environment()
         self.assertEqual(captured["FKST_CARGO"], "/fixture/resolved/cargo")
 
     def test_resolved_python_reaches_launched_process(self) -> None:
-        captured = self._capture_launch_environment(None)
+        captured = self._capture_launch_environment()
         self.assertTrue(captured["FKST_PYTHON"].endswith("/python"))
 
     def test_bare_python_fallback_resolves_the_executable_it_actually_runs(self) -> None:
@@ -951,7 +924,7 @@ authorize_github_writer
         self.assertIn("HEALTH=UNHEALTHY", result.stderr)
 
     def test_discovered_token_is_not_logged_reported_or_written_to_artifacts(self) -> None:
-        self._capture_launch_environment("1")
+        self._capture_launch_environment()
         token = "fixture-secret-token"
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "supervise.log"
