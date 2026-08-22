@@ -264,9 +264,12 @@ def trusted_platform_identity(platform_root: Path) -> tuple[str, set[str]]:
     return head, refs
 
 
-def read_workspace(workspace_path: Path) -> dict[str, object]:
+def read_workspace(workspace_path: Path) -> dict[str, object] | None:
+    # Absent is legal. A target whose composition is owned by its declaration does not
+    # describe itself, so there is nothing here to admit names against; the platform root
+    # the caller already passed is the only source those packages can come from.
     if not workspace_path.is_file():
-        fail(f"target fkst.workspace.toml is required for host supervise: {workspace_path}")
+        return None
     try:
         data = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -280,7 +283,8 @@ project_root = Path(sys.argv[1]).resolve()
 requested_packages = [item for item in sys.argv[2].split() if item]
 trusted_platform_root = Path(sys.argv[3]).resolve()
 workspace_path = project_root / "fkst.workspace.toml"
-workspace = read_workspace(workspace_path)
+workspace_declared = read_workspace(workspace_path)
+workspace = workspace_declared if workspace_declared is not None else {}
 workspace_packages: dict[str, str] = {}
 workspace_table = workspace.get("workspace", {})
 if isinstance(workspace_table, dict):
@@ -319,6 +323,10 @@ lock_by_id: dict[str, tuple[str, str]] = {}
 selected: list[tuple[str, str, str | None]] = []
 needed_external_source_ids: set[str] = set()
 
+if workspace_declared is None:
+    for package in requested_packages:
+        selected.append((package, "platform-root", None))
+    requested_packages = []
 for package in requested_packages:
     matches: list[tuple[str, str | None]] = []
     if package in workspace_packages:
@@ -369,7 +377,10 @@ for source_id in sorted(needed_external_source_ids):
 package_roots: list[Path] = []
 platform_roots: set[Path] = set()
 for package, kind, source_id in selected:
-    if kind == "workspace":
+    if kind == "platform-root":
+        root = trusted_platform_root / "packages" / package
+        platform_roots.add(trusted_platform_root)
+    elif kind == "workspace":
         package_platform_root = project_root
         if not same_path(project_root, trusted_platform_root):
             if not same_repository_history(project_root, trusted_platform_root):

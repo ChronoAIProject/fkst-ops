@@ -574,9 +574,20 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
 
         packages = _table(dep.get("packages"), path + ".packages")
         _closed(packages, {"platform", "host"}, path + ".packages")
-        resolved_packages = {"platform": _string_list(packages, "platform", path + ".packages", nonempty=True), "host": []}
+        # platform is optional: a declaration that omits it leaves composition to the target
+        # repository's own manifest, which is the fallback the operator takes. A declaration
+        # that carries it owns the composition outright and the target need not describe it.
+        resolved_packages = {"platform": [], "host": []}
+        if "platform" in packages:
+            resolved_packages["platform"] = _string_list(packages, "platform", path + ".packages", nonempty=True)
         if "host" in packages:
             resolved_packages["host"] = _string_list(packages, "host", path + ".packages", nonempty=False)
+        # Package names cross a whitespace-separated transport into the launch contract, so a
+        # name containing whitespace would silently split into two roots.
+        for field_name in ("platform", "host"):
+            for package_name in resolved_packages[field_name]:
+                if package_name != package_name.strip() or any(c.isspace() for c in package_name):
+                    _fail(f"{path}.packages.{field_name}", f"package name must not contain whitespace: {package_name!r}")
         _require_unique(resolved_packages["platform"], path + ".packages.platform")
         _require_unique(resolved_packages["host"], path + ".packages.host")
 

@@ -78,13 +78,14 @@ def source_pin(role):
 claim=dep["claim_posture"]
 authorization=dep["author_authorization"]
 derivation=dep["engine_revision"]
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],"1" if dep["github_write_enabled"] else "0",claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],"1" if dep["github_write_enabled"] else "0",claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty," ".join(dep["packages"].get("platform",[])) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE GITHUB_WRITE_POSTURE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE GITHUB_WRITE_POSTURE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS DECLARED_PLATFORM_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
+  [ "$DECLARED_PLATFORM_PKGS" = "__FKST_OPS_EMPTY__" ] && DECLARED_PLATFORM_PKGS=""
   [ "$TARGET_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && TARGET_SOURCE_PIN=""
   [ "$PLATFORM_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && PLATFORM_SOURCE_PIN=""
   [ "$ENGINE_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && ENGINE_SOURCE_PIN=""
@@ -92,8 +93,17 @@ print("\t".join(fields))
   CARGO="$("$PYTHON" -c 'import json, pathlib, sys; command=json.loads(sys.argv[1])["build_command"]; print(command[0] if pathlib.Path(command[0]).name == "cargo" else "")' "$ENGINE_PROVIDER_CONFIGURATION")" || return 1
 }
 
+# The declaration owns the platform package list. A target repository may still carry its own
+# `fkst.workspace.toml`, and it is consulted only when the declaration is silent, so a target
+# that says nothing about fkst needs no file at all. Reading the composition from the repository
+# being operated made that repository carry configuration for its own operator; the declaration
+# already held the same list, so this removes a second copy rather than adding a first.
 derive_devloop_pkgs_from_workspace() { # $1 name
   local name="$1" output
+  if [ -n "${DECLARED_PLATFORM_PKGS:-}" ]; then
+    DEVLOOP_PKGS="$DECLARED_PLATFORM_PKGS"
+    return 0
+  fi
   output="$("$PYTHON" "$_self_dir/workspace_manifest.py" platform-packages "$name" "$HOST" "$PKGSRC" "$PLATFORM_GIT_URL")" \
     || { printf '%s\n' "$output" >&2; return 1; }
   DEVLOOP_PKGS="$output"
