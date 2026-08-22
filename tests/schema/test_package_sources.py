@@ -131,6 +131,47 @@ class PackageSourceTests(unittest.TestCase):
              ("second-package-source", str(second))],
         )
 
+    def test_a_package_source_cannot_supply_a_provider_implementation(self) -> None:
+        provider = self.declaration["provider"][0]
+        provider["implementation"] = "package-source:bin/build-provider"
+        executable = Path(self.machine["roots"][self.entry["checkout"]]) / "bin/build-provider"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        executable.chmod(0o755)
+
+        self.reject(
+            r"declaration\.deployment\[0\]\.providers\.engine: "
+            r"provider source is not bound to a deployment or mechanism source: package-source"
+        )
+
+    def test_target_platform_engine_and_mechanism_sources_can_supply_providers(self) -> None:
+        self.declaration["provider"][1]["implementation"] = (
+            "target-source:providers/engine-board"
+        )
+        self._materialise()
+
+        bindings = self.resolve()["deployment"][0]["providers"]
+        deployment = self.declaration["deployment"][0]
+        machine = deployment["machine"]
+        expected = {
+            "engine": Path(self.machine["roots"][machine["engine_checkout"]]).resolve()
+            / "bin/build-provider",
+            "board_engine_durable": Path(
+                self.machine["roots"][machine["target_checkout"]]
+            ).resolve()
+            / "providers/engine-board",
+            "board_github_control": Path(
+                self.machine["roots"][machine["platform_checkout"]]
+            ).resolve()
+            / "providers/github-board",
+            "github_credential": Path(__file__).parents[2].resolve()
+            / "providers/github_credential_gh.py",
+        }
+        self.assertEqual(
+            {field: Path(provider["executable"]) for field, provider in bindings.items()},
+            expected,
+        )
+
     # Ways two sources or two names could collapse into one.
 
     def test_an_unknown_field_is_rejected(self) -> None:

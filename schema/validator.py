@@ -401,8 +401,6 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
         lock_ref = source["lock_ref"]
         root = checkouts[role]
         source_roots.setdefault(lock_ref, set()).add(root.resolve())
-    for entry, root in zip(resolved.get("package_sources", []), package_source_roots):
-        source_roots.setdefault(entry["lock_ref"], set()).add(root)
     # bootstrap/run.sh verifies the explicitly declared mechanism checkout before
     # handing control to the validator. Its identity is not inferred from its id.
     for lock_ref, pin in pins.items():
