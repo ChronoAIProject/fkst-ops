@@ -30,12 +30,19 @@ def emit(resolved: dict) -> list[list[str]]:
     return [line.split("\t") for line in completed.stdout.splitlines() if line]
 
 
-def deployment(root: Path, *, revision_spec: object) -> dict:
+def deployment(root: Path, *, revision_spec: object, platform: str = "target") -> dict:
+    """A declared deployment whose platform directory is named by `platform`.
+
+    Passing a name other than "target" reproduces the shape of a deployment whose target is the
+    engine repository: the two checkouts are distinct directories, and only the platform carries
+    the revision file, because an engine does not pin itself.
+    """
     return {
         "id": "declared",
         "engine_revision": revision_spec,
         "machine": {
             "target_checkout": str(root / "target"),
+            "platform_checkout": str(root / platform),
             "durable": str(root / "durable"),
             "logs": str(root / "logs"),
             "engine_binary": str(root / "bin" / "engine"),
@@ -43,21 +50,47 @@ def deployment(root: Path, *, revision_spec: object) -> dict:
     }
 
 
+def commit_revision_file(checkout: Path, revision: str) -> None:
+    (checkout / ".fkst").mkdir(parents=True)
+    (checkout / ".fkst" / "substrate-ref").write_text(revision + "\n", encoding="ascii")
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    for name, value in (("user.email", "t@example.invalid"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(checkout), "config", name, value], check=True)
+    subprocess.run(["git", "-C", str(checkout), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(checkout), "commit", "-qm", "fixture"], check=True)
+
+
 class DoctorEngineBinaryTest(unittest.TestCase):
     def test_the_row_carries_a_binary_resolved_from_the_declaration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            target = root / "target"
-            (target / ".fkst").mkdir(parents=True)
             revision = "b" * 40
-            (target / ".fkst" / "substrate-ref").write_text(revision + "\n", encoding="ascii")
-            subprocess.run(["git", "init", "-q", str(target)], check=True)
-            for name, value in (("user.email", "t@example.invalid"), ("user.name", "t")):
-                subprocess.run(["git", "-C", str(target), "config", name, value], check=True)
-            subprocess.run(["git", "-C", str(target), "add", "."], check=True)
-            subprocess.run(["git", "-C", str(target), "commit", "-qm", "fixture"], check=True)
+            commit_revision_file(root / "target", revision)
 
             rows = emit({"deployment": [deployment(root, revision_spec={"path": ".fkst/substrate-ref"})]})
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]), 5, rows)
+        self.assertTrue(rows[0][4].endswith(f"engine-{revision}"), rows[0][4])
+
+    def test_the_revision_comes_from_the_platform_when_it_is_not_the_target(self) -> None:
+        """The shape of a deployment whose target is the engine repository.
+
+        The operator derives `REVISION_SOURCE` from `platform_checkout`, so doctor must observe
+        with the binary that derivation names. Deriving from the target instead yields an empty
+        engine column here, and the durable report then reports the target as unresolvable while
+        the engine it is running exists and is current.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "c" * 40
+            commit_revision_file(root / "platform", revision)
+            (root / "target").mkdir()
+            subprocess.run(["git", "init", "-q", str(root / "target")], check=True)
+
+            rows = emit({"deployment": [
+                deployment(root, revision_spec={"path": ".fkst/substrate-ref"}, platform="platform")
+            ]})
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(len(rows[0]), 5, rows)
