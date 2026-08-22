@@ -699,13 +699,33 @@ def validate_and_resolve(
             path + ".packages",
         )
 
-        integration = _table(dep.get("integration"), path + ".integration")
-        _closed(integration, {"upstream_branch", "integration_branch", "rollup_merge"}, path + ".integration")
-        resolved_integration = {name: _string(integration, name, path + ".integration") for name in ("upstream_branch", "integration_branch", "rollup_merge")}
+        integration_path = path + ".integration"
+        integration = _table(dep.get("integration"), integration_path)
+        _closed(
+            integration,
+            {"upstream_branch", "integration_branch", "rollup_merge", "local_test_command"},
+            integration_path,
+        )
+        resolved_integration = {
+            name: _string(integration, name, integration_path)
+            for name in ("upstream_branch", "integration_branch", "rollup_merge")
+        }
         resolved_integration["integration_branch"] = resolve_machine_default(
             resolved_integration["integration_branch"], machine_values["defaults"],
-            path + ".integration.integration_branch",
+            integration_path + ".integration_branch",
         )
+        if "local_test_command" in integration:
+            local_test_command = _string(integration, "local_test_command", integration_path)
+            if any(
+                unicodedata.category(character) == "Cc"
+                or (character != " " and character.isspace())
+                for character in local_test_command
+            ):
+                _fail(
+                    integration_path + ".local_test_command",
+                    "must not contain control characters or whitespace other than ordinary spaces",
+                )
+            resolved_integration["local_test_command"] = local_test_command
 
         bindings = _table(dep.get("providers"), path + ".providers")
         _closed(bindings, set(PROVIDER_FIELDS), path + ".providers")

@@ -176,22 +176,34 @@ stop_one "$1"
                 self.assertEqual(stdout, result.stdout)
                 self.assertEqual(stderr, result.stderr)
 
-    def test_two_runtime_configs_receive_the_same_resolved_declaration_roster(self) -> None:
+    def test_two_runtime_configs_keep_resolved_deployment_values_isolated(self) -> None:
         roster = ["bot-a", "bot-b"]
 
-        def deployment(name: str, actor: str) -> dict[str, object]:
+        def deployment(
+            name: str, actor: str, local_test_command: str | None
+        ) -> dict[str, object]:
             providers = {
                 field: {
                     "executable": "/provider",
                     "contract": "v1",
-                    "configuration": {"build_command": ["/bin/true"]}
-                    if field == "engine" else {},
+                    "configuration": (
+                        {"build_command": ["/bin/true"]}
+                        if field == "engine"
+                        else {"source": "github-app"} if field == "github_credential" else {}
+                    ),
                 }
                 for field in (
                     "github_credential", "engine", "board_engine_durable",
                     "board_github_control",
                 )
             }
+            integration = {
+                "upstream_branch": "dev",
+                "integration_branch": "integration",
+                "rollup_merge": "enabled",
+            }
+            if local_test_command is not None:
+                integration["local_test_command"] = local_test_command
             return {
                 "id": name,
                 "target_identity": f"example/{name}",
@@ -215,11 +227,7 @@ stop_one "$1"
                     "authorize_org_members": False,
                     "authorize_repo_collaborators": False,
                 },
-                "integration": {
-                    "upstream_branch": "dev",
-                    "integration_branch": "integration",
-                    "rollup_merge": "enabled",
-                },
+                "integration": integration,
                 "packages": {"host": []},
                 "package_sources": [{
                     "checkout": f"/{name}/extra",
@@ -238,14 +246,26 @@ stop_one "$1"
         with tempfile.TemporaryDirectory() as directory:
             resolved = Path(directory) / "resolved.json"
             resolved.write_text(json.dumps({
-                "deployment": [deployment("runtime-a", "bot-a"), deployment("runtime-b", "bot-b")]
+                "deployment": [
+                    deployment("runtime-a", "bot-a", "npm run check"),
+                    deployment("runtime-b", "bot-b", "scripts/ci.sh --local"),
+                    deployment("runtime-default", "bot-a", None),
+                ]
             }), encoding="ascii")
             command = f'''PYTHON="{sys.executable}"
+DEPLOYMENT_PYTHON="$PYTHON"
+DEPLOYMENT_CHILD_PATH=/usr/bin:/bin
 RESOLVED_DECLARATION="$(cat "$1")"
 eval "$(sed -n '/^cfg()/,/^}}/p' "{OPERATOR}")"
-for name in runtime-a runtime-b; do
+source "{LAUNCH_ENVIRONMENT}"
+for name in runtime-a runtime-b runtime-default; do
   cfg "$name" || exit
-  printf '%s\t%s\t%s\n' "$BOT" "$MANAGED_BOT_LOGINS" "$DECLARED_PACKAGE_SOURCES"
+  resolve_deployment_child_environment || exit
+  gate=
+  for assignment in "${{DEPLOYMENT_CHILD_ENVIRONMENT[@]}}"; do
+    case "$assignment" in FKST_DEVLOOP_LOCAL_TEST_COMMAND=*) gate="${{assignment#*=}}";; esac
+  done
+  printf '%s\t%s\t%s\t%s\n' "$BOT" "$MANAGED_BOT_LOGINS" "$DECLARED_PACKAGE_SOURCES" "$gate"
 done
 '''
             result = subprocess.run(
@@ -259,10 +279,13 @@ done
             [
                 'bot-a\t["bot-a","bot-b"]\t'
                 '[{"root":"/runtime-a/extra","git":"extra","packages":["site-board"],'
-                '"resolved":{"rev":"' + "a" * 40 + '"}}]',
+                '"resolved":{"rev":"' + "a" * 40 + '"}}]\tnpm run check',
                 'bot-b\t["bot-a","bot-b"]\t'
                 '[{"root":"/runtime-b/extra","git":"extra","packages":["site-board"],'
-                '"resolved":{"rev":"' + "a" * 40 + '"}}]',
+                '"resolved":{"rev":"' + "a" * 40 + '"}}]\tscripts/ci.sh --local',
+                'bot-a\t["bot-a","bot-b"]\t'
+                '[{"root":"/runtime-default/extra","git":"extra","packages":["site-board"],'
+                '"resolved":{"rev":"' + "a" * 40 + '"}}]\t',
             ],
         )
 

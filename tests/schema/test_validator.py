@@ -114,6 +114,18 @@ class ValidatorTests(unittest.TestCase):
         result = validate_and_resolve(self.declaration, self.machine, self.lock)
         self.assertEqual(result["deployment"][0]["integration"]["integration_branch"], "integration")
 
+    def test_local_test_command_is_optional_and_preserved_exactly(self) -> None:
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertNotIn("local_test_command", result["deployment"][0]["integration"])
+
+        command = "npm run check -- --mode ci"
+        self.declaration["deployment"][0]["integration"]["local_test_command"] = command
+        result = validate_and_resolve(self.declaration, self.machine, self.lock)
+        self.assertEqual(
+            command,
+            result["deployment"][0]["integration"]["local_test_command"],
+        )
+
     def test_github_credential_source_is_required_without_a_default(self) -> None:
         del self.declaration["deployment"][0]["providers"]["github_credential"]
         self.reject("providers.github_credential.*non-empty string")

@@ -30,6 +30,11 @@ resolve_deployment_child_environment() {
     FKST_OPS_GITHUB_DEVLOOP_PROFILE="$GITHUB_DEVLOOP_PROFILE"
     FKST_WORKTREE_GC_REMOVE=1 PATH="$DEPLOYMENT_CHILD_PATH"
   )
+  if [ -n "${LOCAL_TEST_COMMAND:-}" ]; then
+    DEPLOYMENT_CHILD_ENVIRONMENT+=(
+      FKST_DEVLOOP_LOCAL_TEST_COMMAND="$LOCAL_TEST_COMMAND"
+    )
+  fi
 }
 
 deployment_child_environment_sha256() {
