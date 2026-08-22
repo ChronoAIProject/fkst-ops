@@ -63,6 +63,79 @@ def test_generation_rejects_missing_remote_integration_branch(tmp_path: Path) ->
 
 
 @pytest.mark.usefixtures("fabricated_mechanism_tools")
+def test_package_source_cannot_poison_engine_checkout_before_validation(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration = repository / "deployment.toml"
+    original = declaration.read_text(encoding="ascii")
+    package_binding = '''[[deployment.package_sources]]
+lock_ref = "engine-source"
+checkout = "engine-source"
+packages = ["site-board"]
+
+'''
+    declaration.write_text(
+        original.replace(
+            "[deployment.engine_revision]\n",
+            package_binding + "[deployment.engine_revision]\n",
+        ),
+        encoding="ascii",
+    )
+
+    rejected = run_generator(repository, home)
+    engine_checkout = home / ".fkst" / "machine" / "roots" / "engine-source"
+
+    assert rejected.returncode == 2
+    assert "already declared as a deployment source" in rejected.stderr
+    assert not engine_checkout.exists()
+
+    declaration.write_text(original, encoding="ascii")
+    recovered = run_generator(repository, home)
+    assert recovered.returncode == 0, recovered.stderr
+    assert git(engine_checkout, "remote", "get-url", "origin") == str(
+        tmp_path / "engine-source"
+    )
+
+
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
+def test_path_like_package_source_is_rejected_before_any_machine_artifact(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+    declaration = repository / "deployment.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="ascii").replace(
+            "[deployment.engine_revision]\n",
+            '''[[deployment.package_sources]]
+lock_ref = "package-source"
+checkout = "../escaped"
+packages = ["github-devloop"]
+
+[deployment.engine_revision]
+''',
+        ),
+        encoding="ascii",
+    )
+    with (repository / "fkst.lock").open("a", encoding="ascii") as stream:
+        stream.write(
+            f'''[[external_source]]
+id = "package-source"
+git = "{tmp_path / 'target-source'}"
+checkout_role = "deployment-operated"
+
+'''
+        )
+    machine = home / ".fkst" / "machine"
+
+    rejected = run_generator(repository, home)
+
+    assert rejected.returncode == 2
+    assert "must be a logical name, not a path" in rejected.stderr
+    assert not machine.exists(), "invalid input materialised machine state before validation"
+
+
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_generation_has_no_deployment_revision_floor(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     source_root = tmp_path / "target-source"

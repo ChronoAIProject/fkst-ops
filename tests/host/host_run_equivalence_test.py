@@ -194,6 +194,10 @@ class DeploymentOperatorLayout:
         make_fake_bin(self.fake_bin)
         write_executable(self.script, deployment_operator_script)
         shutil.copy2(
+            DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_source_control.sh",
+            self.skill_dir / "deployment_source_control.sh",
+        )
+        shutil.copy2(
             DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "workspace_manifest.py",
             self.skill_dir / "workspace_manifest.py",
         )
@@ -769,6 +773,10 @@ class HostRunEquivalenceTest(unittest.TestCase):
         script = skill_dir / "deployment_operator.sh"
         shutil.copy2(DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_operator.sh", script)
         script.chmod(0o755)
+        shutil.copy2(
+            DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "deployment_source_control.sh",
+            skill_dir / "deployment_source_control.sh",
+        )
         shutil.copy2(
             DEPLOYMENT_OPERATOR_FIXTURE_ROOT / "workspace_manifest.py",
             skill_dir / "workspace_manifest.py",

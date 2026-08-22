@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 import sys
 import tomllib
+import unicodedata
 from typing import Any, NoReturn
 
 if __package__ in {None, ""}:
@@ -47,6 +48,7 @@ MACHINE_KINDS = {
 }
 PROFILE_MACHINE_FIELDS = {"rate_pool", "bot_login"}
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_PACKAGE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class ValidationError(ValueError):
@@ -208,6 +210,14 @@ def _validate_machine_profile(profile: dict[str, Any]) -> dict[str, dict[str, An
                     _fail(f"machine_profile.{kind}.{name}", "must be a string list")
             elif not isinstance(value, str) or not value:
                 _fail(f"machine_profile.{kind}.{name}", "must be a non-empty string")
+            if kind in {"roots", "binaries"} and any(
+                character.isspace() or unicodedata.category(character) == "Cc"
+                for character in value
+            ):
+                _fail(
+                    f"machine_profile.{kind}.{name}",
+                    "must not contain control characters or whitespace",
+                )
             if kind in {"roots", "binaries", "tools"} and not os.path.isabs(value):
                 _fail(f"machine_profile.{kind}.{name}", "must be an absolute path")
         result[kind] = values
@@ -293,6 +303,16 @@ def _require_unique(values: list[str], path: str) -> None:
         seen.add(value)
 
 
+def _validate_package_name(value: str, path: str) -> None:
+    if not _PACKAGE_NAME.fullmatch(value):
+        _fail(
+            path,
+            "package name must match [A-Za-z0-9_-]+; whitespace and other characters are forbidden",
+        )
+    if value == "host":
+        _fail(path, "package name 'host' is reserved")
+
+
 def _require_unique_logins(values: list[str], path: str) -> None:
     seen: set[str] = set()
     for value in values:
@@ -355,11 +375,34 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
     for package in resolved["packages"]["host"]:
         _require_directory(str(checkouts["target"] / ".fkst" / "local-packages" / package), path + f".packages.host[{package}]")
 
+    package_source_roots: list[Path] = []
+    for entry_index, entry in enumerate(resolved.get("package_sources", [])):
+        entry_path = f"{path}.package_sources[{entry_index}]"
+        root = _require_directory(entry["checkout"], entry_path + ".checkout")
+        resolved_root = root.resolve()
+        for role in ("target", "platform", "engine"):
+            if resolved_root == checkouts[role].resolve():
+                _fail(entry_path + ".checkout", f"must be separate from the {role} checkout")
+        if resolved_root in package_source_roots:
+            _fail(entry_path + ".checkout", "must be separate from every other package source checkout")
+        package_source_roots.append(resolved_root)
+        packages_root = (resolved_root / "packages").resolve()
+        for package in entry["packages"]:
+            package_root = (packages_root / package).resolve()
+            if packages_root.parent != resolved_root or package_root.parent != packages_root:
+                _fail(
+                    entry_path + f".packages[{package}]",
+                    "package root must be a direct child of its declared source",
+                )
+            _require_directory(str(package_root), entry_path + f".packages[{package}]")
+
     source_roots: dict[str, set[Path]] = {}
     for role, source in resolved["sources"].items():
         lock_ref = source["lock_ref"]
         root = checkouts[role]
         source_roots.setdefault(lock_ref, set()).add(root.resolve())
+    for entry, root in zip(resolved.get("package_sources", []), package_source_roots):
+        source_roots.setdefault(entry["lock_ref"], set()).add(root)
     # bootstrap/run.sh verifies the explicitly declared mechanism checkout before
     # handing control to the validator. Its identity is not inferred from its id.
     for lock_ref, pin in pins.items():
@@ -389,8 +432,20 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
         provider["executable"] = str(executable)
 
 
-def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str, Any], lock: dict[str, Any]) -> dict[str, Any]:
-    """Validate all inputs and return a newly allocated resolved declaration."""
+def validate_and_resolve(
+    declaration: dict[str, Any],
+    machine_profile: dict[str, Any],
+    lock: dict[str, Any],
+    *,
+    require_materialized_paths: bool = True,
+) -> dict[str, Any]:
+    """Validate all inputs and return a newly allocated resolved declaration.
+
+    Generation uses ``require_materialized_paths=False`` for its pre-hydration gate. That skips
+    only checks whose subjects do not exist until hydration: checkout/package directories and
+    provider executables within those checkouts. Every declared value and topology invariant is
+    still validated in that pass; the default post-hydration pass proves the filesystem facts.
+    """
     declaration = _table(declaration, "declaration")
     _closed(
         declaration,
@@ -486,7 +541,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
         # repositories with no transaction between them: requiring its absence here would reject
         # every declaration until fkst-deployments merged, and requiring its presence was the
         # defect. It is removed once no declaration carries it.
-        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "engine_revision", "packages", "integration", "machine", "providers"}, path)
+        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "package_sources", "engine_revision", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
         claim_path = path + ".claim_posture"
@@ -562,6 +617,54 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             if "resolved" in pins[lock_ref]:
                 resolved_sources[role]["resolved"] = copy.deepcopy(pins[lock_ref]["resolved"])
 
+        # A deployment composes from its platform by default. Naming further package sources here
+        # is what lets a target carry no packages of its own: the composition is described where
+        # the deployment is declared, not inside the repository being operated. Each entry binds
+        # one pinned source to one machine checkout and lists what that source supplies, which is
+        # the same three facts the target-owned `[[external_sources]]` route carries.
+        package_sources_path = path + ".package_sources"
+        package_sources_declared = dep.get("package_sources", [])
+        if not isinstance(package_sources_declared, list):
+            _fail(package_sources_path, "must be an array of tables")
+        resolved_package_sources: list[dict[str, Any]] = []
+        for entry_index, entry in enumerate(package_sources_declared):
+            entry_path = f"{package_sources_path}[{entry_index}]"
+            entry_table = _table(entry, entry_path)
+            _closed(entry_table, {"lock_ref", "checkout", "packages"}, entry_path)
+            entry_ref = _string(entry_table, "lock_ref", entry_path)
+            if entry_ref not in pins:
+                _fail(entry_path + ".lock_ref", f"references missing pin: {entry_ref}")
+            if pins[entry_ref]["checkout_role"] != "deployment-operated":
+                _fail(
+                    entry_path + ".lock_ref",
+                    f"references {pins[entry_ref]['checkout_role']} source; deployment sources must be deployment-operated",
+                )
+            if any(entry_ref == source["lock_ref"] for source in resolved_sources.values()):
+                _fail(entry_path + ".lock_ref", f"already declared as a deployment source: {entry_ref}")
+            if any(entry_ref == existing["lock_ref"] for existing in resolved_package_sources):
+                _fail(entry_path + ".lock_ref", f"duplicate package source: {entry_ref}")
+            entry_checkout = _string(entry_table, "checkout", entry_path)
+            _logical(entry_checkout, entry_path + ".checkout")
+            if entry_checkout not in machine_values["roots"]:
+                _fail(entry_path + ".checkout", f"unresolved logical roots reference: {entry_checkout}")
+            entry_packages = _string_list(entry_table, "packages", entry_path, nonempty=True)
+            for package_index, package_name in enumerate(entry_packages):
+                _validate_package_name(
+                    package_name, f"{entry_path}.packages[{package_index}]"
+                )
+            _require_unique(entry_packages, entry_path + ".packages")
+            resolved_entry: dict[str, Any] = {
+                "lock_ref": entry_ref,
+                "git": pins[entry_ref]["git"],
+                "checkout_role": pins[entry_ref]["checkout_role"],
+                "checkout": copy.deepcopy(machine_values["roots"][entry_checkout]),
+                "checkout_reference": entry_checkout,
+                "packages": entry_packages,
+            }
+            if "resolved" in pins[entry_ref]:
+                resolved_entry["resolved"] = copy.deepcopy(pins[entry_ref]["resolved"])
+            resolved_package_sources.append(resolved_entry)
+
         engine_revision_path = path + ".engine_revision"
         engine_revision = _table(dep.get("engine_revision"), engine_revision_path)
         _closed(engine_revision, {"path"}, engine_revision_path)
@@ -581,14 +684,22 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             resolved_packages["platform"] = _string_list(packages, "platform", path + ".packages", nonempty=True)
         if "host" in packages:
             resolved_packages["host"] = _string_list(packages, "host", path + ".packages", nonempty=False)
-        # Package names cross a whitespace-separated transport into the launch contract, so a
-        # name containing whitespace would silently split into two roots.
+        # These names become engine package-root basenames and cross a whitespace-separated
+        # transport into the launch contract, so enforce the engine's complete name grammar here.
         for field_name in ("platform", "host"):
-            for package_name in resolved_packages[field_name]:
-                if package_name != package_name.strip() or any(c.isspace() for c in package_name):
-                    _fail(f"{path}.packages.{field_name}", f"package name must not contain whitespace: {package_name!r}")
+            for package_index, package_name in enumerate(resolved_packages[field_name]):
+                _validate_package_name(
+                    package_name, f"{path}.packages.{field_name}[{package_index}]"
+                )
         _require_unique(resolved_packages["platform"], path + ".packages.platform")
         _require_unique(resolved_packages["host"], path + ".packages.host")
+        # The engine rejects duplicate package-root basenames. Reject the same composition here so
+        # a declaration cannot validate successfully and then abort at the launch boundary.
+        _require_unique(
+            resolved_packages["platform"] + resolved_packages["host"]
+            + [name for entry in resolved_package_sources for name in entry["packages"]],
+            path + ".packages",
+        )
 
         integration = _table(dep.get("integration"), path + ".integration")
         _closed(integration, {"upstream_branch", "integration_branch", "rollup_merge"}, path + ".integration")
@@ -640,6 +751,7 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
                 "producer_binding": producer,
             }
         resolved.update({"sources": resolved_sources,
+                         "package_sources": resolved_package_sources,
                          "engine_revision": {"path": derivation_path},
                          "packages": resolved_packages, "integration": resolved_integration,
                          "machine": _resolve_machine(_table(dep.get("machine"), path + ".machine"), machine_values,
@@ -662,7 +774,8 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
             _require_actor_no_domain_a_collapse(
                 bot_login, managed_bot_logins, path + ".machine.bot_login"
             )
-        _validate_resolved_paths(resolved, path, pins)
+        if require_materialized_paths:
+            _validate_resolved_paths(resolved, path, pins)
         resolved_deployments.append(resolved)
     return {
         "schema": SCHEMA_ID,
@@ -673,7 +786,13 @@ def validate_and_resolve(declaration: dict[str, Any], machine_profile: dict[str,
     }
 
 
-def load_and_resolve(declaration_path: str | Path, machine_profile_path: str | Path, lock_path: str | Path) -> dict[str, Any]:
+def load_and_resolve(
+    declaration_path: str | Path,
+    machine_profile_path: str | Path,
+    lock_path: str | Path,
+    *,
+    require_materialized_paths: bool = True,
+) -> dict[str, Any]:
     """Parse three TOML inputs, validate them completely, then return resolved data."""
     documents = []
     for label, path in (("declaration", declaration_path), ("machine profile", machine_profile_path), ("lock", lock_path)):
@@ -682,7 +801,9 @@ def load_and_resolve(declaration_path: str | Path, machine_profile_path: str | P
                 documents.append(tomllib.load(handle))
         except (OSError, tomllib.TOMLDecodeError) as exc:
             raise ValidationError(f"{label}: cannot load {path}: {exc}") from exc
-    return validate_and_resolve(*documents)
+    return validate_and_resolve(
+        *documents, require_materialized_paths=require_materialized_paths
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

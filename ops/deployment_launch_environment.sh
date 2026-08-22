@@ -33,7 +33,13 @@ resolve_deployment_child_environment() {
 }
 
 deployment_child_environment_sha256() {
-  printf '%s\0' "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}" | "$PYTHON" -c '
+  {
+    printf '%s\0' "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}"
+    printf '%s\0' \
+      "PLATFORM_PACKAGES=${DEVLOOP_PKGS:-}" \
+      "HOST_PACKAGES=${LOCAL_PKGS:-}" \
+      "PACKAGE_SOURCES=${DECLARED_PACKAGE_SOURCES:-[]}"
+  } | "$PYTHON" -c '
 import hashlib
 import sys
 

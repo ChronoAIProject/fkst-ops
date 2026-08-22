@@ -45,6 +45,27 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _load_and_resolve_located(
+    declaration_path: Path,
+    machine_profile_path: Path,
+    lock_path: Path,
+    *,
+    require_materialized_paths: bool = True,
+) -> dict[str, Any]:
+    try:
+        return load_and_resolve(
+            declaration_path,
+            machine_profile_path,
+            lock_path,
+            require_materialized_paths=require_materialized_paths,
+        )
+    except ValidationError as exc:
+        detail = str(exc)
+        if detail.startswith("declaration."):
+            detail = detail.removeprefix("declaration.")
+        raise ValidationError(f"{declaration_path} {detail}") from exc
+
+
 def _canonical_repository_file(repository: Path, relative: str, label: str) -> Path:
     item = Path(relative)
     if item.is_absolute() or ".." in item.parts:
@@ -297,6 +318,12 @@ def _profile_text(
             ):
                 logical = machine.get(field)
                 if logical:
+                    roots.setdefault(logical, str(base / "roots" / logical))
+            # A package source is checked out on this machine like any other operated source, so
+            # its logical root belongs in the generated profile alongside the deployment's own.
+            for entry in deployment.get("package_sources", []):
+                logical = entry.get("checkout") if isinstance(entry, dict) else None
+                if isinstance(logical, str) and logical:
                     roots.setdefault(logical, str(base / "roots" / logical))
             binaries.setdefault(
                 machine["engine_binary"], str(base / "bin" / machine["engine_binary"])
@@ -605,9 +632,6 @@ def generate(
     profile = machine_root / "profile.toml"
     manifest = machine_root / "declarations.json"
     launch_agent = machine_root / "LaunchAgents" / "com.fkst.cadence.plist"
-    profile.parent.mkdir(parents=True, exist_ok=True)
-    (machine_root / "watch").mkdir(parents=True, exist_ok=True)
-    launch_agent.parent.mkdir(parents=True, exist_ok=True)
     tools = _discover_tools(declarations)
     profile_text = _profile_text(
         declarations, machine_root, tools, bot_login=bot_login,
@@ -626,6 +650,23 @@ def generate(
         ],
     }, sort_keys=True, separators=(",", ":")) + "\n"
 
+    # Reject the complete declaration set before creating machine state. Filesystem existence
+    # checks are the sole deferred validator phase: their checkout, package, and provider paths
+    # are precisely what hydration produces, so the authoritative default pass runs again below.
+    with tempfile.TemporaryDirectory(prefix=".fkst-preflight-") as preflight_directory:
+        preflight_profile = Path(preflight_directory) / "profile.toml"
+        preflight_profile.write_text(profile_text, encoding="ascii")
+        for declaration_path, _ in declarations:
+            _load_and_resolve_located(
+                declaration_path,
+                preflight_profile,
+                lock,
+                require_materialized_paths=False,
+            )
+
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    (machine_root / "watch").mkdir(parents=True, exist_ok=True)
+    launch_agent.parent.mkdir(parents=True, exist_ok=True)
     hydrate(declarations, lock, machine_root, tools, machine_defaults)
     staging = Path(tempfile.mkdtemp(prefix=".control-", dir=machine_root))
     try:
@@ -637,7 +678,7 @@ def generate(
         staged_profile.write_text(profile_text, encoding="ascii")
         staged_manifest.write_text(manifest_text, encoding="ascii")
         for declaration_path, _ in declarations:
-            load_and_resolve(declaration_path, staged_profile, lock)
+            _load_and_resolve_located(declaration_path, staged_profile, lock)
         staged_launch_agent.write_text(
             _plist_text(
                 repository, generation_root / "profile.toml",

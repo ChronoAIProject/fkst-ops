@@ -13,6 +13,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
+SOURCE_CONTROL = ROOT / "ops" / "deployment_source_control.sh"
 MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
@@ -225,7 +226,7 @@ status_one fixture
             checkout.mkdir()
             (checkout / "partial").write_text("corrupt\n", encoding="ascii")
             command = f'''set -e
-eval "$(sed -n '/^ensure_run_checkout()/,/^}}/p' {OPERATOR})"
+eval "$(sed -n '/^ensure_run_checkout()/,/^}}/p' {SOURCE_CONTROL})"
 ensure_run_checkout "$1" "$2"
 '''
             result = subprocess.run(

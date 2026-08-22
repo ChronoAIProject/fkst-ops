@@ -35,6 +35,15 @@ class EngineCheckout:
 
 
 @dataclass(frozen=True)
+class PlatformDerivedEngineCheckout:
+    """An exact engine checkout whose revision is read from the platform commit."""
+
+
+MaterialisationSpec = BranchCheckout | EngineCheckout | PlatformDerivedEngineCheckout
+HydrationConflictKey = tuple[str, str, MaterialisationSpec]
+
+
+@dataclass(frozen=True)
 class EngineBuild:
     checkout: str
     command: tuple[str, ...]
@@ -254,6 +263,7 @@ def hydrate(
     sources = {entry["id"]: entry for entry in lock.get("external_source", [])}
     exact_specs: dict[str, EngineCheckout] = {}
     branch_specs: dict[str, BranchCheckout] = {}
+    materialisations: dict[str, HydrationConflictKey] = {}
     preserved_roots: set[str] = set()
     for declaration_path, declaration in declarations:
         for index, deployment in enumerate(declaration["deployment"]):
@@ -263,30 +273,58 @@ def hydrate(
                 machine_defaults,
                 f"declaration.deployment[{index}].integration.integration_branch",
             )
-            for role in ("target", "platform"):
-                logical = machine[f"{role}_checkout"]
-                source_id = deployment["sources"][role]["lock_ref"]
+            package_sources = deployment.get("package_sources", [])
+            if not isinstance(package_sources, list) or any(
+                not isinstance(package_source, dict) for package_source in package_sources
+            ):
+                raise ValueError(
+                    f"{declaration_path} deployment[{index}].package_sources "
+                    "must be an array of tables"
+                )
+            try:
+                package_source_bindings = [
+                    (package_source["checkout"], package_source["lock_ref"])
+                    for package_source in package_sources
+                ]
+                hydration_bindings = [
+                    (machine[f"{role}_checkout"], deployment["sources"][role]["lock_ref"])
+                    for role in ("target", "platform")
+                ] + package_source_bindings
+                engine_binding = (
+                    machine["engine_checkout"],
+                    deployment["sources"]["engine"]["lock_ref"],
+                    PlatformDerivedEngineCheckout(),
+                )
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"{declaration_path} deployment[{index}] source binding is incomplete"
+                ) from exc
+            resolved_bindings: list[HydrationConflictKey] = []
+            for logical, source_id in hydration_bindings:
                 try:
                     entry = sources[source_id]
                     resolved = entry.get("resolved")
                     if isinstance(resolved, dict):
                         spec = EngineCheckout(entry["git"], resolved["rev"])
-                        specs = exact_specs
                     else:
                         spec = BranchCheckout(entry["git"], branch)
-                        specs = branch_specs
                 except (KeyError, TypeError) as exc:
                     raise ValueError(
                         f"{declaration_path} deployment[{index}] source {source_id} is incomplete"
                     ) from exc
-                if logical in branch_specs or logical in exact_specs:
-                    existing = branch_specs.get(logical, exact_specs.get(logical))
-                    if existing == spec:
-                        continue
+                resolved_bindings.append((logical, source_id, spec))
+            for logical, source_id, spec in [*resolved_bindings, engine_binding]:
+                materialisation = (logical, source_id, spec)
+                existing = materialisations.get(logical)
+                if existing is not None and existing != materialisation:
                     raise ValueError(
                         f"checkout root {logical} is assigned conflicting sources or branches"
                     )
-                specs[logical] = spec
+                materialisations[logical] = materialisation
+                if isinstance(spec, BranchCheckout):
+                    branch_specs[logical] = spec
+                elif isinstance(spec, EngineCheckout):
+                    exact_specs[logical] = spec
             for field in ("durable", "runtime", "logs", "rate_pool"):
                 preserved_roots.add(machine[field])
     for logical, spec in branch_specs.items():

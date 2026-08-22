@@ -13,6 +13,7 @@ DEPLOYMENT_PYTHON="$(resolve_deployment_python)" || exit $?
 _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_root="$(git -C "$_self_dir" rev-parse --show-toplevel 2>/dev/null || true)"
 source "$_self_dir/deployment_launch_environment.sh"
+source "$_self_dir/deployment_source_control.sh"
 : "${FKST_OPS_DECLARATION:?FKST_OPS_DECLARATION is required}"
 : "${FKST_OPS_MACHINE_PROFILE:?FKST_OPS_MACHINE_PROFILE is required}"
 : "${FKST_OPS_LOCK:?FKST_OPS_LOCK is required}"
@@ -78,10 +79,16 @@ def source_pin(role):
 claim=dep["claim_posture"]
 authorization=dep["author_authorization"]
 derivation=dep["engine_revision"]
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty," ".join(dep["packages"].get("platform",[])) or empty,json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
+package_sources=[]
+for source in dep.get("package_sources",[]):
+    value={"root":source["checkout"],"git":source["git"],"packages":source["packages"]}
+    if "resolved" in source:
+        value["resolved"]=source["resolved"]
+    package_sources.append(value)
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty," ".join(dep["packages"].get("platform",[])) or empty,json.dumps(package_sources,separators=(",",":")),json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS DECLARED_PLATFORM_PKGS GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS DECLARED_PLATFORM_PKGS DECLARED_PACKAGE_SOURCES GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
   [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
@@ -235,150 +242,6 @@ authorize_github_writer() {
     FKST_GITHUB_REAL_GH="$REAL_GH" FKST_GITHUB_REPO="$REPO" FKST_GITHUB_BOT_LOGIN="$BOT" \
     "$PYTHON" "$_self_dir/github_credential_gh.py" --fkst-auth-check || return 1
   GITHUB_WRITER_LOGIN="$BOT"
-}
-
-# Sync a deployment RUN checkout (behavior PKGSRC + target HOST) to the machine's
-# INTEGRATION_BRANCH — the deployment runs its own pre-rollup code (feature ->
-# integration-<device> -> rollup -> dev), so it is the live integration test of
-# this device's autonomous changes BEFORE they promote to dev. The rollup target
-
-ensure_run_checkout() { # $1 checkout dir, $2 Git URL
-  local dir="$1" git_url="$2" corrupt=""
-  if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
-    corrupt="not-a-git-repo"
-  elif git -C "$dir" status --porcelain 2>/dev/null | grep -q '^ D '; then
-    corrupt="deleted-tracked-files"
-  fi
-  [ -z "$corrupt" ] && return 0
-  echo "  ! run checkout $dir corrupt ($corrupt; likely runtime-root cleanup) -> re-cloning $git_url"
-  [ -e "$dir" ] && mv "$dir" "${dir}.corrupt.$(date +%s)" 2>/dev/null
-  mkdir -p "$(dirname "$dir")"
-  git clone -q "$git_url" "$dir" \
-    && echo "    re-cloned $git_url -> $dir" \
-    || { echo "    ERROR: failed to clone $git_url into $dir"; return 1; }
-}
-
-restore_generated_workspace_scratch() { # $1 worktree dir
-  local wt="$1"
-  [ -f "$wt/fkst.workspace.toml" ] || return 0
-  git -C "$wt" diff --quiet -- fkst.workspace.toml 2>/dev/null && return 0
-  "$PYTHON" "$_self_dir/workspace_manifest.py" is-generated-scratch "$wt" "$DEVLOOP_PKGS" "$PLATFORM_GIT_URL" >/dev/null || return 0
-  echo "    restoring generated fkst.workspace.toml scratch before branch sync"
-  git -C "$wt" checkout -q -- fkst.workspace.toml 2>/dev/null
-}
-
-sync_to_run_branch() { # $1 worktree dir
-  git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || { echo "  ! $1 is not a git worktree"; return 1; }
-  git -C "$1" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null \
-    || { echo "  $1 -> FETCH-FAILED ($INTEGRATION_BRANCH)"; return 1; }
-  local target; target=$(git -C "$1" rev-parse --short "origin/$INTEGRATION_BRANCH" 2>/dev/null) \
-    || { echo "  $1 -> MISSING-REMOTE-BRANCH ($INTEGRATION_BRANCH)"; return 1; }
-  # checkout -B (not reset --hard): leaves the checkout actually ON the integration branch
-  # tracking origin/<integration>, instead of pointing a stale local 'dev' ref at integration content.
-  local note checkout_status checkout_output
-  checkout_output=$(mktemp "${TMPDIR:-/tmp}/fkst-checkout.XXXXXX") || return 1
-  git -C "$1" checkout -q -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>&1 \
-    | tail -1 >"$checkout_output"
-  checkout_status=${PIPESTATUS[0]}
-  note=$(cat "$checkout_output")
-  rm -f "$checkout_output"
-  if [ "$checkout_status" -ne 0 ]; then
-    echo "  $1 -> CHECKOUT-FAILED ($INTEGRATION_BRANCH)"
-    return "$checkout_status"
-  fi
-  # Verify the checkout actually REACHED target, then self-heal. A checkout that aborts (working-tree
-  # obstruction, a file<->symlink/dir transition racing the running supervise, a dirty tree) otherwise
-  # leaves the clone on STALE code while the function returns ok and the supervise silently launches
-  # stale — the exact "supervise silently re-running already-fixed defects" failure this tooling exists
-  # to prevent. Self-heal forcefully (reset --hard + clean reaches the fetched ref regardless of the
-  # obstruction; clean -fd keeps gitignored .fkst/ runtime), then re-assert the branch so the checkout
-  # stays ON <integration>. If it STILL cannot reach target (deep corruption ensure_run_checkout should
-  # have re-cloned), fail loud with STALE-CHECKOUT so the operator and doctor (pkg-stale) catch it.
-  if [ "$(git -C "$1" rev-parse --short HEAD 2>/dev/null)" != "$target" ]; then
-    git -C "$1" reset --hard "origin/$INTEGRATION_BRANCH" -q 2>/dev/null
-    git -C "$1" clean -fdq 2>/dev/null
-    git -C "$1" checkout -q -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>/dev/null
-    note="self-healed stale checkout (was: ${note:-checkout-failed})"
-  fi
-  local head; head=$(git -C "$1" rev-parse --short HEAD 2>/dev/null)
-  if [ -n "$target" ] && [ "$head" != "$target" ]; then
-    echo "  $1 -> STALE-CHECKOUT: still $head, target $target ($note) ($INTEGRATION_BRANCH)"
-    return 1
-  fi
-  echo "  $1 -> $head${note:+ ($note)} ($INTEGRATION_BRANCH)"
-}
-
-source_pin_values() { # $1 JSON resolved pin
-  "$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["rev"])' "$1"
-}
-
-sync_to_pinned_revision() { # $1 worktree dir, $2 revision
-  git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || {
-    echo "  $1 -> PINNED-SOURCE-INVALID: not a git worktree"; return 1;
-  }
-  if ! git -C "$1" rev-parse --verify "$2^{commit}" >/dev/null 2>&1; then
-    git -C "$1" fetch origin "$2" -q 2>/dev/null || {
-      echo "  $1 -> PINNED-FETCH-FAILED ($2)"; return 1;
-    }
-  fi
-  git -C "$1" checkout -q --detach "$2" 2>/dev/null || {
-    echo "  $1 -> PINNED-CHECKOUT-FAILED ($2)"; return 1;
-  }
-  local head
-  head=$(git -C "$1" rev-parse --verify HEAD^{commit} 2>/dev/null) || {
-    echo "  $1 -> PINNED-REVISION-MISMATCH (missing HEAD; expected $2)"; return 1;
-  }
-  [ "$head" = "$2" ] || {
-    echo "  $1 -> PINNED-REVISION-MISMATCH (got $head, expected $2)"; return 1;
-  }
-  echo "  $1 -> ${head:0:12} (pinned $2)"
-}
-
-sync_deployment_source() { # $1 worktree dir, $2 optional JSON resolved pin
-  local pin="${2:-}" revision
-  if [ -z "$pin" ] || [ "$pin" = "__FKST_OPS_EMPTY__" ]; then
-    sync_to_run_branch "$1"
-    return $?
-  fi
-  revision=$(source_pin_values "$pin") || {
-    echo "  $1 -> PINNED-SOURCE-INVALID"; return 1;
-  }
-  sync_to_pinned_revision "$1" "$revision"
-}
-
-# Ensure a checkout's INTEGRATION_BRANCH is >= UPSTREAM_BRANCH (dev) by merging upstream
-# FORWARD into integration and pushing. Why: operator out-of-band fixes land on dev; the
-# deployment runs on integration; the in-pipeline sync_scan ff's dev->integration but can lag
-# (or the running supervise is itself stale), so _proc_stale reads "current" against a stale
-# integration and the supervise never picks up operator fixes. This deterministically merges
-# dev forward (plain ff when integration is an ancestor of dev; a merge commit when integration
-# has its own un-rolled commits — both keep integration >= dev) and pushes, so the next
-# _proc_stale sees pkg-stale and restarts onto the fix. Forward-only (never rewrites integration);
-# aborts on conflict and leaves it for sync_conflict; a push failure is non-fatal.
-ensure_integration_caught_up() { # $1 checkout dir
-  local wt="$1"
-  git -C "$wt" rev-parse --git-dir >/dev/null 2>&1 || return 0
-  [ "$INTEGRATION_BRANCH" = "$UPSTREAM_BRANCH" ] && return 0   # single-branch topology: nothing to merge
-  git -C "$wt" fetch origin "$INTEGRATION_BRANCH" "$UPSTREAM_BRANCH" -q 2>/dev/null || return 0
-  git -C "$wt" rev-parse --verify "origin/$INTEGRATION_BRANCH" >/dev/null 2>&1 || return 0
-  git -C "$wt" rev-parse --verify "origin/$UPSTREAM_BRANCH"   >/dev/null 2>&1 || return 0
-  local behind; behind=$(git -C "$wt" rev-list --count "origin/$INTEGRATION_BRANCH..origin/$UPSTREAM_BRANCH" 2>/dev/null || echo 0)
-  [ "${behind:-0}" -eq 0 ] && return 0
-  echo "  $INTEGRATION_BRANCH is $behind behind $UPSTREAM_BRANCH in $(basename "$wt") -> merging $UPSTREAM_BRANCH forward"
-  restore_generated_workspace_scratch "$wt"
-  git -C "$wt" checkout -q -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>/dev/null \
-    || { echo "    WARN: could not checkout $INTEGRATION_BRANCH — leaving for sync_scan"; return 0; }
-  restore_generated_workspace_scratch "$wt"
-  if git -C "$wt" merge --no-edit "origin/$UPSTREAM_BRANCH" >/dev/null 2>&1; then
-    if git -C "$wt" push origin "HEAD:$INTEGRATION_BRANCH" >/dev/null 2>&1; then
-      echo "    merged + pushed: $INTEGRATION_BRANCH -> $(git -C "$wt" rev-parse --short HEAD)"
-    else
-      echo "    WARN: merge ok but push failed (perm/race) — leaving for sync_scan"
-    fi
-  else
-    git -C "$wt" merge --abort 2>/dev/null
-    echo "    WARN: $UPSTREAM_BRANCH does not merge cleanly into $INTEGRATION_BRANCH — leaving for sync_conflict"
-  fi
 }
 
 resolve_engine_pair() {
@@ -639,7 +502,7 @@ clean_stale_engine_artifacts() {
 launch_one() { # $1 name, $2 restart flag (0|1)
   local name="$1" restart="${2:-0}" ts log rt launch_platform launch_lock platform_guard
   local engine_lock engine_guard pid
-  local environment_sha256 args=()
+  local environment_sha256 declared_package_sources declared_package_source args=()
   clean_stale_engine_artifacts || return 1
   cfg "$name" || return 1
   ensure_engine_binary_current || return 1
@@ -672,6 +535,15 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     --runtime-root "$rt"
   )
   [ -n "$LOCAL_PKGS" ] && args+=(--host-packages "$LOCAL_PKGS")
+  # Package sources the declaration named beyond the platform. The validator has already bound
+  # each name to a checkout, so the launch contract carries the binding rather than re-deriving it.
+  declared_package_sources=$(package_source_launch_args) || {
+    echo "[$name] declared package sources -> INVALID" >&2
+    return 1
+  }
+  while IFS= read -r declared_package_source; do
+    [ -n "$declared_package_source" ] && args+=("$declared_package_source")
+  done <<<"$declared_package_sources"
   [ "$restart" = "1" ] && args+=(--restart)
   printf 'FKST_GITHUB_WRITE=%s FKST_GITHUB_WRITER_LOGIN=%s FKST_GITHUB_CLAIM_MODE=%s FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=%s LAUNCH_ENV_SHA256=%s\n' \
     "1" "$GITHUB_WRITER_LOGIN" "$CLAIM_MODE" \
@@ -750,13 +622,17 @@ restart_one() {
   if [ "$HOST" != "$PKGSRC" ]; then
     ensure_run_checkout "$HOST" "$TARGET_GIT_URL" || return 1
   fi
+  ensure_declared_package_source_checkouts || return 1
   derive_devloop_pkgs_from_workspace "$1" || return 1
   [ -n "$PLATFORM_SOURCE_PIN" ] || ensure_integration_caught_up "$PKGSRC"  # pinned sources must not advance
   if [ "$HOST" != "$PKGSRC" ] && [ -z "$TARGET_SOURCE_PIN" ]; then
     ensure_integration_caught_up "$HOST"
   fi
   sync_deployment_source "$PKGSRC" "$PLATFORM_SOURCE_PIN"
-  [ "$HOST" != "$PKGSRC" ] && sync_deployment_source "$HOST" "$TARGET_SOURCE_PIN"
+  if [ "$HOST" != "$PKGSRC" ]; then
+    sync_deployment_source "$HOST" "$TARGET_SOURCE_PIN"
+  fi
+  sync_declared_package_sources || return 1
   # One migration bridge: a supervise launched before the host-run contract has no
   # durable pidfile yet, so --restart has nothing to kill on the first upgraded run.
   [ ! -f "$DUR/.fkst-supervise.pid" ] && { stop_one "$1"; sleep 1; }
@@ -829,9 +705,14 @@ platform_paths_require_restart() {
   return 1
 }
 
+# Emits "<checkout root>\t<one package name>\t<exact revision or empty>" for each declared
+# package source. One name is
+# enough: the engine logs a commit per loaded package, and every package from one source carries
+# that source's commit, so any one of them reports whether the source has moved.
 _proc_stale() {
   cfg "$1" || { echo unknown; return; }
-  local p log procpkg proceng procenv desiredenv pdev changed_paths pin_revision skew=0; p=$(pidof_df); log=$(latest_log "$1")
+  local LC_ALL=C
+  local p log platform_package package_versions procpkg proceng procenv desiredenv pdev changed_paths pin_revision skew=0; p=$(pidof_df); log=$(latest_log "$1")
   [ -z "$p" ] && { echo stopped; return; }
   derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
   if [ -n "${PLATFORM_SOURCE_PIN:-}" ]; then
@@ -844,7 +725,9 @@ _proc_stale() {
     pdev=$(git -C "$PKGSRC" rev-parse "origin/$INTEGRATION_BRANCH" 2>/dev/null)
   fi
   resolve_engine_pair || { echo engine-revision-failed; return; }
-  procpkg=$(grep -aoE "${DEVLOOP_PKGS%% *}@[a-f0-9]+" "$log" 2>/dev/null | tail -1 | cut -d@ -f2)   # any platform pkg's commit reflects the running code
+  platform_package="${DEVLOOP_PKGS%% *}"
+  package_versions=$(provenance_package_versions "$log") || { echo pkg-stale; return; }
+  procpkg=$(provenance_package_version "$package_versions" "$platform_package")
   proceng=$(grep -aoE 'ENGINE_VER=[a-f0-9]+' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
   if [ -n "$proceng" ] && [ "${ENGINE_REVISION:0:${#proceng}}" != "$proceng" ]; then echo engine-stale; return; fi
   if [ -n "$procpkg" ] && [ "${pdev:0:${#procpkg}}" != "$procpkg" ]; then
@@ -853,6 +736,12 @@ _proc_stale() {
     if platform_paths_require_restart <<<"$changed_paths"; then echo pkg-stale; return; fi
     skew=1
   fi
+  # A package source that has moved means the running process loaded code that no longer exists
+  # upstream. Every path in a package source is package code, so unlike the platform there is no
+  # documentation-only class to exempt: any advance is a reload.
+  local package_source_verdict
+  package_source_verdict=$(package_source_moved "$package_versions")
+  [ -z "$package_source_verdict" ] || { echo "$package_source_verdict"; return; }
   procenv=$(grep -aoE 'LAUNCH_ENV_SHA256=[a-f0-9]{64}' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
   [ -n "$procenv" ] || { echo environment-stale; return; }
   resolve_deployment_child_environment || { echo environment-contract-error; return; }
@@ -865,16 +754,33 @@ _proc_stale() {
 # cmd_sync: keep deployment-owned sources current in one call. The mechanism checkout is immutable:
 # its version is the deployment lock pin. Advance target/platform run branches, update and rebuild
 # each declared engine through its provider, then AUTO-RESTART only supervises whose RUNNING code may have changed
-# (pkg-stale/engine-stale/environment-stale). Skill/docs-only skew and already-current processes are
-# left running — a restart would only churn in-flight codex for no code change.
+# (pkg-stale/engine-stale/environment-stale). Unverifiable package provenance, skill/docs-only
+# skew, and already-current processes are left running - a restart cannot repair provenance and
+# would only churn in-flight codex for no code change.
 cmd_sync() {
-  local n st failed=0 platform_pin target_pin
+  local n st failed=0 platform_pin target_pin package_source_checkouts source_root source_url
+  local package_source_roots=()
   for n in $(expand "${1:-all}"); do
     cfg "$n" || { failed=1; continue; }
-    # Reap orphaned locks before any checkout work: a lock left by a dead process
-    # blocks every subsequent git operation on that worktree, and the sweep keeps
-    # any lock it cannot prove unheld.
-    git_lock_sweep "$n" "$HOST" "$PKGSRC" "$RUNTIME_ROOT" || { failed=1; continue; }
+    package_source_checkouts=$(declared_package_source_checkouts) || {
+      echo "[$n] declared package sources -> INVALID" >&2
+      failed=1
+      continue
+    }
+    package_source_roots=()
+    while IFS=$'\t' read -r source_root source_url; do
+      [ -n "$source_root" ] && package_source_roots+=("$source_root")
+    done <<<"$package_source_checkouts"
+    ensure_declared_package_source_checkouts || { failed=1; continue; }
+    # Reap orphaned locks before synchronization writes: a lock left by a dead process blocks
+    # every subsequent update, and the sweep keeps any lock it cannot prove unheld.
+    if [ -n "$package_source_checkouts" ]; then
+      git_lock_sweep "$n" "$HOST" "$PKGSRC" "$RUNTIME_ROOT" \
+        "${package_source_roots[@]}" || { failed=1; continue; }
+    else
+      git_lock_sweep "$n" "$HOST" "$PKGSRC" "$RUNTIME_ROOT" \
+        || { failed=1; continue; }
+    fi
     platform_pin="${PLATFORM_SOURCE_PIN:-}"
     target_pin="${TARGET_SOURCE_PIN:-}"
     if [ -n "$platform_pin" ] || [ -n "$target_pin" ]; then
@@ -899,6 +805,7 @@ cmd_sync() {
         sync_to_run_branch "$HOST" || { failed=1; continue; }
       fi
     fi
+    sync_declared_package_sources || { failed=1; continue; }
     echo "[$n] engine BIN:"
     bin_ensure_fresh | sed 's/^/  /' || { failed=1; continue; }
     echo "[$n] supervise:"
@@ -916,10 +823,14 @@ cmd_config() {
   echo "resolved validated deployment config"
   echo "platform pkgs resolve per repo from fkst.workspace.toml"
   echo "per-repo (HOST | PKGSRC | DURABLE | local pkgs | platform pkgs):"
-  local n
+  local n package_source package_source_status
   for n in $DEPLOYMENT_OPERATOR_DEPLOYMENTS; do
     if cfg "$n" && derive_devloop_pkgs_from_workspace "$n" 2>/dev/null; then
       printf '  %-9s %s | %s | %s | %s | %s\n' "$n" "$HOST" "$PKGSRC" "$DUR" "${LOCAL_PKGS:--}" "$DEVLOOP_PKGS"
+      package_source_status=$(package_source_config_status) || package_source_status="CONFIG-ERROR"
+      while IFS= read -r package_source; do
+        [ -n "$package_source" ] && printf '    package-source %s\n' "$package_source"
+      done <<<"$package_source_status"
     else
       printf '  %-9s %s | %s | %s | %s | %s\n' "$n" "$HOST" "$PKGSRC" "$DUR" "${LOCAL_PKGS:--}" "CONFIG-ERROR"
     fi
