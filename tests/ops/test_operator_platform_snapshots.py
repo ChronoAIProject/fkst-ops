@@ -20,7 +20,7 @@ def run(*arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess
     )
 
 
-def test_launch_platform_snapshot_is_content_addressed_and_reused() -> None:
+def test_launch_platform_snapshot_reuses_operator_edited_tracked_files() -> None:
     source_text = OPERATOR.read_text(encoding="utf-8")
     assert 'launch_platform="$RUNTIME_ROOT/.platform/$PLATFORM_REVISION"' in source_text
 
@@ -30,13 +30,15 @@ def test_launch_platform_snapshot_is_content_addressed_and_reused() -> None:
         revision_file = source / ".control" / "engine-ref"
         revision_file.parent.mkdir(parents=True)
         revision_file.write_text("e" * 40 + "\n", encoding="ascii")
+        platform_state = source / "platform-state"
+        platform_state.write_text("pinned\n", encoding="ascii")
         run("git", "init", "-q", str(source))
         run("git", "-C", str(source), "config", "user.email", "test@example.invalid")
         run("git", "-C", str(source), "config", "user.name", "Test")
         run("git", "-C", str(source), "add", ".")
         run("git", "-C", str(source), "commit", "-qm", "platform")
         platform_revision = run("git", "-C", str(source), "rev-parse", "HEAD").stdout.strip()
-        (source / "platform-state").write_text("advanced\n", encoding="ascii")
+        platform_state.write_text("advanced\n", encoding="ascii")
         run("git", "-C", str(source), "add", ".")
         run("git", "-C", str(source), "commit", "-qm", "advanced platform")
         run("git", "-C", str(source), "rev-parse", "HEAD")
@@ -67,15 +69,15 @@ materialise_launch_platform "$1" "$2" "$3" "$4"
         assert marker.is_file()
         assert run("git", "-C", str(snapshot), "rev-parse", "HEAD").stdout.strip() == platform_revision
 
-        tracked = snapshot / ".control" / "engine-ref"
-        tracked.write_text("tampered\n", encoding="ascii")
+        tracked = snapshot / "platform-state"
+        tracked.write_text("operator edit\n", encoding="ascii")
         revalidated = subprocess.run(
             ["/bin/bash", "-c", command, "test", str(source), str(snapshot),
              platform_revision, "e" * 40, str(root / "runtime")],
             text=True, capture_output=True, check=False,
         )
         assert revalidated.returncode == 0, revalidated.stdout + revalidated.stderr
-        assert tracked.read_text(encoding="ascii") == "e" * 40 + "\n"
+        assert tracked.read_text(encoding="ascii") == "operator edit\n"
 
 
 def test_parent_holds_revision_locks_before_child_creation() -> None:
@@ -178,7 +180,7 @@ assert_engine_pair_at() {{
 PYTHON={sys.executable!s}
 _repo_root={ROOT!s}
 _self_dir={ROOT / "ops"!s}
-launch_platform_snapshot_valid "$1" "$2" "$3" "$4"
+launch_platform_snapshot_valid "$2" "$3" "$4"
 '''
         completed = subprocess.run(
             ["/bin/bash", "-c", command, "test", str(source), str(snapshot), platform_revision, "e" * 40],

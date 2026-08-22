@@ -296,7 +296,6 @@ class DeploymentOperatorLayout:
 
                 [external_source.resolved]
                 rev = {json.dumps(self.platform_revs[platform])}
-                tree_sha256 = "sha256-test"
                 """
             ),
             encoding="utf-8",

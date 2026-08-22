@@ -12,7 +12,6 @@ import time
 import tomllib
 import pytest
 
-from bootstrap.canonical_tree import canonical_tree_sha256
 from schema.validator import ValidationError, load_and_resolve
 from schema.mechanism_tools import MECHANISM_TOOLS
 from watch.generate_artifacts import _discover_tools
@@ -498,15 +497,14 @@ def test_guard_restart_attempt_limit_must_match_across_declarations(
 
 
 @pytest.mark.usefixtures("fabricated_mechanism_tools")
-def test_dirty_checkout_is_refused_without_destroying_work(tmp_path: Path) -> None:
+def test_modified_tracked_branch_checkout_is_accepted_and_preserved(tmp_path: Path) -> None:
     repository, home, declaration = prepared(tmp_path)
     assert run_generator(repository, home).returncode == 0
     checkout = home / ".fkst" / "machine" / "roots" / declaration["deployment"][0]["machine"]["target_checkout"]
     tracked = checkout / "providers" / "engine-board"
     tracked.write_text("tampered\n")
     result = run_generator(repository, home)
-    assert result.returncode == 2
-    assert "refusing to replace existing work" in result.stderr
+    assert result.returncode == 0, result.stderr
     assert tracked.read_text() == "tampered\n"
 
 

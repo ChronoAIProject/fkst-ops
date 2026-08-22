@@ -82,7 +82,6 @@ class HostRunHarness:
 
                     [external_source.resolved]
                     rev = {json.dumps(rev)}
-                    tree_sha256 = "sha256-test"
                     """
                 )
                 for source_id, repo, rev in entries

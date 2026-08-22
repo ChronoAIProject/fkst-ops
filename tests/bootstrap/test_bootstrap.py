@@ -1,4 +1,3 @@
-import hashlib
 import os
 import shutil
 import stat
@@ -9,7 +8,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "bootstrap"
 
 
 def run(*args: str, cwd: Path, check: bool = True, env: dict[str, str] | None = None):
@@ -25,11 +23,9 @@ class BootstrapTest(unittest.TestCase):
         self.source.mkdir()
         self.deployment.mkdir()
         (self.source / "bin").mkdir()
-        (self.source / "bootstrap").mkdir()
         (self.source / "ops").mkdir()
         (self.source / "schema").mkdir()
         shutil.copy2(ROOT / "bin" / "fkst-ops", self.source / "bin" / "fkst-ops")
-        shutil.copy2(SOURCE / "canonical_tree.py", self.source / "bootstrap" / "canonical_tree.py")
         shutil.copy2(ROOT / "ops" / "public_actions.sh", self.source / "ops" / "public_actions.sh")
         runner = self.source / "ops" / "deployment_operator.sh"
         runner.write_text(
@@ -51,20 +47,17 @@ class BootstrapTest(unittest.TestCase):
         run("git", "add", ".", cwd=self.source)
         run("git", "commit", "-qm", "fixture", cwd=self.source)
         self.rev = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        self.tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), self.rev, cwd=self.root
-        ).stdout.strip()
         self.log = self.root / "calls.log"
         self.cache = self.root / "cache"
-        self.write_lock(self.rev, self.tree)
+        self.write_lock(self.rev)
 
     def tearDown(self):
         self.temp.cleanup()
 
-    def write_lock(self, revision: str, tree: str):
+    def write_lock(self, revision: str):
         (self.deployment / "fkst.lock").write_text(
             f'[[external_source]]\nid = "fkst-ops"\ngit = "{self.source}"\n\n'
-            f'[external_source.resolved]\nrev = "{revision}"\ntree_sha256 = "{tree}"\n',
+            f'[external_source.resolved]\nrev = "{revision}"\n',
             encoding="utf-8",
         )
 
@@ -96,21 +89,6 @@ class BootstrapTest(unittest.TestCase):
         marker.write_text("version two\n", encoding="utf-8")
         run("git", "add", "fixture-version.txt", cwd=self.source)
         run("git", "commit", "-qm", "fixture version two", cwd=self.source)
-        revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), revision, cwd=self.root
-        ).stdout.strip()
-        return revision, tree
-
-    def commit_lying_tree_hasher(self, forged_tree: str):
-        tree_hasher = self.source / "bootstrap" / "canonical_tree.py"
-        tree_hasher.write_text(
-            "#!/usr/bin/env python3\n"
-            f"print({forged_tree!r})\n",
-            encoding="utf-8",
-        )
-        run("git", "add", "bootstrap/canonical_tree.py", cwd=self.source)
-        run("git", "commit", "-qm", "lying tree hasher", cwd=self.source)
         return run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
 
     def clone_checkout(self, destination: Path, revision: str):
@@ -128,10 +106,7 @@ class BootstrapTest(unittest.TestCase):
         run("git", "add", "ops/deployment_operator.sh", cwd=self.source)
         run("git", "commit", "-qm", "record exact deployment operator argv", cwd=self.source)
         revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), revision, cwd=self.root
-        ).stdout.strip()
-        self.write_lock(revision, tree)
+        self.write_lock(revision)
 
     def install_pointer_validation_recorder(self):
         validator = self.source / "schema" / "validator.py"
@@ -150,10 +125,7 @@ class BootstrapTest(unittest.TestCase):
         run("git", "add", "schema/validator.py", cwd=self.source)
         run("git", "commit", "-qm", "record validation pointer state", cwd=self.source)
         revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), revision, cwd=self.root
-        ).stdout.strip()
-        self.write_lock(revision, tree)
+        self.write_lock(revision)
         return revision
 
     def test_fresh_then_cached_checkout_is_verified_and_delegated(self):
@@ -198,8 +170,8 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(marker.exists(), "the working-directory schema.validator was imported")
 
-    def test_dirty_invoking_checkout_reexecutes_clean_pinned_copy_before_delegation(self):
-        marker = self.root / "dirty-operator-executed"
+    def test_modified_tracked_operator_at_pinned_revision_runs_directly(self):
+        marker = self.root / "modified-operator-executed"
         runner = self.source / "ops" / "deployment_operator.sh"
         runner.write_text(
             "#!/usr/bin/env bash\n"
@@ -216,13 +188,10 @@ class BootstrapTest(unittest.TestCase):
             cwd=self.deployment, check=False, env=env,
         )
 
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertFalse(marker.exists())
-        pinned = (self.cache / "current").resolve()
-        self.assertNotEqual(self.source.resolve(), pinned)
-        self.assertEqual(
-            ["status"], self.log.read_text(encoding="utf-8").splitlines()
-        )
+        self.assertEqual(73, result.returncode, result.stderr)
+        self.assertTrue(marker.is_file())
+        self.assertFalse(self.cache.exists())
+        self.assertFalse(self.log.exists())
 
     def test_omitted_deployment_dir_finds_nearest_lock_root(self):
         declaration = self.deployment / "deployments" / "packages.toml"
@@ -260,8 +229,8 @@ class BootstrapTest(unittest.TestCase):
     def test_stale_current_hydrates_and_reexecutes_new_lock_pin(self):
         self.assertEqual(0, self.invoke().returncode)
         old_target = (self.cache / "current").resolve()
-        revision, tree = self.commit_fixture_change()
-        self.write_lock(revision, tree)
+        revision = self.commit_fixture_change()
+        self.write_lock(revision)
         result = self.invoke()
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotEqual(old_target, (self.cache / "current").resolve())
@@ -282,10 +251,6 @@ class BootstrapTest(unittest.TestCase):
         run("git", "add", "schema/validator.py", cwd=self.source)
         run("git", "commit", "-qm", "old declaration shape", cwd=self.source)
         old_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        old_tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), old_revision,
-            cwd=self.root,
-        ).stdout.strip()
 
         validator.write_text(
             "import sys, tomllib\n"
@@ -299,10 +264,6 @@ class BootstrapTest(unittest.TestCase):
         run("git", "add", "schema/validator.py", cwd=self.source)
         run("git", "commit", "-qm", "new declaration shape", cwd=self.source)
         new_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        new_tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), new_revision,
-            cwd=self.root,
-        ).stdout.strip()
 
         old_declaration = '''[[deployment]]
 managed_bot_logins = ["bot-a"]
@@ -321,15 +282,15 @@ bot_login = "github-bot"
         # four-cell compatibility matrix. Concurrent cross-repository delivery
         # races and downstream engine/package semantics are outside its scope.
         combinations = (
-            ("old declaration with old mechanism", old_declaration, old_revision, old_tree, True),
-            ("new declaration with new mechanism", new_declaration, new_revision, new_tree, True),
-            ("new declaration with old mechanism", new_declaration, old_revision, old_tree, False),
-            ("old declaration with new mechanism", old_declaration, new_revision, new_tree, False),
+            ("old declaration with old mechanism", old_declaration, old_revision, True),
+            ("new declaration with new mechanism", new_declaration, new_revision, True),
+            ("new declaration with old mechanism", new_declaration, old_revision, False),
+            ("old declaration with new mechanism", old_declaration, new_revision, False),
         )
-        for label, declaration, revision, tree, accepted in combinations:
+        for label, declaration, revision, accepted in combinations:
             with self.subTest(label=label):
                 (self.deployment / "deployment.toml").write_text(declaration, encoding="ascii")
-                self.write_lock(revision, tree)
+                self.write_lock(revision)
                 result = self.invoke_action("status")
                 self.assertEqual(accepted, result.returncode == 0, result.stderr)
 
@@ -346,10 +307,6 @@ bot_login = "github-bot"
         run("git", "add", "schema/validator.py", cwd=self.source)
         run("git", "commit", "-qm", "old engine declaration", cwd=self.source)
         old_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        old_tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), old_revision,
-            cwd=self.root,
-        ).stdout.strip()
 
         validator.write_text(
             "import sys, tomllib\n"
@@ -362,10 +319,6 @@ bot_login = "github-bot"
         run("git", "add", "schema/validator.py", cwd=self.source)
         run("git", "commit", "-qm", "new engine declaration", cwd=self.source)
         new_revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        new_tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), new_revision,
-            cwd=self.root,
-        ).stdout.strip()
 
         old_declaration = '''[[deployment]]
 [deployment.machine]
@@ -380,15 +333,15 @@ engine_checkout = "engine-checkout"
         (self.deployment / "machine.toml").write_text("", encoding="ascii")
 
         sequence = (
-            ("published old deployment remains operable", old_declaration, old_revision, old_tree, True),
-            ("atomic deployment commit selects new declaration and pin", new_declaration, new_revision, new_tree, True),
-            ("declaration changed before pin", new_declaration, old_revision, old_tree, False),
-            ("pin changed before declaration", old_declaration, new_revision, new_tree, False),
+            ("published old deployment remains operable", old_declaration, old_revision, True),
+            ("atomic deployment commit selects new declaration and pin", new_declaration, new_revision, True),
+            ("declaration changed before pin", new_declaration, old_revision, False),
+            ("pin changed before declaration", old_declaration, new_revision, False),
         )
-        for label, declaration, revision, tree, accepted in sequence:
+        for label, declaration, revision, accepted in sequence:
             with self.subTest(label=label):
                 (self.deployment / "deployment.toml").write_text(declaration, encoding="ascii")
-                self.write_lock(revision, tree)
+                self.write_lock(revision)
                 result = self.invoke_action("status")
                 self.assertEqual(accepted, result.returncode == 0, result.stderr)
 
@@ -435,10 +388,7 @@ engine_checkout = "engine-checkout"
         run("git", "add", "ops/public_actions.sh", cwd=self.source)
         run("git", "commit", "-qm", "vary public actions", cwd=self.source)
         revision = run("git", "rev-parse", "HEAD", cwd=self.source).stdout.strip()
-        tree = run(
-            "python3", str(SOURCE / "canonical_tree.py"), str(self.source), revision, cwd=self.root
-        ).stdout.strip()
-        self.write_lock(revision, tree)
+        self.write_lock(revision)
 
         declared = self.declared_actions()
         self.assertEqual(["inspect", "quiesce"], declared)
@@ -470,8 +420,8 @@ engine_checkout = "engine-checkout"
         old_target = (self.cache / "current").resolve()
         old_checkouts = sorted(path.name for path in (self.cache / "checkouts").iterdir())
         old_log = self.log.read_bytes()
-        revision, tree = self.commit_fixture_change()
-        self.write_lock(revision, tree)
+        revision = self.commit_fixture_change()
+        self.write_lock(revision)
 
         result = self.invoke(FAKE_EXIT="1")
 
@@ -499,8 +449,8 @@ engine_checkout = "engine-checkout"
 
     def test_existing_requested_revision_checkout_with_wrong_head_fails_closed(self):
         old_revision = self.rev
-        revision, tree = self.commit_fixture_change()
-        self.write_lock(revision, tree)
+        revision = self.commit_fixture_change()
+        self.write_lock(revision)
         self.clone_checkout(self.cache / "checkouts" / revision, old_revision)
 
         result = self.invoke()
@@ -511,7 +461,7 @@ engine_checkout = "engine-checkout"
         self.assertFalse(self.log.exists())
 
     def test_wrong_requested_revision_fails_closed(self):
-        self.write_lock("f" * 40, self.tree)
+        self.write_lock("f" * 40)
         result = self.invoke()
         self.assertNotEqual(0, result.returncode)
         self.assertFalse((self.cache / "current").exists())
@@ -532,105 +482,6 @@ engine_checkout = "engine-checkout"
         self.assertNotEqual(0, result.returncode)
         self.assertIn("re-exec target is not the physically pinned checkout", result.stderr)
         self.assertFalse(self.cache.exists())
-
-    def test_tree_hash_mismatch_fails_without_cache_pointer(self):
-        self.write_lock(self.rev, "sha256-" + hashlib.sha256(b"wrong").hexdigest())
-        result = self.invoke()
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("tree_sha256 mismatch", result.stderr)
-        self.assertFalse((self.cache / "current").exists())
-        self.assertFalse(self.log.exists())
-
-    def test_fresh_candidate_cannot_use_its_lying_tree_hasher(self):
-        forged_tree = "sha256-" + hashlib.sha256(b"forged fresh tree").hexdigest()
-        revision = self.commit_lying_tree_hasher(forged_tree)
-        self.write_lock(revision, forged_tree)
-
-        result = self.invoke()
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("tree_sha256 mismatch", result.stderr)
-        self.assertFalse((self.cache / "current").exists())
-        self.assertFalse(self.log.exists())
-        self.assertEqual([], list((self.cache / "checkouts").glob(".partial.*")))
-
-    def test_cached_tree_hash_is_verified_before_delegation(self):
-        self.assertEqual(0, self.invoke().returncode)
-        target = (self.cache / "current").resolve()
-        self.write_lock(self.rev, "sha256-" + hashlib.sha256(b"wrong").hexdigest())
-        before = self.log.read_bytes()
-        result = self.invoke()
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("tree_sha256 mismatch", result.stderr)
-        self.assertEqual(target, (self.cache / "current").resolve())
-        self.assertEqual(before, self.log.read_bytes())
-
-    def test_tracked_cached_checkout_drift_is_refused_before_delegation(self):
-        self.assertEqual(0, self.invoke().returncode)
-        target = (self.cache / "current").resolve()
-        runner = target / "ops" / "deployment_operator.sh"
-        original = runner.read_bytes()
-        original_mode = runner.stat().st_mode
-        before = self.log.read_bytes()
-
-        cases = {
-            "modified": lambda: runner.write_bytes(original + b"# modified\n"),
-            "deleted": runner.unlink,
-            "mode": lambda: runner.chmod(original_mode ^ stat.S_IXUSR),
-        }
-        for name, mutate in cases.items():
-            with self.subTest(name=name):
-                mutate()
-                result = self.invoke()
-                self.assertNotEqual(0, result.returncode)
-                self.assertIn("tracked checkout differs from the pinned revision", result.stderr)
-                self.assertIn("ops/deployment_operator.sh", result.stderr)
-                self.assertIn("Restore or replace the cached checkout", result.stderr)
-                self.assertEqual(before, self.log.read_bytes())
-                runner.write_bytes(original)
-                runner.chmod(original_mode)
-
-    def test_checkout_action_metadata_is_not_executed_before_verification(self):
-        self.assertEqual(0, self.invoke().returncode)
-        target = (self.cache / "current").resolve()
-        marker = self.root / "action-metadata-executed"
-        actions = target / "ops" / "public_actions.sh"
-        actions.write_text(
-            f"touch {str(marker)!r}\nreadonly FKST_OPS_PUBLIC_ACTIONS=(status)\n",
-            encoding="utf-8",
-        )
-        env = os.environ.copy()
-        env.update(CALL_LOG=str(self.log), FKST_OPS_CACHE_ROOT=str(self.cache),
-                   FKST_OPS_REEXEC_DEPTH="1")
-
-        result = run(
-            "bash", str(target / "bin" / "fkst-ops"), "--deployment-dir", str(self.deployment),
-            "--declaration", "deployment.toml", "--machine-config", "machine.toml", "status",
-            cwd=self.deployment, check=False, env=env,
-        )
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("re-exec target is not the physically pinned checkout", result.stderr)
-        self.assertFalse(marker.exists())
-
-    def test_cached_checkout_cannot_use_its_lying_tree_hasher(self):
-        self.assertEqual(0, self.invoke().returncode)
-        target = (self.cache / "current").resolve()
-        forged_tree = "sha256-" + hashlib.sha256(b"forged cached tree").hexdigest()
-        (target / "bootstrap" / "canonical_tree.py").write_text(
-            "#!/usr/bin/env python3\n"
-            f"print({forged_tree!r})\n",
-            encoding="utf-8",
-        )
-        self.write_lock(self.rev, forged_tree)
-        before = self.log.read_bytes()
-
-        result = self.invoke()
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("tree_sha256 mismatch", result.stderr)
-        self.assertEqual(target, (self.cache / "current").resolve())
-        self.assertEqual(before, self.log.read_bytes())
 
     def test_acquisition_failure_cleans_partial_state(self):
         missing = self.root / "missing-source"

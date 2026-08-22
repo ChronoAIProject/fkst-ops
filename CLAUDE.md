@@ -16,6 +16,14 @@ or copies of engine guarantees in this file.
   machine profile; producer semantics remain behind provider contracts.
 - Treat behavior changes separately from refactoring. For bug fixes, establish
   a failing test that reaches the relevant production path before changing it.
+- Add or keep a check, flag, ledger, or document only when the change itself can
+  name its reachable consumer: a production, test, or CI machine path for a check,
+  flag, or ledger, or a contributor or operator who uses the document; and — for
+  a defense — the concrete in-boundary actor whose non-malicious mistake it catches.
+  Omit it when an earlier assertion on the same path already establishes the
+  property, when `SPEC.md` declines that threat class, or when the check only
+  distrusts the same trusted writer that produced its evidence. Stop investigating
+  once direct evidence settles the decision.
 - Preserve unrelated worktree changes. Do not use destructive git commands.
 - Keep secrets and credentials out of source, fixtures, logs, and command-line
   output.

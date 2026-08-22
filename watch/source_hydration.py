@@ -19,7 +19,6 @@ from ops.revision_derivation import (
     publish_engine_product,
     resolve_pair,
 )
-from bootstrap.canonical_tree import canonical_tree_sha256
 from schema.validator import resolve_machine_default
 
 
@@ -33,7 +32,6 @@ class BranchCheckout:
 class EngineCheckout:
     url: str
     revision: str
-    tree_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,13 +49,6 @@ def _git(root: Path, *arguments: str, check: bool = True) -> str:
         stderr=subprocess.PIPE,
         check=check,
     ).stdout.strip()
-
-
-def _clean(root: Path) -> bool:
-    try:
-        return not _git(root, "status", "--porcelain", "--untracked-files=no")
-    except (OSError, subprocess.CalledProcessError):
-        return False
 
 
 def _safe_source_url(url: str, destination: Path) -> None:
@@ -95,7 +86,6 @@ def _branch_checkout_valid(root: Path, branch: str) -> bool:
                 check=False,
             ).returncode
             == 0
-            and _clean(root)
         )
     except (OSError, subprocess.CalledProcessError):
         return False
@@ -106,27 +96,15 @@ def _engine_checkout_valid(root: Path, revision: str) -> bool:
         return (
             _git(root, "rev-parse", "--verify", "HEAD^{commit}") == revision
             and _git(root, "branch", "--show-current") == ""
-            and _clean(root)
         )
     except (OSError, subprocess.CalledProcessError):
-        return False
-
-
-def _exact_checkout_valid(root: Path, spec: EngineCheckout) -> bool:
-    if not _engine_checkout_valid(root, spec.revision):
-        return False
-    if spec.tree_sha256 is None:
-        return True
-    try:
-        return canonical_tree_sha256(root, spec.revision) == spec.tree_sha256
-    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError):
         return False
 
 
 def _materialise_branch_checkout(destination: Path, spec: BranchCheckout) -> None:
     _safe_source_url(spec.url, destination)
     if destination.exists() or destination.is_symlink():
-        if not destination.is_dir() or not _clean(destination):
+        if not destination.is_dir():
             raise ValueError(
                 f"checkout {destination} does not match branch-operated state {spec.branch}; "
                 "refusing to replace existing work"
@@ -201,12 +179,10 @@ def _materialise_engine_checkout(
 ) -> None:
     _safe_source_url(spec.url, destination)
     if destination.exists() or destination.is_symlink():
-        if not destination.is_dir() or not _clean(destination):
-            raise ValueError(
-                f"engine checkout {destination} is not clean; refusing exact-revision update"
-            )
+        if not destination.is_dir():
+            raise ValueError(f"engine checkout {destination} is not a directory")
         _require_source_identity(destination, spec.url)
-        if _exact_checkout_valid(destination, spec):
+        if _engine_checkout_valid(destination, spec.revision):
             return
         try:
             branch = _git(destination, "branch", "--show-current")
@@ -223,7 +199,7 @@ def _materialise_engine_checkout(
             raise ValueError(
                 f"engine checkout {destination} cannot fetch exact revision {spec.revision}: {exc}"
             ) from exc
-        if not _exact_checkout_valid(destination, spec):
+        if not _engine_checkout_valid(destination, spec.revision):
             raise ValueError(
                 f"engine checkout {destination} does not match exact revision {spec.revision}"
             )
@@ -240,7 +216,7 @@ def _materialise_engine_checkout(
         _git(temporary, "fetch", "--no-tags", "origin", spec.revision)
         _git(temporary, "checkout", "--quiet", "--detach", spec.revision)
         _require_source_identity(temporary, spec.url)
-        if not _exact_checkout_valid(temporary, spec):
+        if not _engine_checkout_valid(temporary, spec.revision):
             raise ValueError(
                 f"engine checkout {destination.name} does not match exact revision {spec.revision}"
             )
@@ -294,9 +270,7 @@ def hydrate(
                     entry = sources[source_id]
                     resolved = entry.get("resolved")
                     if isinstance(resolved, dict):
-                        spec = EngineCheckout(
-                            entry["git"], resolved["rev"], resolved["tree_sha256"]
-                        )
+                        spec = EngineCheckout(entry["git"], resolved["rev"])
                         specs = exact_specs
                     else:
                         spec = BranchCheckout(entry["git"], branch)
@@ -355,11 +329,7 @@ def hydrate(
                         f"engine source {source_id} pin {resolved_engine['rev']} does not match "
                         f"platform-derived engine revision {pair.engine_revision}"
                     )
-                checkout_spec = EngineCheckout(
-                    engine_source,
-                    pair.engine_revision,
-                    resolved_engine["tree_sha256"],
-                )
+                checkout_spec = EngineCheckout(engine_source, pair.engine_revision)
             else:
                 checkout_spec = EngineCheckout(engine_source, pair.engine_revision)
             provider = providers[deployment["providers"]["engine"]]

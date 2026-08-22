@@ -50,11 +50,9 @@ The copies here are a partial snapshot rather than a mirror: `bin_bootstrap.sh` 
 lines of the platform implementation, so they cannot simply be made live. The complete
 implementations are the platform's, and the migration carries those forward.
 
-Nothing in this repository executes the copies here. They are referenced by `tests/host/`; by one
-entry in `migration/cross-seam-duplication.allowlist`, which recorded this duplication as
-deliberate — "duplicated because source CI must not change" — and which no code in this repository
-reads; and, since the per-target engine-binary fix, by a docstring in `doctor/targets.py` noting
-that it derives the engine binary through the same `ops.revision_derivation` module that
+Nothing in this repository executes the copies here. They are referenced by `tests/host/` and,
+since the per-target engine-binary fix, by a docstring in `doctor/targets.py` noting that it
+derives the engine binary through the same `ops.revision_derivation` module that
 `host/bin_bootstrap.sh` uses. That last one is prose: `doctor/targets.py` imports the module
 directly and does not run the shell copy.
 
@@ -77,8 +75,6 @@ point is the special status; its removal is part of the goal rather than a cost 
   because every implementation attempt runs `test-affected` in a bare worktree. Nothing in the
   migration may make its `test`, `test-affected`, `test-composed` or `run` subcommands depend on
   this repository.
-- `doctor/preflight.sh` sources `bootstrap/bin_bootstrap.sh`, a path that does not exist here.
-  Whatever the migration puts in `host/` must settle which path is real.
 - The platform's control-plane composition document describes the HOST-RUN contract as owned by
   its own `scripts/host_run.sh`. That description is accurate today and becomes wrong at step 4;
   it is updated then, not before.

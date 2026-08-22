@@ -137,9 +137,8 @@ Before dispatch, the entry:
 
 1. reads the deployment-owned mechanism pin;
 2. verifies that the executing or cached checkout's `HEAD` is the pinned full
-   revision and that the blobs of that named commit have the pinned canonical
-   tracked-tree hash, then verifies every tracked path's bytes, file kind, and
-   executable mode against those blobs, hydrating a candidate when necessary;
+   revision, hydrating a candidate when necessary, without asserting anything
+   about the checkout's working-tree contents;
 3. re-executes the physically pinned entry with bounded recursion; and
 4. validates the declaration, machine references, lock bindings, provider
    kinds and contracts, checkout roots, package roots, and provider entries.
@@ -151,9 +150,11 @@ checkouts. Cache publication and pointer replacement occur only after candidate
 verification and pinned preflight succeed.
 
 Checkout-owned action metadata and dispatch code are loaded only after this
-verification. Drift in the invoking checkout causes hydration and re-execution
-from a clean pinned copy. Drift in an already published revision checkout is
-refused before delegation, with the changed tracked paths reported.
+revision-identity verification. The mechanism intentionally executes such code,
+including `ops/deployment_operator.sh`, from an invoking or cached checkout whose
+tracked files differ from the pinned revision. Such an edit is treated as the
+operator's deliberate change on their own disk; working-tree pinning is the
+operator's own Git responsibility and neither causes hydration nor rejection.
 
 ## Engine revision authority
 
@@ -172,12 +173,16 @@ do not establish this identity. These are expressible inputs, not authority
 reductions.
 
 Deployment-operated lock entries contain source identity and Git URL, with an
-optional `resolved` table. When present, `resolved.rev` and
-`resolved.tree_sha256` are enforced by exact detached `HEAD` and canonical
-tracked-tree equality during source hydration and `sync`; the checkout is not
-advanced to its integration branch. When absent, the source remains
-branch-operated. The mechanism entry is different only in that its `resolved`
-table remains required and its exact pin is enforced before execution.
+optional `resolved` table. When present, `resolved.rev` is enforced by exact
+detached `HEAD` at that revision during source hydration and `sync`; the
+checkout is not advanced to its integration branch. Neither path asserts that
+working-tree contents match `HEAD`. When absent, the source remains branch-operated.
+The mechanism entry is different only in that its `resolved` table remains
+required and its exact revision is enforced before execution. The lock schema
+accepts only `rev` in a `resolved` table; a lock still carrying `tree_sha256`
+fails entry validation as an unknown field. The in-repository migration path is
+`bin/fkst-pin`: it reads the lock directly with `tomllib`, rather than through
+the validator, and strips the legacy line when it advances a mechanism pin.
 
 Target and platform checkouts are branch-operated unless their deployment-
 operated lock entry carries `resolved`; a pinned checkout is detached at its
@@ -199,9 +204,9 @@ scope because a same-user writer can also replace source checkouts,
 declarations, the operator, and a matching receipt.
 
 Launch captures `(P, E)`, selects `<engine_binary>-E`, and materialises a detached
-platform checkout at `$RUNTIME_ROOT/.platform/P`. Reuse requires equal canonical
-tree hashes for `P`, a clean materialised tracked tree, and the expected
-derivation blob; an invalid snapshot is removed and rebuilt. `host_run.sh`
+platform checkout at `$RUNTIME_ROOT/.platform/P`. Reuse requires `HEAD == P`, a
+matching expected derivation blob, and no assertion about other working-tree
+contents; an invalid snapshot is removed and rebuilt. `host_run.sh`
 requires `E`, rejects a binary path naming another revision, and exports `E` to
 the engine process. The foreground launcher opens and holds the platform and
 engine revision lock descriptors before it forks; the executable child inherits
@@ -227,8 +232,7 @@ The engine-derivation mechanism/schema change is adopted in this order:
 
 1. Publish the mechanism revision first, while no deployment lock refers to it.
 2. Then use one deployment commit to carry both the `engine_revision` and
-   separate `engine_checkout` declaration changes and the new mechanism `rev`
-   plus `tree_sha256`.
+   separate `engine_checkout` declaration changes and the new mechanism `rev`.
 3. Run that mechanism revision's artifact generator. It derives every logical
    root, including the newly declared engine checkout, before hydration and
    profile validation, so no generated machine profile is hand-edited.
@@ -245,6 +249,12 @@ race-free window for concurrent cross-repository delivery, and it proves no
 downstream engine or package adoption semantics; those remain explicitly
 excluded below.
 
+Removing `resolved.tree_sha256` deliberately creates an exception to this
+compatibility-preserving order: after new `bin/fkst-pin` strips the deployment-
+owned line, rolling the mechanism pin back to a pre-removal revision is not
+supported because its entry requires the field while its pin tool can advance
+only a lock in which the field is already present.
+
 ## Public action surface
 
 The public deployment actions are exactly `board`, `status`, `logs`, `restart`,
@@ -256,7 +266,7 @@ deployment action. Internal commands and functions are not public API.
 | `board` | No deployment lifecycle state. Providers may perform remote reads. | Common entry validation, then provider contract and result-shape checks. |
 | `status` | No. | Common entry validation; identifies the declared supervisor before reporting process and provenance state. |
 | `logs` | No. | Common entry validation; resolves the declared log identity before selecting and tailing its latest log. |
-| `restart` | Yes: source checkouts, supervisor process, runtime generation, logs, and possibly engine artifacts. It may block on a full engine build and fail before process replacement if that build fails. | Common entry validation; branch checkout sync; packages-derived engine pair; revision-addressed byte receipt; clean captured platform tree; child revision binding; numeric durable PID-file parsing and liveness checks before replacement. |
+| `restart` | Yes: source checkouts, supervisor process, runtime generation, logs, and possibly engine artifacts. It may block on a full engine build and fail before process replacement if that build fails. | Common entry validation; branch checkout sync; packages-derived engine pair; revision-addressed byte receipt; captured platform revision and derivation binding; child revision binding; numeric durable PID-file parsing and liveness checks before replacement. |
 | `sync` | Yes: declared run branches/checkouts and engine artifacts; restarts only when loaded package or engine code is stale. | Common entry validation; provider and checkout identity; per-deployment forward integration; packages-derived engine pair; revision-addressed byte receipt; and running-provenance checks before the corresponding mutation. |
 | `stop` | Yes: sends `SIGKILL` to one PID. | Common entry validation; resolves the declared deployment and reads its durable PID file. `stop all` attempts every selected deployment and returns nonzero if any attempt fails. |
 | `doctor` | Conditionally: guarded leaked-test reaping and stale-receipt cleanup. | Common entry validation; each repair independently checks process identity, parent/orphan and age guards, or receipt identity and age. Findings and failures remain visible. |
@@ -436,9 +446,9 @@ This repository does not guarantee:
   old-generation pruning, or rollback;
 - equivalence with a legacy operator unless the deployment-owned acceptance
   matrix has actually been run and recorded; or
-- successful mutation when a checkout is dirty/diverged, a provider fails, a
-  pin or tree does not verify, readiness is absent, or required machine facts
-  are unavailable.
+- successful mutation when a branch-operated checkout diverges, a requested
+  revision cannot be checked out, a provider fails, revision identity does not
+  verify, readiness is absent, or required machine facts are unavailable.
 - for `github-app`, that an explicitly declared `bot_login` is mechanically
   proven to be the identity used by the credential provider; or for either
   source, that roster membership proves the local process is not using a peer's

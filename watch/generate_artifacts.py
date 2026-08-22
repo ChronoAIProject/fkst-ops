@@ -33,7 +33,6 @@ from schema.validator import (
     validate_platform_login,
 )
 from schema.mechanism_tools import MECHANISM_TOOLS
-from bootstrap.canonical_tree import canonical_tree_sha256
 from watch.source_hydration import hydrate
 
 
@@ -69,16 +68,10 @@ def _run_git(root: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
-def _verified_checkout(root: Path, revision: str, tree: str) -> bool:
+def _checkout_at_revision(root: Path, revision: str) -> bool:
     try:
-        if _run_git(root, "rev-parse", "HEAD") != revision:
-            return False
-        if canonical_tree_sha256(root, revision) != tree:
-            return False
-        # The canonical hasher proves the commit; this proves the materialised
-        # tracked files still represent it. Build outputs are intentionally ignored.
-        return not _run_git(root, "status", "--porcelain", "--untracked-files=no")
-    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError):
+        return _run_git(root, "rev-parse", "HEAD") == revision
+    except (OSError, subprocess.CalledProcessError):
         return False
 
 
@@ -92,20 +85,17 @@ def _verify_mechanism_root(lock_path: Path, root: Path = ROOT) -> None:
         if pin["checkout_role"] != "mechanism":
             raise ValueError("fkst-ops lock entry must have checkout_role mechanism")
         revision = pin["resolved"]["rev"]
-        tree = pin["resolved"]["tree_sha256"]
     except (KeyError, TypeError) as exc:
         raise ValueError("fkst-ops lock entry has no complete mechanism pin") from exc
-    if _verified_checkout(root, revision, tree):
+    if _checkout_at_revision(root, revision):
         return
     try:
         observed = _run_git(root, "rev-parse", "HEAD")
-        dirty = bool(_run_git(root, "status", "--porcelain", "--untracked-files=no"))
     except (OSError, subprocess.CalledProcessError) as exc:
         raise ValueError(f"cannot inspect fkst-ops mechanism root {root}: {exc}") from exc
-    state = "dirty" if dirty else "clean"
     raise ValueError(
         f"fkst-ops mechanism root does not match its lock pin: "
-        f"current revision {observed}, lock revision {revision}, working tree {state}"
+        f"current revision {observed}, lock revision {revision}"
     )
 
 
