@@ -513,7 +513,7 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   engine_lock="$(dirname "$BIN")/.$(basename "$BIN").launch.lock"
   engine_guard="$(dirname "$ENGINE_BINARY_BASE")/.$(basename "$ENGINE_BINARY_BASE").locks.guard"
   derive_devloop_pkgs_from_workspace "$name" || return 1
-  [ -n "$DEVLOOP_PKGS" ] || { echo "[$name] no platform packages declared in fkst.workspace.toml"; return 1; }
+  [ -n "$DEVLOOP_PKGS" ] || { echo "[$name] no platform packages: declaration names none and the target manifest fallback yielded none"; return 1; }
   authorize_github_writer || return 1
   resolve_deployment_child_environment || return 1
   environment_sha256=$(deployment_child_environment_sha256) || return 1
@@ -839,7 +839,7 @@ cmd_sync() {
 
 cmd_config() {
   echo "resolved validated deployment config"
-  echo "platform pkgs resolve per repo from fkst.workspace.toml"
+  echo "platform pkgs come from the declaration; a target manifest is the fallback when it names none"
   echo "per-repo (HOST | PKGSRC | DURABLE | local pkgs | platform pkgs):"
   local n package_source package_source_status
   for n in $DEPLOYMENT_OPERATOR_DEPLOYMENTS; do
