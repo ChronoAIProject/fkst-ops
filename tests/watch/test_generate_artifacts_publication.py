@@ -408,7 +408,7 @@ def test_repeated_isolated_publication_is_bounded(tmp_path: Path) -> None:
         assert len(list((machine / "control" / "generations").iterdir())) == 1
 
 
-def _reconciliation_launchctl(tmp_path: Path, restoration_fails: bool) -> tuple[Path, Path]:
+def _reconciliation_launchctl(tmp_path: Path) -> tuple[Path, Path]:
     executable = tmp_path / "launchctl"
     state = tmp_path / "schedule.state"
     calls = tmp_path / "schedule.calls"
@@ -445,7 +445,7 @@ def test_reconciliation_failure_restores_exact_legacy_schedule_or_surfaces_both_
     legacy = tmp_path / "Library" / "LaunchAgents" / "com.fkst.cadence.plist"
     legacy.parent.mkdir(parents=True)
     legacy.write_text("legacy agent", encoding="ascii")
-    executable, state = _reconciliation_launchctl(tmp_path, restoration_fails)
+    executable, state = _reconciliation_launchctl(tmp_path)
     state.write_text(str(legacy), encoding="ascii")
     monkeypatch.setenv("FKST_LAUNCHCTL", str(executable))
     monkeypatch.setenv("LAUNCHCTL_STATE", str(state))
