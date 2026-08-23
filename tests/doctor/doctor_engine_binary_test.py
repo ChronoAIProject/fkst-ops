@@ -70,8 +70,8 @@ class DoctorEngineBinaryTest(unittest.TestCase):
             rows = emit({"deployment": [deployment(root, revision_spec={"path": ".fkst/substrate-ref"})]})
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(len(rows[0]), 5, rows)
-        self.assertTrue(rows[0][4].endswith(f"engine-{revision}"), rows[0][4])
+        self.assertEqual(len(rows[0]), 4, rows)
+        self.assertTrue(rows[0][3].endswith(f"engine-{revision}"), rows[0][3])
 
     def test_the_revision_comes_from_the_platform_when_it_is_not_the_target(self) -> None:
         """The shape of a deployment whose target is the engine repository.
@@ -93,13 +93,13 @@ class DoctorEngineBinaryTest(unittest.TestCase):
             ]})
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(len(rows[0]), 5, rows)
-        self.assertTrue(rows[0][4].endswith(f"engine-{revision}"), rows[0][4])
+        self.assertEqual(len(rows[0]), 4, rows)
+        self.assertTrue(rows[0][3].endswith(f"engine-{revision}"), rows[0][3])
 
     def test_a_deployment_without_a_derivation_spec_yields_an_empty_binary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             rows = emit({"deployment": [deployment(Path(directory), revision_spec=None)]})
-        self.assertEqual(rows[0][4], "")
+        self.assertEqual(rows[0][3], "")
 
     def test_an_undherivable_revision_yields_an_empty_binary_rather_than_failing(self) -> None:
         # The sweep must keep reporting its other sections; a target whose revision cannot be
@@ -110,7 +110,7 @@ class DoctorEngineBinaryTest(unittest.TestCase):
                     deployment(Path(directory), revision_spec={"path": ".fkst/substrate-ref"})
                 ]
             })
-        self.assertEqual(rows[0][4], "")
+        self.assertEqual(rows[0][3], "")
 
     def test_malformed_input_is_not_fatal(self) -> None:
         completed = subprocess.run(

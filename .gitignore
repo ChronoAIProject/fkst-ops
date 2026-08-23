@@ -1,10 +1,9 @@
 # Machine-local operational state. NEVER tracked: a real machine profile carries absolute
-# paths and credentials. Tracked exceptions are the placeholder template and test fixtures,
+# paths and credentials. Tracked exceptions are test fixtures,
 # which contain no real value.
 machine-profile.toml
 *.machine-profile.toml
 .fkst/machine-profile.toml
-!*.example.toml
 !tests/**/machine-profile.toml
 .env
 

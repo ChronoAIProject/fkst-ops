@@ -224,23 +224,6 @@ def _validate_machine_profile(profile: dict[str, Any]) -> dict[str, dict[str, An
     return result
 
 
-def declared_external_tools(declaration: dict[str, Any]) -> set[str]:
-    """Return bare executables named by provider command configuration fields."""
-    tools: set[str] = set()
-    for provider in declaration.get("provider", []):
-        if not isinstance(provider, dict):
-            continue
-        configuration = provider.get("configuration", {})
-        if not isinstance(configuration, dict):
-            continue
-        for field, command in configuration.items():
-            if field.endswith("_command") and isinstance(command, list) and command:
-                executable = command[0]
-                if isinstance(executable, str) and executable and Path(executable).name == executable:
-                    tools.add(executable)
-    return tools
-
-
 def _resolve_provider_commands(
     providers: dict[str, dict[str, Any]], tools: dict[str, Any]
 ) -> None:
@@ -531,13 +514,7 @@ def validate_and_resolve(
     for index, raw in enumerate(deployments):
         path = f"declaration.deployment[{index}]"
         dep = _table(raw, path)
-        # `github_write_enabled` is accepted and ignored, not honoured. Writing is unconditional,
-        # so the field selects nothing — there is no second behaviour to keep. It stays in the
-        # allowed set only because the schema and the declarations that feed it live in separate
-        # repositories with no transaction between them: requiring its absence here would reject
-        # every declaration until fkst-deployments merged, and requiring its presence was the
-        # defect. It is removed once no declaration carries it.
-        _closed(dep, {"id", "target_identity", "github_write_enabled", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "package_sources", "engine_revision", "packages", "integration", "machine", "providers"}, path)
+        _closed(dep, {"id", "target_identity", "claim_posture", "managed_bot_logins", "author_authorization", "github_devloop_profile", "sources", "package_sources", "engine_revision", "packages", "integration", "machine", "providers"}, path)
         identity = _string(dep, "id", path)
         target = _string(dep, "target_identity", path)
         claim_path = path + ".claim_posture"

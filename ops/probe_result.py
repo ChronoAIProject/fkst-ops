@@ -30,12 +30,6 @@ class ProbeResult:
     coverage: dict[str, object] = field(default_factory=dict)
     failure: dict[str, object] | None = None
 
-    @property
-    def pid(self) -> int | None:
-        """Compatibility view for the existing process probe caller API."""
-        value = self.observations.get("pid")
-        return value if type(value) is int else None
-
     def as_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
             "probe": self.probe,

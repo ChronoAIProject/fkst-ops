@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 
 from ops.deployment_process import probe_deployment_process

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import os
 from pathlib import Path
 import plistlib
@@ -16,8 +15,6 @@ from schema.validator import ValidationError, load_and_resolve
 from schema.mechanism_tools import MECHANISM_TOOLS
 from watch.generate_artifacts import _discover_tools
 from generate_artifacts_test_support import (
-    FIXTURES,
-    GIT,
     ROOT,
     git,
     path_without,

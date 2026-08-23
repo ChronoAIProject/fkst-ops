@@ -20,7 +20,7 @@ import sys
 import time
 from typing import Callable, Protocol
 
-from ops.probe_result import ProbeFailure, ProbeResult, ProbeState
+from ops.probe_result import ProbeFailure, ProbeResult
 
 
 class ProcessGone(Exception):
@@ -437,10 +437,6 @@ def probe_deployment_process(
     except InstrumentFailure as exc:
         failure = ProbeFailure("instrument_failure", str(exc), operation="inspect", pid=pid)
         return _failure_result(identity, now_ns, instrument.name, failure, pid=pid)
-    if fact.pid != pid:
-        failure = ProbeFailure("identity_failure", "instrument returned a different pid", selected_pid=pid,
-                               observed_pid=fact.pid)
-        return _failure_result(identity, now_ns, instrument.name, failure, pid=pid, started_ns=fact.started_epoch_ns)
     if fact.state == "Z":
         return ProbeResult(
             "deployment_process", "absent", identity, {"pid": None},

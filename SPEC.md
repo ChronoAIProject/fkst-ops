@@ -36,15 +36,6 @@ A declared deployment writes to GitHub. The operator sets
 write posture to select. Non-deployment entry paths may leave the host fact
 unset when their contract forbids GitHub mutation.
 
-A declaration may still carry the retired `github_write_enabled` field. It is
-accepted and ignored: writing is unconditional, so the field selects nothing and
-does not appear in resolved output. It is tolerated because the schema and the
-declarations that feed it live in separate repositories with no transaction
-between them, and this machine adopts an fkst-ops merge without a pin advance —
-so requiring its absence would reject every live declaration until
-fkst-deployments merged, and requiring its presence was the defect being removed.
-The allowance is removed once no declaration carries it.
-
 The validator selects `bot_login` membership in the declaration-owned roster as
 an fkst-ops invariant; this is not derived from platform behavior. Platform
 consumers tolerate a peers-only list because they separately receive the local
@@ -549,6 +540,9 @@ This repository does not guarantee:
 - conforming replacement when two replacement invocations overlap in the
   current implementation, or atomic serialization of cache publication,
   old-generation pruning, or rollback;
+- a publication-lock timeout or filesystem fallback: acquisition remains a
+  blocking `LOCK_EX`; owner exit releases `flock`, and a waiter timeout would
+  not recover a hung owner or restore transaction state;
 - equivalence with a legacy operator unless the deployment-owned acceptance
   matrix has actually been run and recorded; or
 - successful mutation when a branch-operated checkout diverges, a requested

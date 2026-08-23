@@ -128,7 +128,7 @@ already scarce, and derive it rather than picking it.
 ## Where /loop belongs
 
 `/loop` is for an operator session investigating something — a periodic
-`反思自检` over a live appliance finds real problems. It is **not** the fleet's
+`reflective self-check` over a live appliance finds real problems. It is **not** the fleet's
 monitoring mechanism, for one decisive reason: anything tethered to a session dies
 with that session. That is the failure this fleet already had, and the cadence
 LaunchAgent plus the guard is what fixed it. Adding a session-bound monitor would

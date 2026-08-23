@@ -11,7 +11,6 @@ import unittest
 from schema.validator import (
     ValidationError,
     domain_a_normalized_login,
-    load_and_resolve,
     normalized_login,
     validate_and_resolve,
 )
@@ -114,20 +113,6 @@ class ValidatorTests(unittest.TestCase):
             r"declaration\.deployment\[0\]\.packages\.platform: "
             r"must be a non-empty string list"
         )
-
-    def test_a_declaration_still_carrying_the_retired_write_field_resolves(self) -> None:
-        """Accepted and ignored, so the two repositories need not merge in the same instant.
-
-        The field selects nothing — writing is unconditional — so tolerating it is not a second
-        behaviour. Requiring its absence would reject every live declaration until fkst-deployments
-        merged, and this machine adopts an fkst-ops merge with no pin advance.
-        """
-        for value in (True, False):
-            with self.subTest(value=value):
-                declaration = copy.deepcopy(self.declaration)
-                declaration["deployment"][0]["github_write_enabled"] = value
-                resolved = validate_and_resolve(declaration, self.machine, self.lock)
-                self.assertNotIn("github_write_enabled", resolved["deployment"][0])
 
     def test_machine_default_reference_resolves(self) -> None:
         result = validate_and_resolve(self.declaration, self.machine, self.lock)

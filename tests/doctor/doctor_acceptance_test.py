@@ -43,7 +43,7 @@ class DoctorFixture:
                 "FKST_OPS_DOCTOR_SELF_PGID": "9999",
                 "FKST_OPS_ENGINE_BINARY": str(self.engine),
                 "DEPLOYMENT_OPERATOR_RECEIPT_SWEEP_ROOT": str(self.receipts),
-                "FKST_OPS_DOCTOR_TARGETS": "declared\t/fixture/declared\t/fixture/no-durable\t/fixture/logs",
+                "FKST_OPS_DOCTOR_TARGETS": "declared\t/fixture/declared\t/fixture/no-durable",
             }
         )
 
@@ -131,7 +131,7 @@ class DoctorAcceptanceTest(unittest.TestCase):
         durable = self.fixture.root / "durable-one"
         durable.mkdir()
         (durable / "delivery.redb").write_bytes(b"fixed durable bytes")
-        self.fixture.env["FKST_OPS_DOCTOR_TARGETS"] = f"durable-one\t/fixture/declared\t{durable}\t/fixture/logs"
+        self.fixture.env["FKST_OPS_DOCTOR_TARGETS"] = f"durable-one\t/fixture/declared\t{durable}"
         durable_before = tree_hash(durable)
         process_before = self.fixture.processes.read_bytes()
         receipt_before = tree_hash(self.fixture.receipts)
