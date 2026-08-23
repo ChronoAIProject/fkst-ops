@@ -17,14 +17,22 @@ authority and widened-surface accounting is in [SPEC.md](SPEC.md#engine-revision
 
 ## Run it
 
-Generate the machine profile and related control artifacts from a clean checkout
-whose revision and tree match the deployment-owned mechanism pin:
+Generate the machine profile and related control artifacts from the
+revision-addressed checkout whose `HEAD` matches the deployment-owned mechanism
+pin:
 
 ```sh
 <pinned-fkst-ops-checkout>/bin/fkst-regenerate <deployment-repo> \
   --bot-login <machine-actor-login> \
   --github-credential-source <github-app-or-github-cli-user>
 ```
+
+`<pinned-fkst-ops-checkout>` is
+`<deployment-repo>/.fkst/run/fkst-ops/checkouts/<pinned-rev>`. On first
+generation, materialize the lock entry's Git repository at that exact path and
+check out `resolved.rev` detached before running the command. Generation fails
+without publishing a LaunchAgent when that checkout is absent, mismatched, or
+incomplete; it does not clone or choose a revision.
 
 The generator derives every logical root named by the declarations, hydrates
 their declared sources, and atomically publishes the control generation under

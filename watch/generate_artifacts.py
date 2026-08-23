@@ -37,7 +37,6 @@ from watch.source_hydration import hydrate
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "watch" / "com.fkst.cadence.plist.template"
 DECLARATION_SET_NAME = "deployment-set.json"
 
 
@@ -96,7 +95,7 @@ def _checkout_at_revision(root: Path, revision: str) -> bool:
         return False
 
 
-def _verify_mechanism_root(lock_path: Path, root: Path = ROOT) -> None:
+def _verify_mechanism_root(lock_path: Path, root: Path = ROOT) -> str:
     lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     matches = [entry for entry in lock.get("external_source", []) if entry.get("id") == "fkst-ops"]
     if len(matches) != 1:
@@ -109,7 +108,7 @@ def _verify_mechanism_root(lock_path: Path, root: Path = ROOT) -> None:
     except (KeyError, TypeError) as exc:
         raise ValueError("fkst-ops lock entry has no complete mechanism pin") from exc
     if _checkout_at_revision(root, revision):
-        return
+        return revision
     try:
         observed = _run_git(root, "rev-parse", "HEAD")
     except (OSError, subprocess.CalledProcessError) as exc:
@@ -118,6 +117,39 @@ def _verify_mechanism_root(lock_path: Path, root: Path = ROOT) -> None:
         f"fkst-ops mechanism root does not match its lock pin: "
         f"current revision {observed}, lock revision {revision}"
     )
+
+
+def _pinned_mechanism_checkout(repository: Path, revision: str) -> Path:
+    checkout = repository / ".fkst" / "run" / "fkst-ops" / "checkouts" / revision
+    if not checkout.is_dir():
+        raise ValueError(
+            f"pinned fkst-ops checkout is absent: {checkout}; "
+            "materialize the lock revision before artifact generation"
+        )
+    if not _checkout_at_revision(checkout, revision):
+        try:
+            observed = _run_git(checkout, "rev-parse", "HEAD")
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ValueError(f"cannot inspect pinned fkst-ops checkout {checkout}: {exc}") from exc
+        raise ValueError(
+            f"pinned fkst-ops checkout does not match its lock pin: "
+            f"current revision {observed}, lock revision {revision}"
+        )
+    required_files = (
+        checkout / "watch" / "com.fkst.cadence.plist.template",
+        checkout / "watch" / "cadence_round.py",
+        checkout / "bin" / "fkst-ops",
+    )
+    missing = [str(path) for path in required_files if not path.is_file()]
+    if missing:
+        raise ValueError(
+            "pinned fkst-ops checkout is incomplete; missing required file(s): "
+            + ", ".join(missing)
+        )
+    operator_entry = checkout / "bin" / "fkst-ops"
+    if not os.access(operator_entry, os.X_OK):
+        raise ValueError(f"pinned fkst-ops operator entry is not executable: {operator_entry}")
+    return checkout
 
 
 def _load_declarations(
@@ -358,6 +390,7 @@ def _profile_text(
 
 def _plist_text(
     repository: Path,
+    mechanism_checkout: Path,
     profile: Path,
     manifest: Path,
     machine_root: Path,
@@ -366,7 +399,7 @@ def _plist_text(
 ) -> str:
     values = {
         "__PYTHON3__": sys.executable,
-        "__FKST_OPS_CHECKOUT__": str(ROOT),
+        "__FKST_OPS_CHECKOUT__": str(mechanism_checkout),
         "__DEPLOYMENT_REPOSITORY__": str(repository),
         "__MACHINE_PROFILE__": str(profile),
         "__DECLARATION_MANIFEST__": str(manifest),
@@ -376,7 +409,8 @@ def _plist_text(
         "__STANDARD_OUT_LOG__": str(machine_root / "watch" / "cadence.stdout.log"),
         "__STANDARD_ERROR_LOG__": str(machine_root / "watch" / "cadence.stderr.log"),
     }
-    rendered = TEMPLATE.read_text(encoding="ascii")
+    template = mechanism_checkout / "watch" / "com.fkst.cadence.plist.template"
+    rendered = template.read_text(encoding="ascii")
     for marker, value in values.items():
         rendered = rendered.replace(marker, escape(value))
     if "__" in rendered:
@@ -627,7 +661,8 @@ def generate(
         raise ValueError("guard_restart_attempt_limit must be a non-negative integer")
 
     lock = _canonical_repository_file(repository, "fkst.lock", "lock")
-    _verify_mechanism_root(lock)
+    mechanism_revision = _verify_mechanism_root(lock)
+    mechanism_checkout = _pinned_mechanism_checkout(repository, mechanism_revision)
 
     profile = machine_root / "profile.toml"
     manifest = machine_root / "declarations.json"
@@ -681,7 +716,7 @@ def generate(
             _load_and_resolve_located(declaration_path, staged_profile, lock)
         staged_launch_agent.write_text(
             _plist_text(
-                repository, generation_root / "profile.toml",
+                repository, mechanism_checkout, generation_root / "profile.toml",
                 generation_root / "declarations.json", machine_root, interval,
                 guard_restart_attempt_limit,
             ),
