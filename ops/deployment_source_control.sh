@@ -16,15 +16,6 @@ ensure_run_checkout() { # $1 checkout dir, $2 Git URL
     || { echo "    ERROR: failed to clone $git_url into $dir"; return 1; }
 }
 
-restore_generated_workspace_scratch() { # $1 worktree dir
-  local wt="$1"
-  [ -f "$wt/fkst.workspace.toml" ] || return 0
-  git -C "$wt" diff --quiet -- fkst.workspace.toml 2>/dev/null && return 0
-  "$PYTHON" "$_self_dir/workspace_manifest.py" is-generated-scratch "$wt" "$DEVLOOP_PKGS" "$PLATFORM_GIT_URL" >/dev/null || return 0
-  echo "    restoring generated fkst.workspace.toml scratch before branch sync"
-  git -C "$wt" checkout -q -- fkst.workspace.toml 2>/dev/null
-}
-
 sync_to_run_branch() { # $1 worktree dir
   git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || { echo "  ! $1 is not a git worktree"; return 1; }
   git -C "$1" fetch origin "$INTEGRATION_BRANCH" -q 2>/dev/null \
@@ -155,10 +146,8 @@ ensure_integration_caught_up() { # $1 checkout dir
   local behind; behind=$(git -C "$wt" rev-list --count "origin/$INTEGRATION_BRANCH..origin/$UPSTREAM_BRANCH" 2>/dev/null || echo 0)
   [ "${behind:-0}" -eq 0 ] && return 0
   echo "  $INTEGRATION_BRANCH is $behind behind $UPSTREAM_BRANCH in $(basename "$wt") -> merging $UPSTREAM_BRANCH forward"
-  restore_generated_workspace_scratch "$wt"
   git -C "$wt" checkout -q -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>/dev/null \
     || { echo "    WARN: could not checkout $INTEGRATION_BRANCH - leaving for sync_scan"; return 0; }
-  restore_generated_workspace_scratch "$wt"
   if git -C "$wt" merge --no-edit "origin/$UPSTREAM_BRANCH" >/dev/null 2>&1; then
     if git -C "$wt" push origin "HEAD:$INTEGRATION_BRANCH" >/dev/null 2>&1; then
       echo "    merged + pushed: $INTEGRATION_BRANCH -> $(git -C "$wt" rev-parse --short HEAD)"

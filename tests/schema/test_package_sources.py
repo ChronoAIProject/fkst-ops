@@ -56,17 +56,15 @@ class PackageSourceTests(unittest.TestCase):
     def _materialise(self) -> None:
         deployment = self.declaration["deployment"][0]
         machine = deployment["machine"]
-        target = Path(self.machine["roots"][machine["target_checkout"]])
         platform = Path(self.machine["roots"][machine["platform_checkout"]])
         engine = Path(self.machine["roots"][machine["engine_checkout"]])
         for package in deployment["packages"]["platform"]:
             (platform / "packages" / package).mkdir(parents=True, exist_ok=True)
-        for package in deployment["packages"].get("host", []):
-            (target / ".fkst" / "local-packages" / package).mkdir(parents=True, exist_ok=True)
         for entry in deployment.get("package_sources", []):
             source_root = Path(self.machine["roots"][entry["checkout"]])
             for package in entry["packages"]:
                 (source_root / "packages" / package).mkdir(parents=True, exist_ok=True)
+        target = Path(self.machine["roots"][machine["target_checkout"]])
         entries = {"target-source": target, "platform-source": platform, "engine-source": engine}
         for provider in self.declaration["provider"]:
             lock_ref, relative = provider["implementation"].split(":", 1)

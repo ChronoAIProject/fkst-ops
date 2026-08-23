@@ -58,7 +58,6 @@ class LocalIterationCommandHarness:
             source host/host_run.sh
             HOST_RUN_PROJECT_ROOT={shell_quote(self.root)}
             HOST_RUN_PLATFORM_PACKAGES={shell_quote(packages)}
-            HOST_RUN_HOST_PACKAGES=''
             host_run_validate_local_iteration_test_command
             """
         )
@@ -84,7 +83,6 @@ class LocalIterationCommandHarness:
                 source host/host_run.sh
                 HOST_RUN_PROJECT_ROOT="$1"
                 HOST_RUN_PLATFORM_PACKAGES="$2"
-                HOST_RUN_HOST_PACKAGES=""
                 host_run_validate_local_iteration_test_command
               ' host-profile-child "$2" "$3"
             """

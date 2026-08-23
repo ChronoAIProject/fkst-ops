@@ -49,17 +49,15 @@ class ValidatorTests(unittest.TestCase):
 
     def _prepare_deployment_paths(self, declaration: dict) -> None:
         for deployment in declaration["deployment"]:
-            target = Path(self.machine["roots"][deployment["machine"]["target_checkout"]])
             platform = Path(self.machine["roots"][deployment["machine"]["platform_checkout"]])
             engine = Path(self.machine["roots"][deployment["machine"]["engine_checkout"]])
             for package in deployment["packages"]["platform"]:
                 (platform / "packages" / package).mkdir(parents=True, exist_ok=True)
-            for package in deployment["packages"].get("host", []):
-                (target / ".fkst" / "local-packages" / package).mkdir(parents=True, exist_ok=True)
             for entry in deployment.get("package_sources", []):
                 root = Path(self.machine["roots"][entry["checkout"]])
                 for package in entry["packages"]:
                     (root / "packages" / package).mkdir(parents=True, exist_ok=True)
+            target = Path(self.machine["roots"][deployment["machine"]["target_checkout"]])
             entries = {"target-source": target, "platform-source": platform, "engine-source": engine}
             for provider in declaration["provider"]:
                 lock_ref, relative = provider["implementation"].split(":", 1)
@@ -87,7 +85,10 @@ class ValidatorTests(unittest.TestCase):
         website_declaration = load("website.toml")
         self._prepare_deployment_paths(website_declaration)
         website = validate_and_resolve(website_declaration, self.machine, self.lock)
-        self.assertEqual(website["deployment"][0]["packages"]["host"], [])
+        self.assertEqual(
+            website["deployment"][0]["packages"],
+            {"platform": ["github-devloop", "github-devloop-pr", "github-devloop-integration"]},
+        )
         # The website topology is the one that carries no packages inside its target: its Lua
         # comes from a second package source named by the declaration.
         self.assertEqual(
@@ -95,6 +96,24 @@ class ValidatorTests(unittest.TestCase):
             [("package-source", ["site-board"])],
         )
         self.assertTrue(website["deployment"][0]["package_sources"][0]["checkout"].startswith("/"))
+
+    def test_retired_host_package_field_is_rejected_with_its_location(self) -> None:
+        for value in ([], ["site-board"]):
+            with self.subTest(value=value):
+                declaration = copy.deepcopy(self.declaration)
+                declaration["deployment"][0]["packages"]["host"] = value
+                with self.assertRaisesRegex(
+                    ValidationError,
+                    r"declaration\.deployment\[0\]\.packages: unknown field: host",
+                ):
+                    validate_and_resolve(declaration, self.machine, self.lock)
+
+    def test_platform_package_list_is_required_with_its_location(self) -> None:
+        del self.declaration["deployment"][0]["packages"]["platform"]
+        self.reject(
+            r"declaration\.deployment\[0\]\.packages\.platform: "
+            r"must be a non-empty string list"
+        )
 
     def test_a_declaration_still_carrying_the_retired_write_field_resolves(self) -> None:
         """Accepted and ignored, so the two repositories need not merge in the same instant.

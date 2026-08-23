@@ -24,6 +24,13 @@ discovered machine facts such as absolute paths, credentials, the local machine
 actor (`bot_login`), and locally available binaries. Declarations refer to
 machine facts by logical name.
 
+Every deployment declares a non-empty `packages.platform` list. The operator
+resolves those names only beneath the declared platform checkout's `packages/`
+directory. Operated target repositories do not contribute package selection,
+additional source bindings, lock data, or package roots to deployment
+composition. `packages.host` is not a schema field; additional packages are
+declared through `deployment.package_sources`.
+
 A declared deployment writes to GitHub. The operator sets
 `FKST_GITHUB_WRITE=1` for every deployment child, and declarations expose no
 write posture to select. Non-deployment entry paths may leave the host fact
@@ -205,10 +212,9 @@ of writable records that can select which engine executes goes from three to
 one, the revision file in the platform commit.
 
 The declaration can select `engine_revision.path`, and `host_run.sh` accepts a
-captured platform tree distinct from `--project-root`. For workspace packages,
-both repositories must contain each other's `HEAD` commit; mutable origin URLs
-do not establish this identity. These are expressible inputs, not authority
-reductions.
+captured platform tree distinct from `--project-root`. Platform package roots
+are direct children of that captured tree's `packages/` directory. These are
+expressible inputs, not authority reductions.
 
 Deployment-operated lock entries contain source identity and Git URL, with an
 optional `resolved` table. When present, `resolved.rev` is enforced by exact
@@ -266,7 +272,7 @@ content at the requested SHA does not substitute for declared provenance.
 
 ## Declared package sources
 
-A deployment may extend its platform and host package composition with this
+A deployment may extend its declared platform package composition with this
 closed declaration table, repeated once for each additional source:
 
 ```toml
@@ -296,7 +302,7 @@ At launch, each resolved binding becomes three distinct arguments:
 `--package-source`, its absolute checkout root, and its space-separated package
 names. The host-run contract resolves each named package directly beneath that
 root's `packages/` directory. The launch-environment SHA-256 includes the
-resolved package-source JSON, as well as the platform and host package lists, so
+resolved package-source JSON and platform package list, so
 a changed source root, URL, pin, or package composition makes a running process
 `environment-stale` even when the ordinary child environment is unchanged.
 
@@ -403,9 +409,9 @@ path, with duplicates removed. The generator's or operator's ambient `PATH` is
 not inherited by the child.
 
 For a self-hosted target, the mutable project checkout and captured platform
-checkout have different paths. The host-run contract accepts workspace platform
-packages from that captured root only when each Git object database contains the
-other checkout's `HEAD`; an unrelated root with a copied origin URL fails closed.
+checkout have different paths. The host-run contract resolves every declared
+platform package from the captured platform checkout supplied by the operator;
+it does not inspect the mutable project checkout to re-derive composition.
 
 This direct topology is deliberate policy. A separate shipped process root
 would add no process-group isolation because the supervisor already owns its

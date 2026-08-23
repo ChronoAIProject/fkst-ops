@@ -3,9 +3,7 @@
 
 HOST_RUN_PROJECT_ROOT=""
 HOST_RUN_PLATFORM_ROOT=""
-HOST_RUN_LOCAL_PACKAGES_ROOT=""
 HOST_RUN_PLATFORM_PACKAGES=""
-HOST_RUN_HOST_PACKAGES=""
 HOST_RUN_DURABLE_ROOT=""
 HOST_RUN_RUNTIME_ROOT=""
 HOST_RUN_RUNTIME_BASE=""
@@ -21,7 +19,7 @@ HOST_RUN_PACKAGE_SOURCE_NAMES=()
 
 host_run_usage() {
   cat >&2 <<'EOF'
-usage: scripts/run.sh supervise --project-root <HOST> --platform-root <PKGSRC> --platform-packages "<names>" --expected-engine-revision <sha> [--host-packages "<names>"] [--package-source <root> "<names>"]... --durable-root <path> [--runtime-root <fresh-scratch-root>] [--restart]
+usage: scripts/run.sh supervise --project-root <HOST> --platform-root <PKGSRC> --platform-packages "<names>" --expected-engine-revision <sha> [--package-source <root> "<names>"]... --durable-root <path> [--runtime-root <fresh-scratch-root>] [--restart]
    or: scripts/run.sh supervise <package>
 EOF
 }
@@ -74,359 +72,10 @@ host_run_export_codex_repository_roots() {
   export FKST_CODEX_REPOSITORY_ROOTS
 }
 
-host_run_resolve_target_platform_roots() {
-  local output line python_bin
-  if [ -n "${FKST_PYTHON:-}" ]; then
-    python_bin="$FKST_PYTHON"
-  else
-    python_bin="python3"
-    echo "warning: FKST_PYTHON is not set; falling back to python3 from PATH for this local host launch" >&2
-  fi
-  output="$("$python_bin" - "$HOST_RUN_PROJECT_ROOT" "$HOST_RUN_PLATFORM_PACKAGES" "$HOST_RUN_PLATFORM_ROOT" <<'PY'
-import re
-import shlex
-import subprocess
-import sys
-import tomllib
-from glob import glob
-from pathlib import Path
-from urllib.parse import unquote, urlparse
-
-ID_RE = re.compile(r"[A-Za-z0-9._-]+")
-REV_RE = re.compile(r"[0-9a-fA-F]{40}")
-
-
-def fail(message: str) -> None:
-    print(f"error: {message}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def git_output(args: list[str], *, cwd: Path) -> str:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        )
-    except FileNotFoundError:
-        fail(f"{shlex.join(['git', *args])} could not start (cwd={cwd}): git executable not found")
-    except subprocess.CalledProcessError as exc:
-        message = f"{shlex.join(['git', *args])} failed with exit {exc.returncode} (cwd={cwd})"
-        stderr = exc.stderr.strip()
-        if stderr:
-            message = f"{message}: {stderr}"
-        fail(message)
-    return result.stdout.strip()
-
-
-def git_output_optional(args: list[str], *, cwd: Path) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except FileNotFoundError:
-        fail("git is required to resolve host external sources")
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip()
-
-
-def list_of_tables(data: dict[str, object], key: str) -> list[dict[str, object]]:
-    entries = data.get(key, [])
-    if isinstance(entries, dict):
-        entries = [entries]
-    if not isinstance(entries, list):
-        fail(f"fkst.workspace.toml {key} must be a table array")
-    out: list[dict[str, object]] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            fail(f"fkst.workspace.toml {key} entries must be tables")
-        out.append(entry)
-    return out
-
-
-def string_list(value: object, field: str) -> list[str]:
-    if not isinstance(value, list):
-        fail(f"fkst.workspace.toml {field} must be a string array")
-    out: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item:
-            fail(f"fkst.workspace.toml {field} must contain only non-empty strings")
-        out.append(item)
-    return out
-
-
-def lock_sources(lock_path: Path) -> list[dict[str, object]]:
-    try:
-        data = tomllib.loads(lock_path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as exc:
-        fail(f"invalid fkst lockfile: {lock_path}: {exc}")
-    sources = data.get("external_source", [])
-    if isinstance(sources, dict):
-        sources = [sources]
-    if not isinstance(sources, list):
-        fail("fkst.lock external_source must be a table array")
-    for source in sources:
-        if not isinstance(source, dict):
-            fail("fkst.lock external_source entries must be tables")
-    return sources
-
-
-def validate_source_id(source: dict[str, object], context: str) -> str:
-    source_id = source.get("id")
-    if not isinstance(source_id, str) or not ID_RE.fullmatch(source_id) or source_id in {".", ".."}:
-        fail(f"{context} has invalid id")
-    return source_id
-
-
-def record_unique_source_id(source_id: str, locations: dict[str, str], location: str) -> None:
-    first_location = locations.get(source_id)
-    if first_location is not None:
-        fail(f"duplicate source id '{source_id}' at {first_location} and {location}")
-    locations[source_id] = location
-
-
-def validate_lock_source(source: dict[str, object], source_id: str) -> tuple[str, str]:
-    git_url = source.get("git")
-    resolved = source.get("resolved")
-    rev = resolved.get("rev") if isinstance(resolved, dict) else None
-    if not isinstance(git_url, str) or not git_url:
-        fail(f"fkst.lock external_source(id={source_id}) is missing git")
-    if not isinstance(rev, str) or not REV_RE.fullmatch(rev):
-        fail(f"fkst.lock external_source(id={source_id}) is missing resolved.rev as a full git SHA")
-    return git_url, rev.lower()
-
-
-def is_scp_like_url(value: str) -> bool:
-    return bool(re.match(r"^[A-Za-z0-9_.-]+@[^:]+:", value))
-
-
-def git_ref_names(value: str, *, base: Path) -> set[str]:
-    text = value.rstrip("/")
-    refs = {text}
-    parsed = urlparse(text)
-    if parsed.scheme == "file":
-        refs.add(str(Path(unquote(parsed.path)).resolve()))
-    elif "://" not in text and not is_scp_like_url(text):
-        path = Path(text)
-        if not path.is_absolute():
-            path = base / path
-        refs.add(str(path.resolve()))
-    return refs
-
-
-def same_path(left: Path, right: Path) -> bool:
-    try:
-        return left.resolve() == right.resolve()
-    except OSError:
-        return False
-
-
-def same_repository_history(left: Path, right: Path) -> bool:
-    """True when two checkouts are two views of one repository.
-
-    The operator launches from an immutable snapshot of the platform commit, which is a
-    different tree than --project-root while being the same repository. Path equality
-    cannot express that, so each side must be able to resolve the other's HEAD.
-    """
-    left_head = git_output_optional(["rev-parse", "HEAD"], cwd=left)
-    right_head = git_output_optional(["rev-parse", "HEAD"], cwd=right)
-    if not left_head or not right_head:
-        return False
-    return all(
-        subprocess.run(
-            ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
-            cwd=root,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        ).returncode == 0
-        for root, revision in ((left, right_head), (right, left_head))
-    )
-
-
-def trusted_platform_identity(platform_root: Path) -> tuple[str, set[str]]:
-    if not platform_root.is_dir():
-        fail(f"trusted --platform-root does not exist: {platform_root}")
-    head = git_output(["rev-parse", "HEAD"], cwd=platform_root).lower()
-    if not REV_RE.fullmatch(head):
-        fail(f"trusted --platform-root HEAD is not a full git SHA: {platform_root}")
-    top = Path(git_output(["rev-parse", "--show-toplevel"], cwd=platform_root)).resolve()
-    refs = git_ref_names(str(top), base=top)
-    refs.update(git_ref_names(str(platform_root), base=top))
-    origin = git_output_optional(["config", "--get", "remote.origin.url"], cwd=platform_root)
-    if origin:
-        refs.update(git_ref_names(origin, base=top))
-    return head, refs
-
-
-def read_workspace(workspace_path: Path) -> dict[str, object] | None:
-    # Absent is legal. A target whose composition is owned by its declaration does not
-    # describe itself, so there is nothing here to admit names against; the platform root
-    # the caller already passed is the only source those packages can come from.
-    if not workspace_path.is_file():
-        return None
-    try:
-        data = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as exc:
-        fail(f"invalid target fkst.workspace.toml: {workspace_path}: {exc}")
-    if not isinstance(data, dict):
-        fail("target fkst.workspace.toml must be a TOML table")
-    return data
-
-
-project_root = Path(sys.argv[1]).resolve()
-requested_packages = [item for item in sys.argv[2].split() if item]
-trusted_platform_root = Path(sys.argv[3]).resolve()
-workspace_path = project_root / "fkst.workspace.toml"
-workspace_declared = read_workspace(workspace_path)
-workspace = workspace_declared if workspace_declared is not None else {}
-workspace_packages: dict[str, str] = {}
-workspace_table = workspace.get("workspace", {})
-if isinstance(workspace_table, dict):
-    unit_globs = workspace_table.get("units", [])
-    if unit_globs is None:
-        unit_globs = []
-    for pattern in string_list(unit_globs, "workspace.units"):
-        if pattern.startswith("/") or ".." in Path(pattern).parts:
-            fail("fkst.workspace.toml workspace.units entries must be safe relative globs")
-        for match in glob(str(project_root / pattern)):
-            package_root = Path(match)
-            if package_root.is_dir() and (package_root / "fkst.toml").is_file():
-                workspace_packages[package_root.name] = "workspace"
-for package in list_of_tables(workspace, "package"):
-    name = package.get("name")
-    source = package.get("source", "workspace")
-    if isinstance(name, str) and source == "workspace":
-        workspace_packages[name] = "workspace"
-
-external_sources: dict[str, dict[str, object]] = {}
-workspace_source_locations: dict[str, str] = {}
-for entry_number, source in enumerate(list_of_tables(workspace, "external_sources"), start=1):
-    source_id = validate_source_id(source, "fkst.workspace.toml external_sources")
-    record_unique_source_id(
-        source_id,
-        workspace_source_locations,
-        f"fkst.workspace.toml external_sources[{entry_number}]",
-    )
-    git_url = source.get("git")
-    if not isinstance(git_url, str) or not git_url:
-        fail(f"fkst.workspace.toml external_sources(id={source_id}) is missing git")
-    packages = string_list(source.get("packages", []), f"external_sources(id={source_id}).packages")
-    external_sources[source_id] = {"git": git_url, "packages": packages}
-
-lock_by_id: dict[str, tuple[str, str]] = {}
-selected: list[tuple[str, str, str | None]] = []
-needed_external_source_ids: set[str] = set()
-
-if workspace_declared is None:
-    for package in requested_packages:
-        selected.append((package, "platform-root", None))
-    requested_packages = []
-for package in requested_packages:
-    matches: list[tuple[str, str | None]] = []
-    if package in workspace_packages:
-        matches.append(("workspace", None))
-    for source_id, source in external_sources.items():
-        if package in source["packages"]:
-            matches.append(("external", source_id))
-    if not matches:
-        fail(f"target fkst.workspace.toml does not declare platform package '{package}'")
-    if len(matches) > 1:
-        fail(f"ambiguous target fkst.workspace.toml platform package '{package}'")
-    kind, source_id = matches[0]
-    selected.append((package, kind, source_id))
-    if source_id is not None:
-        needed_external_source_ids.add(source_id)
-
-if needed_external_source_ids:
-    lock_path = project_root / "fkst.lock"
-    if not lock_path.is_file():
-        fail(f"target fkst.lock is required for external platform packages: {lock_path}")
-    lock_source_locations: dict[str, str] = {}
-    for entry_number, source in enumerate(lock_sources(lock_path), start=1):
-        source_id = validate_source_id(source, "fkst.lock external_source")
-        record_unique_source_id(
-            source_id,
-            lock_source_locations,
-            f"fkst.lock external_source[{entry_number}]",
-        )
-        git_url, rev = validate_lock_source(source, source_id)
-        lock_by_id[source_id] = (git_url, rev)
-
-source_roots: dict[str, Path] = {}
-trusted_platform_refs: set[str] = set()
-if needed_external_source_ids:
-    _, trusted_platform_refs = trusted_platform_identity(trusted_platform_root)
-
-for source_id in sorted(needed_external_source_ids):
-    if source_id not in lock_by_id:
-        fail(f"fkst.lock has no external_source(id={source_id}) for target platform packages")
-    expected_git = external_sources[source_id]["git"]
-    git_url, _rev = lock_by_id[source_id]
-    if git_url != expected_git:
-        fail(f"fkst.workspace.toml external_sources(id={source_id}) git does not match fkst.lock")
-    if trusted_platform_refs.isdisjoint(git_ref_names(git_url, base=project_root)):
-        fail(f"fkst.workspace.toml external_sources(id={source_id}) git does not match trusted --platform-root")
-    source_roots[source_id] = trusted_platform_root
-
-package_roots: list[Path] = []
-platform_roots: set[Path] = set()
-for package, kind, source_id in selected:
-    if kind == "platform-root":
-        root = trusted_platform_root / "packages" / package
-        platform_roots.add(trusted_platform_root)
-    elif kind == "workspace":
-        package_platform_root = project_root
-        if not same_path(project_root, trusted_platform_root):
-            if not same_repository_history(project_root, trusted_platform_root):
-                fail(
-                    f"workspace platform package '{package}' requires trusted --platform-root "
-                    "from the project repository"
-                )
-            package_platform_root = trusted_platform_root
-        root = package_platform_root / "packages" / package
-        platform_roots.add(package_platform_root)
-    else:
-        assert source_id is not None
-        root = source_roots[source_id] / "packages" / package
-        platform_roots.add(source_roots[source_id])
-    if not root.is_dir():
-        fail(f"missing target platform package '{package}' at {root}")
-    package_roots.append(root)
-
-if len(platform_roots) != 1:
-    fail("target platform packages must resolve to exactly one workspace or external source")
-
-print(f"PLATFORM_ROOT={next(iter(platform_roots))}")
-for root in package_roots:
-    print(f"PACKAGE_ROOT={root}")
-PY
-)" || return $?
-
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      PLATFORM_ROOT=*) HOST_RUN_PLATFORM_ROOT="${line#PLATFORM_ROOT=}" ;;
-      PACKAGE_ROOT=*) HOST_RUN_PACKAGE_ROOTS+=("${line#PACKAGE_ROOT=}") ;;
-      *) echo "error: unexpected platform resolver output: $line" >&2; return 1 ;;
-    esac
-  done <<< "$output"
-}
-
 host_run_parse_supervise_args() {
   HOST_RUN_PROJECT_ROOT=""
   HOST_RUN_PLATFORM_ROOT=""
-  HOST_RUN_LOCAL_PACKAGES_ROOT=""
   HOST_RUN_PLATFORM_PACKAGES=""
-  HOST_RUN_HOST_PACKAGES=""
   HOST_RUN_DURABLE_ROOT=""
   HOST_RUN_RUNTIME_ROOT=""
   HOST_RUN_RUNTIME_BASE=""
@@ -445,18 +94,12 @@ host_run_parse_supervise_args() {
       --platform-root)
         [ "$#" -ge 2 ] || { echo "error: --platform-root requires a path" >&2; return 2; }
         HOST_RUN_PLATFORM_ROOT="$2"; shift 2 ;;
-      --local-packages)
-        [ "$#" -ge 2 ] || { echo "error: --local-packages requires a path" >&2; return 2; }
-        HOST_RUN_LOCAL_PACKAGES_ROOT="$2"; shift 2 ;;
       --platform-packages)
         [ "$#" -ge 2 ] || { echo "error: --platform-packages requires a package list" >&2; return 2; }
         HOST_RUN_PLATFORM_PACKAGES="$2"; shift 2 ;;
       --expected-engine-revision)
         [ "$#" -ge 2 ] || { echo "error: --expected-engine-revision requires a revision" >&2; return 2; }
         HOST_RUN_EXPECTED_ENGINE_REVISION="$2"; shift 2 ;;
-      --host-packages)
-        [ "$#" -ge 2 ] || { echo "error: --host-packages requires a package list" >&2; return 2; }
-        HOST_RUN_HOST_PACKAGES="$2"; shift 2 ;;
       --package-source)
         [ "$#" -ge 3 ] || { echo "error: --package-source requires <root> <names>" >&2; return 2; }
         case "$2" in
@@ -493,9 +136,6 @@ host_run_parse_supervise_args() {
 
   HOST_RUN_PROJECT_ROOT="$(host_run_abs_path "$HOST_RUN_PROJECT_ROOT")"
   HOST_RUN_PLATFORM_ROOT="$(host_run_abs_path "$HOST_RUN_PLATFORM_ROOT")"
-  if [ -n "$HOST_RUN_LOCAL_PACKAGES_ROOT" ]; then
-    HOST_RUN_LOCAL_PACKAGES_ROOT="$(host_run_abs_path "$HOST_RUN_LOCAL_PACKAGES_ROOT")"
-  fi
   HOST_RUN_DURABLE_ROOT="$(host_run_abs_path "$HOST_RUN_DURABLE_ROOT")"
   if [ -n "$HOST_RUN_RUNTIME_BASE" ]; then
     HOST_RUN_RUNTIME_BASE="$(host_run_abs_path "$HOST_RUN_RUNTIME_BASE")"
@@ -588,19 +228,7 @@ host_run_validate_local_iteration_test_command_for() {
 host_run_validate_local_iteration_test_command() {
   host_run_validate_local_iteration_test_command_for \
     "$HOST_RUN_PROJECT_ROOT" \
-    "$HOST_RUN_PLATFORM_PACKAGES $HOST_RUN_HOST_PACKAGES $(host_run_package_source_names | tr '\n' ' ')"
-}
-
-host_run_host_package_base() {
-  if host_run_same_path "$HOST_RUN_PROJECT_ROOT" "$HOST_RUN_PLATFORM_ROOT"; then
-    printf '%s/packages\n' "$HOST_RUN_PROJECT_ROOT"
-    return 0
-  fi
-  if [ -n "$HOST_RUN_LOCAL_PACKAGES_ROOT" ]; then
-    printf '%s\n' "$HOST_RUN_LOCAL_PACKAGES_ROOT"
-    return 0
-  fi
-  printf '%s/.fkst/local-packages\n' "$HOST_RUN_PROJECT_ROOT"
+    "$HOST_RUN_PLATFORM_PACKAGES $(host_run_package_source_names | tr '\n' ' ')"
 }
 
 host_run_register_package_names() {
@@ -648,13 +276,9 @@ host_run_build_package_roots() {
   local index
   HOST_RUN_PACKAGE_ROOTS=()
   HOST_RUN_PACKAGE_NAMES=()
-  # The resolver may derive these names from the target workspace fallback, so this launch
-  # boundary is the first layer that can enforce one bare name across every emitted root.
-  host_run_register_package_names "$HOST_RUN_PLATFORM_PACKAGES" || return 1
-  host_run_resolve_target_platform_roots || return 1
-  if [ -n "$HOST_RUN_HOST_PACKAGES" ]; then
-    host_run_add_named_roots "$(host_run_host_package_base)" "host" "$HOST_RUN_HOST_PACKAGES" || return 1
-  fi
+  HOST_RUN_PLATFORM_ROOT="$(cd "$HOST_RUN_PLATFORM_ROOT" && pwd -P)" || return 1
+  host_run_add_named_roots "$HOST_RUN_PLATFORM_ROOT/packages" \
+    "platform" "$HOST_RUN_PLATFORM_PACKAGES" || return 1
   for ((index=0; index<${#HOST_RUN_PACKAGE_SOURCE_ROOTS[@]}; index++)); do
     host_run_add_named_roots "${HOST_RUN_PACKAGE_SOURCE_ROOTS[$index]}/packages" \
       "package source" "${HOST_RUN_PACKAGE_SOURCE_NAMES[$index]}" || return 1
