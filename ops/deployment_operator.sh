@@ -659,15 +659,32 @@ fmt_uptime() {
   else printf '%dm%02ds' "$m" "$s"; fi
 }
 
+dead_letter_count() {
+  local count
+  count=$("$PYTHON" "$_self_dir/dead_letter_causes.py" status \
+    --engine "$BIN" --durable-root "$DUR" 2>/dev/null) || count=unknown
+  case "$count" in
+    unknown) ;;
+    ''|*[!0-9]*) count=unknown ;;
+  esac
+  printf '%s' "$count"
+}
+
 status_one() {
   cfg "$1" || return 1
   local p log; p=$(pidof_df); log=$(latest_log "$1")
   if [ -z "$p" ]; then echo "[$1] STOPPED   (target $REPO)"; return 0; fi
-  local et panic auth_fail health last hv pv posture writer claim_mode claim_exclusive
+  local et panic auth_fail dead health last hv pv posture writer claim_mode claim_exclusive
   et=$(fmt_uptime "$(ps -o etime= -p $p 2>/dev/null | tr -d ' ')")
   panic=$(engine_panic_count "$log")
   auth_fail=$(grep -ac 'error_class=github-authentication-failed' "$log" 2>/dev/null || true)
-  health=HEALTHY; [ "$auth_fail" -eq 0 ] || health=UNHEALTHY
+  dead=$(dead_letter_count)
+  health=HEALTHY
+  if [ "$auth_fail" -ne 0 ] || [[ "$dead" =~ ^[1-9][0-9]*$ ]]; then
+    health=UNHEALTHY
+  elif [ "$dead" = unknown ]; then
+    health=UNKNOWN
+  fi
   last=$(tail -1 "$log" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-44)
   hv=$(git -C "$HOST" rev-parse HEAD 2>/dev/null | cut -c1-8)
   pv=$(git -C "$PKGSRC" rev-parse HEAD 2>/dev/null | cut -c1-8)
@@ -679,7 +696,8 @@ status_one() {
   claim_exclusive=$(grep -aoE 'FKST_GITHUB_CLAIM_LABEL_EXCLUSIVE=(0|1)' "$log" 2>/dev/null | head -1 | cut -d= -f2)
   [ -n "$claim_mode" ] || claim_mode="unknown"
   [ -n "$claim_exclusive" ] || claim_exclusive="unknown"
-  printf '[%s] RUNNING pid %s up %s health=%s auth-fail=%s panic=%s write=%s writer=%s claim=%s label-exclusive=%s | host@%s pkgs@%s | %s\n' "$1" "$p" "$et" "$health" "$auth_fail" "$panic" "$posture" "$writer" "$claim_mode" "$claim_exclusive" "$hv" "$pv" "$last"
+  printf '[%s] RUNNING pid %s up %s health=%s auth-fail=%s dead=%s panic=%s write=%s writer=%s claim=%s label-exclusive=%s | host@%s pkgs@%s | %s\n' "$1" "$p" "$et" "$health" "$auth_fail" "$dead" "$panic" "$posture" "$writer" "$claim_mode" "$claim_exclusive" "$hv" "$pv" "$last"
+  # Preserve status_one's established exit contract: only authentication failures make it nonzero.
   [ "$auth_fail" -eq 0 ]
 }
 
