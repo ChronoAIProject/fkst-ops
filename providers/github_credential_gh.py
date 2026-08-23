@@ -152,7 +152,6 @@ def attestation_matches(
         and document["target"] == target
         and document["token_fingerprint"] == token_fingerprint
         and document["boot_session_id"] == boot_session_id
-        and math.isfinite(age)
         and 0 <= age < ATTESTATION_TTL_SECONDS
     )
 
@@ -387,7 +386,6 @@ def main() -> int:
                     command=mint_command)
 
     token_fingerprint = hashlib.sha256(token.encode()).hexdigest()
-    source = "github-cli-user"
     force_fresh = sys.argv[1:] == ["--fkst-auth-check"]
     if force_fresh:
         status = verify_github_cli_user(real_gh, expected, target, token)

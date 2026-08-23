@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit one tab-separated row per declared deployment for the doctor sweep.
 
-Columns: identity, target checkout, durable root, log root, resolved engine binary.
+Columns: identity, target checkout, durable root, resolved engine binary.
 
 The engine binary is derived here through `ops.revision_derivation`, the same module
 `host/bin_bootstrap.sh` uses, so the binary doctor observes with is the one the deployment
@@ -51,8 +51,6 @@ def resolved_engine_binary(deployment: dict) -> str:
     if completed.returncode != 0:
         return ""
     fields = completed.stdout.strip().split("\t")
-    if len(fields) != 2 or not fields[1]:
-        return ""
     return f"{machine['engine_binary']}-{fields[1]}"
 
 
@@ -67,7 +65,6 @@ def main() -> int:
             deployment["id"],
             machine["target_checkout"],
             machine["durable"],
-            machine["logs"],
             resolved_engine_binary(deployment),
         )))
     return 0

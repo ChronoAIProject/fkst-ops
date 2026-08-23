@@ -183,36 +183,6 @@ def parse_workspace(text: str, workspace_path: Path, name: str) -> dict[str, Any
     return workspace
 
 
-def sync(name: str, host: Path, requested: list[str], git_url: str) -> None:
-    workspace_path = host / "fkst.workspace.toml"
-    if not workspace_path.is_file():
-        fail(f"{name}: target fkst.workspace.toml is required for deployment platform sync: {workspace_path}")
-    reject_duplicates(requested, "DEVLOOP_PKGS")
-    text = workspace_path.read_text(encoding="utf-8")
-    workspace = parse_workspace(text, workspace_path, name)
-    source_id, source = platform_source(workspace, git_url, name)
-    field = f"external_sources(id={source_id}).packages"
-    declared_before = package_list(source.get("packages", []), field)
-    reject_duplicates(declared_before, field)
-    if declared_before == requested:
-        return
-
-    new_text = render_with_packages(text, requested, source_id)
-    if new_text != text:
-        tmp_path = workspace_path.with_name(workspace_path.name + ".tmp")
-        tmp_path.write_text(new_text, encoding="utf-8")
-        tmp_path.replace(workspace_path)
-
-    synced = parse_workspace(new_text, workspace_path, name)
-    synced_source_id, source = platform_source(synced, git_url, name)
-    if synced_source_id != source_id:
-        fail(f"{name}: synced fkst.workspace.toml changed the platform external source id")
-    declared = package_list(source.get("packages", []), field)
-    reject_duplicates(declared, field)
-    if declared != requested:
-        fail(f"{name}: synced platform package list does not match DEVLOOP_PKGS")
-
-
 def platform_packages(name: str, host: Path, pkgsrc: Path, git_url: str) -> list[str]:
     workspace_path = host / "fkst.workspace.toml"
     if not workspace_path.is_file():
@@ -259,13 +229,8 @@ def is_generated_scratch(worktree: Path, requested: list[str], git_url: str) -> 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        fail("usage: workspace_manifest.py {sync|platform-packages|is-generated-scratch} ...")
+        fail("usage: workspace_manifest.py {platform-packages|is-generated-scratch} ...")
     cmd = argv[1]
-    if cmd == "sync":
-        if len(argv) != 6:
-            fail("usage: workspace_manifest.py sync <name> <host> <packages> <platform-git-url>")
-        sync(argv[2], Path(argv[3]), [item for item in argv[4].split() if item], argv[5])
-        return 0
     if cmd == "platform-packages":
         if len(argv) != 6:
             fail("usage: workspace_manifest.py platform-packages <name> <host> <pkgsrc> <platform-git-url>")

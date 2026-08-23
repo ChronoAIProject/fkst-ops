@@ -249,10 +249,6 @@ resolve_engine_pair() {
   values=$("$PYTHON" "$_repo_root/ops/revision_derivation.py" resolve \
     "$REVISION_SOURCE" "$ENGINE_REVISION_PATH") || return $?
   IFS=$'\t' read -r PLATFORM_REVISION ENGINE_REVISION <<<"$values"
-  [ -n "$PLATFORM_REVISION" ] && [ -n "$ENGINE_REVISION" ] || {
-    echo "engine revision resolution failed: empty platform/engine pair" >&2
-    return 1
-  }
   BIN="${ENGINE_BINARY_BASE}-${ENGINE_REVISION}"
 }
 
@@ -551,7 +547,6 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   pid=$(env -u GH_TOKEN -u GITHUB_TOKEN "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}" \
     "$PYTHON" "$_self_dir/launch_child.py" --spawn "$log" "$launch_lock" "$platform_guard" \
       "$engine_lock" "$engine_guard" "${args[@]}" 2>> "$log" </dev/null) || return 1
-  [[ "$pid" =~ ^[0-9]+$ ]] || { echo "LAUNCH_CHILD_PID_INVALID: $pid" >&2; return 1; }
   ln -sf "$log" "$LOGDIR/${name}-sv.log"
   wait_supervise_ready "$pid" "$log"
   local ready_status=$?

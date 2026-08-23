@@ -40,7 +40,7 @@ def _board_row(value: Any) -> None:
     if not isinstance(value["fields"], dict) or not all(isinstance(key, str) for key in value["fields"]):
         raise ContractViolation("BoardRow fields must be a string-keyed object")
     for field in value["fields"].values():
-        if isinstance(field, (dict, list)) or not isinstance(field, (str, int, float, bool, type(None))):
+        if not isinstance(field, (str, int, float, bool, type(None))):
             raise ContractViolation("BoardRow field values must be scalars")
         if isinstance(field, float) and not math.isfinite(field):
             raise ContractViolation("BoardRow numeric fields must be finite")

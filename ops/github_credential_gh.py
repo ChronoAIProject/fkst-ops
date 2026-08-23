@@ -115,8 +115,6 @@ def main() -> int:
     if sys.argv[1:] == ["--fkst-auth-check"]:
         return 0
     real_gh = os.environ.get("FKST_GITHUB_REAL_GH", "")
-    if not real_gh or not os.path.isfile(real_gh) or not os.access(real_gh, os.X_OK):
-        return fail("real-gh-unavailable", f"GitHub CLI is not executable: {real_gh!r}")
     environment = os.environ.copy()
     environment["GH_TOKEN"] = issued[0]
     environment.pop("GITHUB_TOKEN", None)

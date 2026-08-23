@@ -5,7 +5,6 @@ from __future__ import annotations
 
 # provider-published-surface: This map is a versioned declaration contract. Files
 # in the mechanism checkout are private unless their path and kind appear here.
-MECHANISM_SOURCE_ID = "fkst-ops"
 PUBLISHED_PROVIDER_ENTRY_POINTS = {
     "providers/github_credential_gh.py": "credential.github",
     "providers/engine.py": "engine",

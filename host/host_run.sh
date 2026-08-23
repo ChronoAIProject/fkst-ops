@@ -22,7 +22,6 @@ HOST_RUN_PACKAGE_SOURCE_NAMES=()
 host_run_usage() {
   cat >&2 <<'EOF'
 usage: scripts/run.sh supervise --project-root <HOST> --platform-root <PKGSRC> --platform-packages "<names>" --expected-engine-revision <sha> [--host-packages "<names>"] [--package-source <root> "<names>"]... --durable-root <path> [--runtime-root <fresh-scratch-root>] [--restart]
-   or: scripts/run.sh supervise <package>
 EOF
 }
 

@@ -125,8 +125,8 @@ elapsed_seconds() {
 }
 
 stray_supervise_report() {
-  local managed="" identity project durable log_root engine pid cmd root stray=0
-  while IFS=$'\t' read -r identity project durable log_root engine; do
+  local managed="" identity project durable engine pid cmd root stray=0
+  while IFS=$'\t' read -r identity project durable engine; do
     [ -n "$identity" ] || continue
     managed="${managed}${project}"$'\n'
   done < <(doctor_targets)
@@ -212,7 +212,7 @@ sweep_stale_tmp_receipts() {
 }
 
 durable_health_one() {
-  local identity="$1" durable="$2" log_root="$3" engine="$4" snapshot summary now_ms
+  local identity="$1" durable="$2" engine="$3" snapshot summary now_ms
   # Resolved per target; FKST_OPS_ENGINE_BINARY remains only as a fixture seam.
   [ -n "$engine" ] || engine="${FKST_OPS_ENGINE_BINARY:-}"
   if [ -z "$engine" ]; then
@@ -241,10 +241,10 @@ durable_health_one() {
 }
 
 durable_health_report() {
-  local identity project durable log_root engine
-  while IFS=$'\t' read -r identity project durable log_root engine; do
+  local identity project durable engine
+  while IFS=$'\t' read -r identity project durable engine; do
     [ -n "$identity" ] || continue
-    durable_health_one "$identity" "$durable" "$log_root" "$engine"
+    durable_health_one "$identity" "$durable" "$engine"
   done < <(doctor_targets)
 }
 
