@@ -288,7 +288,7 @@ class DeclaredPackageSourceTest(unittest.TestCase):
 }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo {str(log)!r}; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=autochrono; }}
+PLATFORM_PKGS=autochrono
 resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
 resolve_deployment_child_environment() {{ :; }}
 deployment_child_environment_sha256() {{ printf '%s\n' {'1' * 64!r}; }}
@@ -399,13 +399,12 @@ LOGDIR={str(temp / 'logs')!r}; RUNTIME_ROOT={str(temp / 'runtime')!r}
 PLATFORM_REVISION=platform-rev; ENGINE_REVISION=engine-rev
 BIN={str(temp / 'bin' / 'engine')!r}; ENGINE_BINARY_BASE="$BIN"
 DUR={str(temp / 'durable')!r}; HOST=/host; PKGSRC=/platform
-LOCAL_PKGS=; DEVLOOP_PKGS=autochrono
+PLATFORM_PKGS=autochrono
 GITHUB_WRITER_LOGIN=bot
 CLAIM_MODE=assignee; CLAIM_LABEL_EXCLUSIVE=0; DEPLOYMENT_CHILD_ENVIRONMENT=()
 clean_stale_engine_artifacts() {{ :; }}
 cfg() {{ :; }}
 ensure_engine_binary_current() {{ :; }}
-derive_devloop_pkgs_from_workspace() {{ :; }}
 authorize_github_writer() {{ :; }}
 resolve_deployment_child_environment() {{ :; }}
 deployment_child_environment_sha256() {{ echo {'1' * 64!r}; }}
@@ -434,7 +433,6 @@ HOST=/platform; PKGSRC=/platform; PLATFORM_GIT_URL=platform-url; TARGET_GIT_URL=
 PLATFORM_SOURCE_PIN=; TARGET_SOURCE_PIN=; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
 RUNTIME_ROOT=/runtime; DUR=/durable
 cfg() { :; }
-derive_devloop_pkgs_from_workspace() { :; }
 ensure_integration_caught_up() { :; }
 sync_to_run_branch() { :; }
 sync_deployment_source() { :; }
@@ -506,7 +504,6 @@ cfg() {{ :; }}
 git_lock_sweep() {{
   git -C "$PACKAGE_SOURCE" rev-parse --git-dir >/dev/null 2>&1 || return 9
 }}
-derive_devloop_pkgs_from_workspace() {{ :; }}
 ensure_integration_caught_up() {{ :; }}
 sync_to_run_branch() {{ :; }}
 sync_deployment_source() {{ :; }}
@@ -559,7 +556,7 @@ cmd_sync all
                 + f'''cfg() {{ PKGSRC={str(work)!r}; INTEGRATION_BRANCH=integration; PLATFORM_SOURCE_PIN=; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo {str(log)!r}; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=platform-package; }}
+PLATFORM_PKGS=platform-package
 resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
 resolve_deployment_child_environment() {{ :; }}
 deployment_child_environment_sha256() {{ printf '%s\n' {'1' * 64!r}; }}
@@ -646,7 +643,7 @@ RESTART_COUNT={str(restart_count)!r}; ENVIRONMENT_SHA256={environment_sha256!r}
 expand() {{ echo deployment; }}
 cfg() {{ :; }}
 git_lock_sweep() {{ :; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=platform-package; }}
+PLATFORM_PKGS=platform-package
 ensure_integration_caught_up() {{ :; }}
 bin_ensure_fresh() {{ echo current; }}
 pidof_df() {{ echo 123; }}
@@ -714,7 +711,6 @@ cmd_sync all
             }]
             result = run(
                 extract(
-                    "restore_generated_workspace_scratch",
                     "source_pin_values",
                     "sync_to_pinned_revision",
                     "sync_deployment_source",
@@ -722,7 +718,7 @@ cmd_sync all
                 + extract("sync_declared_package_sources")
                 + f'''
 PYTHON={sys.executable!r}; _repo_root={str(ROOT)!r}; _self_dir={str(ROOT / "ops")!r}
-DEVLOOP_PKGS=; PLATFORM_GIT_URL=unused; INTEGRATION_BRANCH=integration
+INTEGRATION_BRANCH=integration
 DECLARED_PACKAGE_SOURCES={json.dumps(declared)!r}
 sync_declared_package_sources
 '''
@@ -745,7 +741,6 @@ HOST=/platform; PKGSRC=/platform; PLATFORM_GIT_URL=platform; TARGET_GIT_URL=targ
 PLATFORM_SOURCE_PIN=; TARGET_SOURCE_PIN=; UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration
 RUNTIME_ROOT=/runtime; DUR={str(durable)!r}
 cfg() {{ :; }}
-derive_devloop_pkgs_from_workspace() {{ :; }}
 ensure_integration_caught_up() {{ :; }}
 ensure_run_checkout() {{ :; }}
 sync_to_run_branch() {{ :; }}

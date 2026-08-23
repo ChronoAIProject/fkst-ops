@@ -34,7 +34,6 @@ def launch_environment_contract(
     command = '''source "$1"
 cfg "$2"
 resolve_engine_pair
-derive_devloop_pkgs_from_workspace "$2"
 resolve_deployment_child_environment
 deployment_child_environment_sha256
 printf '%s\\n' "${DEPLOYMENT_CHILD_ENVIRONMENT[@]}"
@@ -584,16 +583,9 @@ def test_engine_branch_advance_without_platform_revision_change_skips_build(
     repository, home, declaration = prepared(tmp_path)
     engine_source = tmp_path / "engine-source"
     platform_source = tmp_path / "target-source"
-    (engine_source / "fkst.workspace.toml").write_text(
-        '[[external_sources]]\n'
-        'id = "platform"\n'
-        f'git = "{platform_source}"\n'
-        'packages = ["github-devloop", "github-devloop-pr", '
-        '"github-devloop-integration"]\n',
-        encoding="ascii",
-    )
-    git(engine_source, "add", "fkst.workspace.toml")
-    git(engine_source, "commit", "-qm", "add target workspace")
+    (engine_source / "branch-marker").write_text("advanced\n", encoding="ascii")
+    git(engine_source, "add", "branch-marker")
+    git(engine_source, "commit", "-qm", "advance engine branch")
     git(engine_source, "branch", "-f", "integration", "HEAD")
     selected_engine_revision = git(engine_source, "rev-parse", "HEAD")
     (platform_source / ".control" / "engine-ref").write_text(

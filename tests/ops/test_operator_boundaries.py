@@ -14,7 +14,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "ops" / "deployment_operator.sh"
 SOURCE_CONTROL = ROOT / "ops" / "deployment_source_control.sh"
-MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 
 class OperatorBoundaryTest(unittest.TestCase):
@@ -127,89 +126,6 @@ status_one fixture
             self.assertIn("writer=resolved-bot", result.stdout)
             self.assertIn("claim=label", result.stdout)
             self.assertIn("label-exclusive=0", result.stdout)
-
-    def test_platform_source_role_is_an_input(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            host = root / "host"
-            platform = root / "platform"
-            host.mkdir()
-            platform.mkdir()
-            (host / "fkst.workspace.toml").write_text(
-                '[[external_sources]]\nid = "target-owned-name"\ngit = "ssh://git@example.com/team/platform"\npackages = ["one", "two"]\n',
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(MANIFEST),
-                    "platform-packages",
-                    "deployment-a",
-                    str(host),
-                    str(platform),
-                    "https://example.com/team/platform.git",
-                ],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "one two")
-
-    def test_platform_source_url_zero_matches_fails_closed_with_observed_ids(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            host = root / "host"
-            platform = root / "platform"
-            host.mkdir()
-            platform.mkdir()
-            (host / "fkst.workspace.toml").write_text(
-                '[[external_sources]]\nid = "other"\ngit = "https://example.com/team/other.git"\npackages = ["one"]\n',
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(MANIFEST),
-                    "platform-packages",
-                    "deployment-a",
-                    str(host),
-                    str(platform),
-                    "https://example.com/team/platform.git",
-                ],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("https://example.com/team/platform.git", result.stdout)
-            self.assertIn("no matches", result.stdout)
-            self.assertIn("other", result.stdout)
-
-    def test_platform_source_url_two_matches_fails_closed_with_observed_ids(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            host = root / "host"
-            platform = root / "platform"
-            host.mkdir()
-            platform.mkdir()
-            (host / "fkst.workspace.toml").write_text(
-                '[[external_sources]]\nid = "first"\ngit = "https://example.com/team/platform.git"\npackages = ["one"]\n'
-                '[[external_sources]]\nid = "second"\ngit = "git://example.com/team/platform"\npackages = ["two"]\n',
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                ["python3", str(MANIFEST), "platform-packages", "deployment-a", str(host), str(platform),
-                 "ssh://git@example.com/team/platform.git"],
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-            )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("ssh://git@example.com/team/platform.git", result.stdout)
-            self.assertIn("2 matches", result.stdout)
-            self.assertIn("first", result.stdout)
-            self.assertIn("second", result.stdout)
 
     def test_corrupt_run_checkout_is_recloned_from_resolved_git_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

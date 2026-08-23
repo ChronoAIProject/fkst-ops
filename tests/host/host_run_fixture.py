@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import os
-import json
 import signal
 import subprocess
 import tempfile
@@ -29,16 +28,7 @@ class HostRunHarness:
             for pkg in ("github-proxy", "consensus")
         }
         self.platform, _ = create_git_source(self.root, "platform", platform_files)
-        packages_host_files = dict(platform_files)
-        packages_host_files["packages/autochrono/fkst.toml"] = (
-            'kind = "package"\nname = "autochrono"\n'
-        )
-        self.packages_host, _ = create_git_source(
-            self.root,
-            "packages-host",
-            packages_host_files,
-        )
-        (self.website_host / ".fkst" / "local-packages" / "site-board").mkdir(parents=True)
+        self.website_host.mkdir()
         self.substrate_host.mkdir()
 
     def close(self) -> None:
@@ -69,62 +59,6 @@ class HostRunHarness:
                 """
             )
         )
-
-    def write_external_sources_lock(self, entries: list[tuple[str, Path, str]], *, root: Path | None = None) -> None:
-        target_root = root or self.website_host
-        (target_root / "fkst.lock").write_text(
-            "\n".join(
-                textwrap.dedent(
-                    f"""\
-                    [[external_source]]
-                    id = {json.dumps(source_id)}
-                    git = {json.dumps(str(repo))}
-
-                    [external_source.resolved]
-                    rev = {json.dumps(rev)}
-                    """
-                )
-                for source_id, repo, rev in entries
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-
-    def write_workspace_manifest(
-        self,
-        *,
-        root: Path | None = None,
-        workspace_units: list[str] | None = None,
-        workspace_packages: list[str] | None = None,
-        external_sources: list[tuple[str, Path, list[str]]] | None = None,
-    ) -> None:
-        target_root = root or self.website_host
-        units = workspace_units or [".fkst/local-packages/*"]
-        chunks = [f"[workspace]\nunits = {json.dumps(units)}\n"]
-        for package in workspace_packages or []:
-            chunks.append(
-                textwrap.dedent(
-                    f"""\
-                    [[package]]
-                    name = {json.dumps(package)}
-                    source = "workspace"
-                    version = "workspace"
-                    """
-                )
-            )
-        for source_id, repo, packages in external_sources or []:
-            chunks.append(
-                textwrap.dedent(
-                    f"""\
-                    [[external_sources]]
-                    id = {json.dumps(source_id)}
-                    git = {json.dumps(str(repo))}
-                    packages = {json.dumps(packages)}
-                    """
-                )
-            )
-        (target_root / "fkst.workspace.toml").write_text("".join(chunks), encoding="utf-8")
-
 
 def shell_quote(value: str | Path) -> str:
     text = str(value)
@@ -169,20 +103,6 @@ def create_git_source(root: Path, name: str, files: dict[str, str]) -> tuple[Pat
     if result.returncode != 0:
         raise AssertionError(result.stderr)
     return repo, result.stdout.strip()
-
-
-def commit_git_file(repo: Path, rel: str, content: str) -> str:
-    path = repo / rel
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    for args in (["git", "add", rel], ["git", "commit", "-q", "-m", "advance"]):
-        result = run_argv(args, cwd=repo)
-        if result.returncode != 0:
-            raise AssertionError(result.stderr)
-    result = run_argv(["git", "rev-parse", "HEAD"], cwd=repo)
-    if result.returncode != 0:
-        raise AssertionError(result.stderr)
-    return result.stdout.strip()
 
 
 def pid_is_alive(pid: int) -> bool:

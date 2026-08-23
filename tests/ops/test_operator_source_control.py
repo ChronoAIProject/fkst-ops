@@ -203,7 +203,6 @@ cfg() {{
   ENGINE_PROVIDER=/provider; ENGINE_CONTRACT=contract; ENGINE_PROVIDER_CONFIGURATION='{{}}'
 }}
 git_lock_sweep() {{ :; }}
-derive_devloop_pkgs_from_workspace() {{ :; }}
 ensure_integration_caught_up() {{ :; }}
 sync_to_run_branch() {{ printf 'synced:%s\\n' "$1"; }}
 sync_declared_package_sources() {{ :; }}

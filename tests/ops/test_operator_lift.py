@@ -18,7 +18,6 @@ SOURCE_CONTROL = ROOT / "ops" / "deployment_source_control.sh"
 LAUNCH_ENVIRONMENT = ROOT / "ops" / "deployment_launch_environment.sh"
 FKST_OPS = ROOT / "bin" / "fkst-ops"
 DOCTOR = ROOT / "doctor" / "doctor.sh"
-MANIFEST = ROOT / "ops" / "workspace_manifest.py"
 
 class OperatorLiftTest(unittest.TestCase):
     def test_mechanism_tools_have_no_runtime_path_lookup(self) -> None:
@@ -100,7 +99,7 @@ clean_stale_runtime_worktrees fixture "$2/fixture.current"
                             "integration_branch": "integration",
                             "rollup_merge": "merge",
                         },
-                        "packages": {"host": []},
+                        "packages": {"platform": ["pkg"]},
                         "sources": {
                             "target": {"git": "target"},
                             "platform": {"git": "platform"}, "engine": {"git": "engine"},
@@ -228,7 +227,7 @@ stop_one "$1"
                     "authorize_repo_collaborators": False,
                 },
                 "integration": integration,
-                "packages": {"host": []},
+                "packages": {"platform": ["pkg"]},
                 "package_sources": [{
                     "checkout": f"/{name}/extra",
                     "git": "extra",
@@ -396,12 +395,7 @@ done
             host = root / "host"
             host.mkdir()
             (host / "fkst.workspace.toml").write_text(
-                f'[[external_sources]]\nid = "platform"\ngit = {json.dumps(str(platform))}\npackages = ["pkg"]\n',
-                encoding="ascii",
-            )
-            (host / "fkst.lock").write_text(
-                f'[[external_source]]\nid = "platform"\ngit = {json.dumps(str(platform))}\n'
-                f'[external_source.resolved]\nrev = "{selected_platform_revision}"\n',
+                "this target metadata is deliberately invalid TOML\n",
                 encoding="ascii",
             )
             advanced_platform_revision = ""
@@ -434,7 +428,6 @@ ensure_engine_binary_current() {{
   fi
 }}
 engine_build_receipt_current() {{ :; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=pkg; }}
 clean_stale_runtime_worktrees() {{ :; }}
 clean_stale_launch_platforms() {{ :; }}
 clean_stale_engine_artifacts() {{ :; }}
@@ -448,7 +441,7 @@ RATE_POOL="$1/rates"; BOT=resolved-bot; MANAGED_BOT_LOGINS='["resolved-bot","pee
 AUTHORIZED_LOGINS='["trusted-author","second-author"]'; AUTHORIZE_ORG_MEMBERS=1; AUTHORIZE_REPO_COLLABORATORS=0
 UPSTREAM_BRANCH=dev; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
 CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
-LOCAL_PKGS=; ENGINE_GIT_URL=https://github.com/Example-Org/engine-core.git
+PLATFORM_PKGS=pkg; ENGINE_GIT_URL=https://github.com/Example-Org/engine-core.git
 GITHUB_DEVLOOP_PROFILE='{{}}'; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{json.dumps({"source": credential_source}, separators=(",", ":"))}'
 mkdir -p "$HOST" "$DUR" "$RUNTIME_ROOT" "$LOGDIR"
 launch_one fixture 0

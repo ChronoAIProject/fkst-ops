@@ -43,19 +43,9 @@ eval "$MECHANISM_TOOL_ASSIGNMENTS"
 DEPLOYMENT_OPERATOR_DEPLOYMENTS="$(printf '%s' "$RESOLVED_DECLARATION" | "$PYTHON" -c \
   'import json,sys; print(" ".join(item["id"] for item in json.load(sys.stdin)["deployment"]))')"
 
-# The shared devloop family = the PLATFORM (like GitHub runners + marketplace actions), loaded from the
-# platform checkout's repo-root packages/ (PKGSRC). Each target-source-
-# primary TARGET repo (host) commits its OWN custom Lua packages under `.fkst/local-packages/<pkg>`
-# (root stays website source) — so platform packages come from `$PKGSRC/packages/<pkg>`, a host's own package
-# from `$HOST/.fkst/local-packages/<pkg>`. (`.fkst/` is a tracked+ignored runtime INTERFACE dir, not
-# "all runtime": host repos may commit their own Lua there.)
-# Platform packages every deployment supervise LOADS + RUNS from PKGSRC/packages/ are selected by the
-# target host's `fkst.workspace.toml`. Non-self hosts use
-# the declared platform external source's packages; the self host uses explicit workspace
-# `[[package]]` entries. `deployment_operator.sh` only derives the launch argument from that manifest and never
-# rewrites it, so a drift between committed composition and launch composition fails closed in the
-# host-run contract instead of being masked.
-DEVLOOP_PKGS=""
+# The declaration selects every platform package loaded from PKGSRC/packages. Additional declared
+# package sources are carried as explicit name-to-checkout bindings at the launch boundary.
+PLATFORM_PKGS=""
 
 # cfg <id> consumes only the schema validator's resolved output.
 cfg() {
@@ -85,35 +75,17 @@ for source in dep.get("package_sources",[]):
     if "resolved" in source:
         value["resolved"]=source["resolved"]
     package_sources.append(value)
-fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["host"]) or empty," ".join(dep["packages"].get("platform",[])) or empty,json.dumps(package_sources,separators=(",",":")),json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control"),dep["integration"].get("local_test_command","")]
+fields=[dep["target_identity"],m["target_checkout"],m["platform_checkout"],m["engine_checkout"],m["engine_binary"],m["durable"],m["runtime"],m["logs"],m.get("rate_pool", empty),m.get("bot_login", empty),json.dumps(dep["managed_bot_logins"],separators=(",",":")),json.dumps(authorization["authorized_logins"],separators=(",",":")),"1" if authorization["authorize_org_members"] else "0","1" if authorization["authorize_repo_collaborators"] else "0",dep["integration"]["upstream_branch"],dep["integration"]["integration_branch"],dep["integration"]["rollup_merge"],claim["mode"],"1" if claim["label_exclusive"] else "0"," ".join(dep["packages"]["platform"]),json.dumps(package_sources,separators=(",",":")),json.dumps(profile,separators=(",",":")),dep["sources"]["target"]["git"],dep["sources"]["platform"]["git"],dep["sources"]["engine"]["git"],source_pin("target"),source_pin("platform"),source_pin("engine"),m["platform_checkout"],derivation["path"],*provider("github_credential"),*provider("engine"),*provider("board_engine_durable"),*provider("board_github_control"),dep["integration"].get("local_test_command","")]
 print("\t".join(fields))
 ' "$1")" || { echo "unknown deployment: $1" >&2; return 1; }
-  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE LOCAL_PKGS DECLARED_PLATFORM_PKGS DECLARED_PACKAGE_SOURCES GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION LOCAL_TEST_COMMAND <<<"$values"
+  IFS=$'\t' read -r REPO HOST PKGSRC ENGINE_CHECKOUT BIN DUR RUNTIME_ROOT LOGDIR RATE_POOL BOT MANAGED_BOT_LOGINS AUTHORIZED_LOGINS AUTHORIZE_ORG_MEMBERS AUTHORIZE_REPO_COLLABORATORS UPSTREAM_BRANCH INTEGRATION_BRANCH ROLLUP_MERGE CLAIM_MODE CLAIM_LABEL_EXCLUSIVE PLATFORM_PKGS DECLARED_PACKAGE_SOURCES GITHUB_DEVLOOP_PROFILE TARGET_GIT_URL PLATFORM_GIT_URL ENGINE_GIT_URL TARGET_SOURCE_PIN PLATFORM_SOURCE_PIN ENGINE_SOURCE_PIN REVISION_SOURCE ENGINE_REVISION_PATH GITHUB_CREDENTIAL_PROVIDER GITHUB_CREDENTIAL_CONTRACT GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION ENGINE_PROVIDER ENGINE_CONTRACT ENGINE_PROVIDER_CONFIGURATION ENGINE_BOARD_PROVIDER ENGINE_BOARD_CONTRACT ENGINE_BOARD_PROVIDER_CONFIGURATION GITHUB_BOARD_PROVIDER GITHUB_BOARD_CONTRACT GITHUB_BOARD_PROVIDER_CONFIGURATION LOCAL_TEST_COMMAND <<<"$values"
   [ "$RATE_POOL" = "__FKST_OPS_EMPTY__" ] && RATE_POOL=""
   [ "$BOT" = "__FKST_OPS_EMPTY__" ] && BOT=""
-  [ "$LOCAL_PKGS" = "__FKST_OPS_EMPTY__" ] && LOCAL_PKGS=""
-  [ "$DECLARED_PLATFORM_PKGS" = "__FKST_OPS_EMPTY__" ] && DECLARED_PLATFORM_PKGS=""
   [ "$TARGET_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && TARGET_SOURCE_PIN=""
   [ "$PLATFORM_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && PLATFORM_SOURCE_PIN=""
   [ "$ENGINE_SOURCE_PIN" = "__FKST_OPS_EMPTY__" ] && ENGINE_SOURCE_PIN=""
   ENGINE_BINARY_BASE="$BIN"
   CARGO="$("$PYTHON" -c 'import json, pathlib, sys; command=json.loads(sys.argv[1])["build_command"]; print(command[0] if pathlib.Path(command[0]).name == "cargo" else "")' "$ENGINE_PROVIDER_CONFIGURATION")" || return 1
-}
-
-# The declaration owns the platform package list. A target repository may still carry its own
-# `fkst.workspace.toml`, and it is consulted only when the declaration is silent, so a target
-# that says nothing about fkst needs no file at all. Reading the composition from the repository
-# being operated made that repository carry configuration for its own operator; the declaration
-# already held the same list, so this removes a second copy rather than adding a first.
-derive_devloop_pkgs_from_workspace() { # $1 name
-  local name="$1" output
-  if [ -n "${DECLARED_PLATFORM_PKGS:-}" ]; then
-    DEVLOOP_PKGS="$DECLARED_PLATFORM_PKGS"
-    return 0
-  fi
-  output="$("$PYTHON" "$_self_dir/workspace_manifest.py" platform-packages "$name" "$HOST" "$PKGSRC" "$PLATFORM_GIT_URL")" \
-    || { printf '%s\n' "$output" >&2; return 1; }
-  DEVLOOP_PKGS="$output"
 }
 
 git_lock_sweep() { # $1 deployment name; remaining arguments are repository/worktree roots
@@ -512,8 +484,6 @@ launch_one() { # $1 name, $2 restart flag (0|1)
   platform_guard="$RUNTIME_ROOT/.platform-locks/.identity.guard"
   engine_lock="$(dirname "$BIN")/.$(basename "$BIN").launch.lock"
   engine_guard="$(dirname "$ENGINE_BINARY_BASE")/.$(basename "$ENGINE_BINARY_BASE").locks.guard"
-  derive_devloop_pkgs_from_workspace "$name" || return 1
-  [ -n "$DEVLOOP_PKGS" ] || { echo "[$name] no platform packages declared in fkst.workspace.toml"; return 1; }
   authorize_github_writer || return 1
   resolve_deployment_child_environment || return 1
   environment_sha256=$(deployment_child_environment_sha256) || return 1
@@ -529,12 +499,11 @@ launch_one() { # $1 name, $2 restart flag (0|1)
     "$_repo_root/host/supervise.sh"
     --project-root "$HOST"
     --platform-root "$launch_platform"
-    --platform-packages "$DEVLOOP_PKGS"
+    --platform-packages "$PLATFORM_PKGS"
     --expected-engine-revision "$ENGINE_REVISION"
     --durable-root "$DUR"
     --runtime-root "$rt"
   )
-  [ -n "$LOCAL_PKGS" ] && args+=(--host-packages "$LOCAL_PKGS")
   # Package sources the declaration named beyond the platform. The validator has already bound
   # each name to a checkout, so the launch contract carries the binding rather than re-deriving it.
   declared_package_sources=$(package_source_launch_args) || {
@@ -623,7 +592,6 @@ restart_one() {
     ensure_run_checkout "$HOST" "$TARGET_GIT_URL" || return 1
   fi
   ensure_declared_package_source_checkouts || return 1
-  derive_devloop_pkgs_from_workspace "$1" || return 1
   [ -n "$PLATFORM_SOURCE_PIN" ] || ensure_integration_caught_up "$PKGSRC"  # pinned sources must not advance
   if [ "$HOST" != "$PKGSRC" ] && [ -z "$TARGET_SOURCE_PIN" ]; then
     ensure_integration_caught_up "$HOST"
@@ -732,7 +700,6 @@ _proc_stale() {
   local LC_ALL=C
   local p log platform_package package_versions procpkg proceng procenv desiredenv pdev changed_paths pin_revision skew=0; p=$(pidof_df); log=$(latest_log "$1")
   [ -z "$p" ] && { echo stopped; return; }
-  derive_devloop_pkgs_from_workspace "$1" >/dev/null || { echo config-error; return; }
   if [ -n "${PLATFORM_SOURCE_PIN:-}" ]; then
     pin_revision=$(source_pin_values "$PLATFORM_SOURCE_PIN") || {
       echo pinned-source-invalid; return;
@@ -743,7 +710,7 @@ _proc_stale() {
     pdev=$(git -C "$PKGSRC" rev-parse "origin/$INTEGRATION_BRANCH" 2>/dev/null)
   fi
   resolve_engine_pair || { echo engine-revision-failed; return; }
-  platform_package="${DEVLOOP_PKGS%% *}"
+  platform_package="${PLATFORM_PKGS%% *}"
   package_versions=$(provenance_package_versions "$log") || { echo pkg-stale; return; }
   procpkg=$(provenance_package_version "$package_versions" "$platform_package")
   proceng=$(grep -aoE 'ENGINE_VER=[a-f0-9]+' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
@@ -806,7 +773,6 @@ cmd_sync() {
     else
       echo "[$n] deployment source checkouts -> origin/$INTEGRATION_BRANCH:"
     fi
-    derive_devloop_pkgs_from_workspace "$n" || { echo "  $n: config-error"; failed=1; continue; }
     [ -n "$platform_pin" ] || ensure_integration_caught_up "$PKGSRC"  # pinned sources must not advance
     if [ "$HOST" != "$PKGSRC" ] && [ -z "$target_pin" ]; then
       ensure_integration_caught_up "$HOST"
@@ -839,18 +805,18 @@ cmd_sync() {
 
 cmd_config() {
   echo "resolved validated deployment config"
-  echo "platform pkgs resolve per repo from fkst.workspace.toml"
-  echo "per-repo (HOST | PKGSRC | DURABLE | local pkgs | platform pkgs):"
+  echo "platform packages resolve from each deployment declaration"
+  echo "per-repo (HOST | PKGSRC | DURABLE | platform pkgs):"
   local n package_source package_source_status
   for n in $DEPLOYMENT_OPERATOR_DEPLOYMENTS; do
-    if cfg "$n" && derive_devloop_pkgs_from_workspace "$n" 2>/dev/null; then
-      printf '  %-9s %s | %s | %s | %s | %s\n' "$n" "$HOST" "$PKGSRC" "$DUR" "${LOCAL_PKGS:--}" "$DEVLOOP_PKGS"
+    if cfg "$n"; then
+      printf '  %-9s %s | %s | %s | %s\n' "$n" "$HOST" "$PKGSRC" "$DUR" "$PLATFORM_PKGS"
       package_source_status=$(package_source_config_status) || package_source_status="CONFIG-ERROR"
       while IFS= read -r package_source; do
         [ -n "$package_source" ] && printf '    package-source %s\n' "$package_source"
       done <<<"$package_source_status"
     else
-      printf '  %-9s %s | %s | %s | %s | %s\n' "$n" "$HOST" "$PKGSRC" "$DUR" "${LOCAL_PKGS:--}" "CONFIG-ERROR"
+      printf '  %-9s %s | %s | %s | %s\n' "$n" "$HOST" "$PKGSRC" "$DUR" "CONFIG-ERROR"
     fi
   done
 }
