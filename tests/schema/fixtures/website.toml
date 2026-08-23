@@ -27,7 +27,6 @@ packages = ["site-board"]
 path = ".control/engine-ref"
 [deployment.packages]
 platform = ["github-devloop", "github-devloop-pr", "github-devloop-integration"]
-host = []
 [deployment.integration]
 upstream_branch = "main"
 integration_branch = "integration"

@@ -4,7 +4,6 @@
 HOST_ENTRY_HOST_ROOT=""
 HOST_ENTRY_PLATFORM_ROOT=""
 HOST_ENTRY_PLATFORM_SOURCE_ID="${HOST_ENTRY_PLATFORM_SOURCE_ID:-platform}"
-HOST_ENTRY_LOCAL_PACKAGES=""
 HOST_ENTRY_PACKAGE_ROOTS=()
 HOST_ENTRY_HOST_PACKAGE_ROOTS=()
 HOST_ENTRY_PLATFORM_PACKAGE_ROOTS=()
@@ -20,7 +19,7 @@ host_entry_engine_args() {
 
 host_entry_usage() {
   cat >&2 <<'EOF'
-usage: scripts/run.sh host --host-root <HOST> [--platform-root <PKGSRC>] [--local-packages <dir>] -- <check|test|supervise [args]>
+usage: scripts/run.sh host --host-root <HOST> [--platform-root <PKGSRC>] -- <check|test|supervise [args]>
 EOF
 }
 
@@ -50,7 +49,6 @@ host_entry_same_path() {
 host_entry_parse() {
   HOST_ENTRY_HOST_ROOT=""
   HOST_ENTRY_PLATFORM_ROOT="$ROOT"
-  HOST_ENTRY_LOCAL_PACKAGES=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -60,9 +58,6 @@ host_entry_parse() {
       --platform-root)
         [ "$#" -ge 2 ] || { echo "error: --platform-root requires a path" >&2; return 2; }
         HOST_ENTRY_PLATFORM_ROOT="$2"; shift 2 ;;
-      --local-packages)
-        [ "$#" -ge 2 ] || { echo "error: --local-packages requires a path" >&2; return 2; }
-        HOST_ENTRY_LOCAL_PACKAGES="$2"; shift 2 ;;
       --)
         shift
         break ;;
@@ -81,12 +76,6 @@ host_entry_parse() {
 
   HOST_ENTRY_HOST_ROOT="$(host_entry_abs_path "$HOST_ENTRY_HOST_ROOT")"
   HOST_ENTRY_PLATFORM_ROOT="$(host_entry_abs_path "$HOST_ENTRY_PLATFORM_ROOT")"
-  if [ -z "$HOST_ENTRY_LOCAL_PACKAGES" ]; then
-    HOST_ENTRY_LOCAL_PACKAGES="$HOST_ENTRY_HOST_ROOT/.fkst/local-packages"
-  else
-    HOST_ENTRY_LOCAL_PACKAGES="$(host_entry_abs_path "$HOST_ENTRY_LOCAL_PACKAGES")"
-  fi
-
   [ -d "$HOST_ENTRY_HOST_ROOT" ] || { echo "error: host root does not exist: $HOST_ENTRY_HOST_ROOT" >&2; return 1; }
   [ -d "$HOST_ENTRY_PLATFORM_ROOT" ] || { echo "error: platform root does not exist: $HOST_ENTRY_PLATFORM_ROOT" >&2; return 1; }
   [ -d "$HOST_ENTRY_PLATFORM_ROOT/packages" ] || { echo "error: platform root has no packages directory: $HOST_ENTRY_PLATFORM_ROOT/packages" >&2; return 1; }
@@ -144,12 +133,6 @@ host_entry_add_package_root() {
     host_entry_add_host_name "$name"
     return 0
   fi
-  if name="$(host_entry_package_name_under "$root" "$HOST_ENTRY_LOCAL_PACKAGES")"; then
-    HOST_ENTRY_HOST_PACKAGE_ROOTS+=("$root")
-    host_entry_add_host_name "$name"
-    return 0
-  fi
-
   echo "error: package root is not under host or platform package views: $root" >&2
   return 1
 }
@@ -188,7 +171,7 @@ host_entry_discover_roots() {
     done
     return 0
   fi
-  for rootdir in "$HOST_ENTRY_HOST_ROOT"/packages/*/ "$HOST_ENTRY_LOCAL_PACKAGES"/*/; do
+  for rootdir in "$HOST_ENTRY_HOST_ROOT"/packages/*/; do
     [ -d "$rootdir" ] || continue
     host_entry_add_package_root "${rootdir%/}" || return 1
   done
@@ -593,10 +576,11 @@ host_entry_cmd_supervise() {
     return 1
   fi
 
-  args=(--project-root "$HOST_ENTRY_HOST_ROOT" --platform-root "$HOST_ENTRY_PLATFORM_ROOT" --local-packages "$HOST_ENTRY_LOCAL_PACKAGES" --platform-packages "$platform_names")
   if [ -n "$host_names" ]; then
-    args+=(--host-packages "$host_names")
+    echo "error: host supervise does not accept target-owned package roots: $host_names" >&2
+    return 1
   fi
+  args=(--project-root "$HOST_ENTRY_HOST_ROOT" --platform-root "$HOST_ENTRY_PLATFORM_ROOT" --platform-packages "$platform_names")
   args+=("$@")
   host_run_supervise_contract "${args[@]}"
 }

@@ -15,7 +15,7 @@ def test_operator_constructs_the_contract_argv_with_the_owned_entry() -> None:
     "$_repo_root/host/supervise.sh"
     --project-root "$HOST"
     --platform-root "$launch_platform"
-    --platform-packages "$DEVLOOP_PKGS"
+    --platform-packages "$PLATFORM_PKGS"
     --expected-engine-revision "$ENGINE_REVISION"
     --durable-root "$DUR"
     --runtime-root "$rt"

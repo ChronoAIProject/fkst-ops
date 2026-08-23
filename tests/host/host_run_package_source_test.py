@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """The launch contract accepts package sources beyond the platform.
 
-`--platform-packages` names packages the contract must resolve — against the target's
-manifest when it has one, otherwise against `--platform-root`. `--package-source` carries a
-binding the caller already made: this root supplies these names. Nothing here re-derives it,
-so a package cannot resolve to the wrong source at launch, and a target that describes no
-composition of its own can still be given packages from several repositories.
+`--platform-packages` names packages beneath `--platform-root`. `--package-source` carries a
+binding the declaration already made: this root supplies these names. Nothing here re-derives
+composition from the target, so a package cannot resolve to the wrong source at launch.
 """
 
 from __future__ import annotations
@@ -63,10 +61,15 @@ class HostRunPackageSourceTest(unittest.TestCase):
             self.base_args() + self.source_args(self.extra, "site-board site-radar")
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        roots = result.stdout.split()
-        self.assertIn(f"{self.h.platform.resolve()}/packages/github-proxy", roots)
-        self.assertIn(f"{self.extra}/packages/site-board", roots)
-        self.assertIn(f"{self.extra}/packages/site-radar", roots)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                f"{self.h.platform.resolve()}/packages/github-proxy",
+                f"{self.h.platform.resolve()}/packages/consensus",
+                f"{self.extra}/packages/site-board",
+                f"{self.extra}/packages/site-radar",
+            ],
+        )
 
     def test_two_package_sources_each_contribute_their_own(self) -> None:
         second, _ = create_git_source(
@@ -138,7 +141,7 @@ class HostRunPackageSourceTest(unittest.TestCase):
             f"{source.resolve()}/packages/site-clock", result.stdout.splitlines()
         )
 
-    def test_a_package_source_cannot_repeat_a_fallback_platform_name(self) -> None:
+    def test_a_package_source_cannot_repeat_a_platform_name(self) -> None:
         result = self.h.package_roots(
             self.base_args() + self.source_args(self.extra, "github-proxy")
         )

@@ -27,7 +27,7 @@ eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
 cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; PLATFORM_SOURCE_PIN=; return 0; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$TEST_LOG"; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=platform-package; }}
+PLATFORM_PKGS=platform-package
 resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
 resolve_deployment_child_environment() {{ :; }}
 deployment_child_environment_sha256() {{ echo "$DESIRED_ENVIRONMENT_SHA256"; }}
@@ -112,7 +112,7 @@ eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
 cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; return 0; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$TEST_LOG"; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=github-devloop; }}
+PLATFORM_PKGS=github-devloop
 resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
 git() {{
   case "$*" in
@@ -147,7 +147,7 @@ PYTHON=python3
 cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PLATFORM_SOURCE_PIN=; return 0; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$TEST_LOG"; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS='site.*'; }}
+PLATFORM_PKGS='site.*'
 resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
 package_source_moved() {{ :; }}
 resolve_deployment_child_environment() {{ :; }}
@@ -216,7 +216,7 @@ REPO=example/repo; CLAIM_MODE=label; CLAIM_LABEL_EXCLUSIVE=0
 RATE_POOL=/rate; BOT=bot; MANAGED_BOT_LOGINS='["bot"]'; AUTHORIZED_LOGINS='[]'
 AUTHORIZE_ORG_MEMBERS=0; AUTHORIZE_REPO_COLLABORATORS=0
 UPSTREAM_BRANCH=main; INTEGRATION_BRANCH=integration; ROLLUP_MERGE=enabled
-GITHUB_DEVLOOP_PROFILE='{{}}'; LOCAL_PKGS=; DEVLOOP_PKGS=platform-package
+GITHUB_DEVLOOP_PROFILE='{{}}'; PLATFORM_PKGS=platform-package
 github_write_posture() {{ echo 0; }}
 DECLARED_PACKAGE_SOURCES='[]'
 resolve_deployment_child_environment
@@ -228,7 +228,7 @@ DESIRED_PACKAGE_SOURCES='[{{"root":"/extra","packages":["site-board"]}}]'
 cfg() {{ PKGSRC=/platform; PLATFORM_SOURCE_PIN=; DECLARED_PACKAGE_SOURCES="$DESIRED_PACKAGE_SOURCES"; }}
 pidof_df() {{ echo 123; }}
 latest_log() {{ echo "$TEST_LOG"; }}
-derive_devloop_pkgs_from_workspace() {{ DEVLOOP_PKGS=platform-package; }}
+PLATFORM_PKGS=platform-package
 resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
 package_source_moved() {{ :; }}
 git() {{
@@ -259,7 +259,6 @@ cfg() {{
   PLATFORM_SOURCE_PIN=; TARGET_SOURCE_PIN=
 }}
 git_lock_sweep() {{ :; }}
-derive_devloop_pkgs_from_workspace() {{ :; }}
 ensure_integration_caught_up() {{ :; }}
 sync_to_run_branch() {{ :; }}
 sync_declared_package_sources() {{ :; }}

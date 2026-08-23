@@ -41,7 +41,6 @@ def test_board_dispatch_contract_carries_validator_actor_and_complete_roster(
     durable = tmp_path / "durable"; runtime = tmp_path / "runtime"; logs = tmp_path / "logs"
     for path in (source, engine, durable, runtime, logs): path.mkdir()
     (source / "packages" / "workflow").mkdir(parents=True)
-    (source / "fkst.workspace.toml").write_text('[[external_sources]]\nid="source"\npackages=["workflow"]\n', encoding="utf-8")
     subprocess.run(["git", "init", "-q", str(source)], check=True)
     subprocess.run(["git", "init", "-q", str(engine)], check=True)
     binary_stem = engine / "engine-bin"
@@ -97,7 +96,6 @@ lock_ref="engine"
 path="control/engine-ref"
 [deployment.packages]
 platform=["workflow"]
-host=[]
 [deployment.integration]
 upstream_branch="dev"
 integration_branch="dev"

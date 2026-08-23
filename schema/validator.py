@@ -355,8 +355,6 @@ def _validate_resolved_paths(resolved: dict[str, Any], path: str, pins: dict[str
 
     for package in resolved["packages"]["platform"]:
         _require_directory(str(checkouts["platform"] / "packages" / package), path + f".packages.platform[{package}]")
-    for package in resolved["packages"]["host"]:
-        _require_directory(str(checkouts["target"] / ".fkst" / "local-packages" / package), path + f".packages.host[{package}]")
 
     package_source_roots: list[Path] = []
     for entry_index, entry in enumerate(resolved.get("package_sources", [])):
@@ -592,11 +590,8 @@ def validate_and_resolve(
             if "resolved" in pins[lock_ref]:
                 resolved_sources[role]["resolved"] = copy.deepcopy(pins[lock_ref]["resolved"])
 
-        # A deployment composes from its platform by default. Naming further package sources here
-        # is what lets a target carry no packages of its own: the composition is described where
-        # the deployment is declared, not inside the repository being operated. Each entry binds
-        # one pinned source to one machine checkout and lists what that source supplies, which is
-        # the same three facts the target-owned `[[external_sources]]` route carries.
+        # The declaration owns composition. Each additional package source binds one pinned source
+        # to one machine checkout and lists the packages that source supplies.
         package_sources_path = path + ".package_sources"
         package_sources_declared = dep.get("package_sources", [])
         if not isinstance(package_sources_declared, list):
@@ -650,28 +645,23 @@ def validate_and_resolve(
             _fail(engine_revision_path + ".path", str(exc))
 
         packages = _table(dep.get("packages"), path + ".packages")
-        _closed(packages, {"platform", "host"}, path + ".packages")
-        # platform is optional: a declaration that omits it leaves composition to the target
-        # repository's own manifest, which is the fallback the operator takes. A declaration
-        # that carries it owns the composition outright and the target need not describe it.
-        resolved_packages = {"platform": [], "host": []}
-        if "platform" in packages:
-            resolved_packages["platform"] = _string_list(packages, "platform", path + ".packages", nonempty=True)
-        if "host" in packages:
-            resolved_packages["host"] = _string_list(packages, "host", path + ".packages", nonempty=False)
+        _closed(packages, {"platform"}, path + ".packages")
+        resolved_packages = {
+            "platform": _string_list(
+                packages, "platform", path + ".packages", nonempty=True
+            )
+        }
         # These names become engine package-root basenames and cross a whitespace-separated
         # transport into the launch contract, so enforce the engine's complete name grammar here.
-        for field_name in ("platform", "host"):
-            for package_index, package_name in enumerate(resolved_packages[field_name]):
-                _validate_package_name(
-                    package_name, f"{path}.packages.{field_name}[{package_index}]"
-                )
+        for package_index, package_name in enumerate(resolved_packages["platform"]):
+            _validate_package_name(
+                package_name, f"{path}.packages.platform[{package_index}]"
+            )
         _require_unique(resolved_packages["platform"], path + ".packages.platform")
-        _require_unique(resolved_packages["host"], path + ".packages.host")
         # The engine rejects duplicate package-root basenames. Reject the same composition here so
         # a declaration cannot validate successfully and then abort at the launch boundary.
         _require_unique(
-            resolved_packages["platform"] + resolved_packages["host"]
+            resolved_packages["platform"]
             + [name for entry in resolved_package_sources for name in entry["packages"]],
             path + ".packages",
         )
