@@ -757,31 +757,6 @@ authorize_github_writer
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_active_account_resolution_fails_closed_for_ambiguous_report(self) -> None:
-        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
-eval "$(sed -n '/^resolve_github_writer()/,/^}}/p' "{OPERATOR}")"
-REAL_GH="$1"
-resolve_github_writer
-'''
-        with tempfile.TemporaryDirectory() as directory:
-            gh = Path(directory) / "gh"
-            gh.write_text("""#!/bin/sh
-cat <<'EOF'
-github.com
-  ✓ Logged in to github.com account first[bot] (GH_TOKEN)
-  - Active account: true
-  ✓ Logged in to github.com account second[bot] (GH_TOKEN)
-  - Active account: true
-EOF
-""", encoding="utf-8")
-            gh.chmod(0o755)
-            result = subprocess.run(
-                ["bash", "-c", command, "test", str(gh)],
-                text=True, capture_output=True, check=False,
-            )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ambiguous or not parseable", result.stderr)
-
     def test_gate_refuses_missing_refresh_helper(self) -> None:
         command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
 eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"

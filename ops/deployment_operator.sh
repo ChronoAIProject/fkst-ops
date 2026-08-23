@@ -147,45 +147,6 @@ expand() { [ "${1:-all}" = all ] && echo "$DEPLOYMENT_OPERATOR_DEPLOYMENTS" || e
 
 invoke_provider() { PATH="$DEPLOYMENT_CHILD_PATH" "$PYTHON" "$_self_dir/invoke_provider.py" "$1" "$2"; }
 
-resolve_github_writer() {
-  local auth_report resolved
-  REAL_GH="${FKST_GITHUB_REAL_GH:-${REAL_GH:-}}"
-  [ -n "$REAL_GH" ] || {
-    echo "error: real gh executable not carried in machine profile" >&2
-    return 1
-  }
-  auth_report="$("$REAL_GH" auth status --active --hostname github.com 2>&1)" || {
-    echo "error: cannot determine the active GitHub CLI account" >&2
-    return 1
-  }
-  resolved="$(printf '%s\n' "$auth_report" | "$PYTHON" -c '
-import re, sys
-lines = sys.stdin.read().splitlines()
-accounts = []
-for line in lines:
-    match = re.match(r"^\s*[✓X] Logged in to github[.]com account (.+) \(([^()]*)\)\s*$", line)
-    if match:
-        accounts.append(match.groups())
-active = [line for line in lines if re.match(r"^\s*- Active account: true\s*$", line)]
-if len(accounts) != 1 or len(active) != 1:
-    raise SystemExit(1)
-login, source = accounts[0]
-if not login or not source or "\t" in login or "\t" in source:
-    raise SystemExit(1)
-print(login + "\t" + source)
-')" || {
-    echo "error: active GitHub CLI account report is ambiguous or not parseable" >&2
-    return 1
-  }
-  IFS="$(printf '\t')" read -r GITHUB_WRITER_LOGIN GITHUB_WRITER_SOURCE <<EOF
-$resolved
-EOF
-  [ -n "$GITHUB_WRITER_LOGIN" ] && [ -n "$GITHUB_WRITER_SOURCE" ] || {
-    echo "error: active GitHub CLI account report did not resolve an identity and credential source" >&2
-    return 1
-  }
-}
-
 authorize_github_writer() {
   [ -n "${GITHUB_CREDENTIAL_PROVIDER:-}" ] && [ -x "$GITHUB_CREDENTIAL_PROVIDER" ] || {
     echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-helper-unavailable" >&2

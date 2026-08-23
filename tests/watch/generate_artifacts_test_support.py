@@ -11,7 +11,6 @@ import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-GENERATOR = ROOT / "watch" / "generate_artifacts.py"
 FIXTURES = ROOT / "tests" / "schema" / "fixtures"
 GIT = shutil.which("git")
 assert GIT is not None

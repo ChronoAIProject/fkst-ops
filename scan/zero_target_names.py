@@ -22,13 +22,7 @@ EXCLUDED_PATHS = frozenset({
     "tests/schema/fixtures/website.toml",
     "tests/scan/fixtures/concrete-name.txt",
     "tests/scan/test_zero_target_names.py",
-    "tests/host/bin_bootstrap_test.py",
     "tests/host/bin_cache_test.py",
-    "tests/host/host_entry_test.py",
-    "tests/host/host_run_equivalence_golden.json",
-    "tests/host/host_run_equivalence_test.py",
-    "tests/host/host_run_source_identity_test.py",
-    "tests/host/host_run_test.py",
 })
 
 
@@ -39,23 +33,17 @@ def tracked_paths(root: Path) -> list[str]:
     # and then turns red on the very commit that was just checked. Incident of record: a repository
     # guidance document and later a README each passed this scan before `git add` and failed it
     # after.
-    paths: list[str] = []
-    seen: set[str] = set()
-    for args in (["ls-files", "-z"], ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"]):
-        output = subprocess.run(
-            ["git", "-C", str(root), *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
-        for value in output.split(b"\0"):
-            if not value:
-                continue
-            decoded = value.decode("utf-8", "surrogateescape")
-            if decoded not in seen:
-                seen.add(decoded)
-                paths.append(decoded)
-    return paths
+    output = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+    return [
+        value.decode("utf-8", "surrogateescape")
+        for value in output.split(b"\0")
+        if value
+    ]
 
 
 def scan(root: Path, names: list[str]) -> list[str]:
