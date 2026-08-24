@@ -179,6 +179,25 @@ does not mutate deployment runtime, durable state, or resolved source working
 checkouts. Cache publication and pointer replacement occur only after candidate
 verification and pinned preflight succeed.
 
+Artifact generation derives its launch mechanism path from the same
+deployment-owned `fkst-ops` `resolved.rev`: the path is
+`<deployment-repository>/.fkst/run/fkst-ops/checkouts/<resolved.rev>`. Before
+creating machine state, generation requires that checkout to exist, verifies
+that its `HEAD` is the resolved revision, and requires its cadence plist
+template, cadence script, and executable operator entry. A missing, mismatched,
+or incomplete checkout fails generation before a LaunchAgent is written.
+Generation reads the plist template from that checkout and writes both the
+cadence script and `--operator-entry` paths back into it; launchd therefore
+does not execute either hop from the checkout that happened to invoke the
+generator.
+
+The first generation for a deployment repository has one explicit bootstrap
+prerequisite: materialize the lock entry's `git` repository, detached at its
+`resolved.rev`, at that revision-addressed cache path, then run
+`bin/fkst-regenerate` from that checkout. Generation does not clone, select, or
+advance the mechanism pin. Later pin advancement and regeneration keep the
+same ordering and consume the revision already chosen in `fkst.lock`.
+
 Every machine-profile root is a non-empty absolute path containing neither a
 character Python recognizes as whitespace nor a Unicode control character in
 the `Cc` category. Root values cross tab-separated sync/probe records and
@@ -191,6 +210,10 @@ including `ops/deployment_operator.sh`, from an invoking or cached checkout whos
 tracked files differ from the pinned revision. Such an edit is treated as the
 operator's deliberate change on their own disk; working-tree pinning is the
 operator's own Git responsibility and neither causes hydration nor rejection.
+The generator's mechanism-root revision check remains separately responsible
+for binding generation semantics to the deployment lock during adoption; it is
+not the launchd runtime-code boundary. As above, generated runtime paths and the
+template they are rendered from use the revision-addressed cached checkout.
 
 ## Engine revision authority
 

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -197,7 +198,15 @@ def test_publication_failure_leaves_only_revision_addressed_engine_artifact(
 
     repository, home, _ = prepared(tmp_path)
     machine = tmp_path / "scratch-machine"
-    monkeypatch.setattr(generator, "_verify_mechanism_root", lambda _lock: None)
+    mechanism_revision = git(ROOT, "rev-parse", "HEAD")
+    mechanism_checkout = (
+        repository / ".fkst" / "run" / "fkst-ops" / "checkouts" / mechanism_revision
+    )
+    mechanism_checkout.parent.mkdir(parents=True)
+    shutil.copytree(ROOT, mechanism_checkout, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(
+        generator, "_verify_mechanism_root", lambda _lock: mechanism_revision
+    )
     monkeypatch.setattr(
         generator,
         "_discover_tools",

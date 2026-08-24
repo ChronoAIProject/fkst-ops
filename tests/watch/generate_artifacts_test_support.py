@@ -124,6 +124,7 @@ def run_generator(
     repository: Path, home: Path, machine_root: Path | None = None,
     bot_login: str | None = "fkst-bot", github_credential_source: str | None = None,
     integration_branch: str | None = None,
+    materialize_mechanism_checkout: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     mechanism = home / "mechanism"
     if not mechanism.exists():
@@ -151,6 +152,18 @@ def run_generator(
                 ])
             lines.append("")
         lock_path.write_text("\n".join(lines), encoding="ascii")
+    lock = tomllib.loads((repository / "fkst.lock").read_text(encoding="utf-8"))
+    mechanism_revision = next(
+        entry["resolved"]["rev"]
+        for entry in lock["external_source"]
+        if entry["id"] == "fkst-ops"
+    )
+    pinned_checkout = (
+        repository / ".fkst" / "run" / "fkst-ops" / "checkouts" / mechanism_revision
+    )
+    if materialize_mechanism_checkout and not pinned_checkout.exists():
+        pinned_checkout.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(mechanism, pinned_checkout)
     launchctl = home / "fake-launchctl"
     if not launchctl.exists():
         launchctl.write_text(

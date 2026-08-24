@@ -93,6 +93,57 @@ def test_empty_machine_state_materialises_every_declared_root(tmp_path: Path) ->
 
 
 @pytest.mark.usefixtures("fabricated_mechanism_tools")
+def test_launch_agent_runs_pinned_cadence_and_operator_entry(tmp_path: Path) -> None:
+    repository, home, _ = prepared(tmp_path)
+
+    result = run_generator(repository, home)
+
+    assert result.returncode == 0, result.stderr
+    lock = tomllib.loads((repository / "fkst.lock").read_text(encoding="utf-8"))
+    revision = next(
+        entry["resolved"]["rev"]
+        for entry in lock["external_source"]
+        if entry["id"] == "fkst-ops"
+    )
+    pinned_checkout = (
+        repository / ".fkst" / "run" / "fkst-ops" / "checkouts" / revision
+    )
+    launch_agent = home / ".fkst" / "machine" / "LaunchAgents" / "com.fkst.cadence.plist"
+    with launch_agent.open("rb") as stream:
+        arguments = plistlib.load(stream)["ProgramArguments"]
+    profile = Path(arguments[arguments.index("--machine-profile") + 1])
+    manifest = Path(arguments[arguments.index("--declaration-manifest") + 1])
+    assert arguments == [
+        sys.executable,
+        str(pinned_checkout / "watch" / "cadence_round.py"),
+        "--deployment-repository", str(repository),
+        "--machine-profile", str(profile),
+        "--declaration-manifest", str(manifest),
+        "--ledger", str(home / ".fkst" / "machine" / "watch" / "cadence.jsonl"),
+        "--guard-restart-attempt-limit", "3",
+        "--operator-entry", str(pinned_checkout / "bin" / "fkst-ops"),
+    ]
+    assert str(home / "mechanism") not in arguments
+
+
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
+def test_generation_fails_before_writing_plist_when_pinned_checkout_is_absent(
+    tmp_path: Path,
+) -> None:
+    repository, home, _ = prepared(tmp_path)
+
+    result = run_generator(
+        repository, home, materialize_mechanism_checkout=False,
+    )
+
+    assert result.returncode == 2
+    assert "pinned fkst-ops checkout is absent" in result.stderr
+    assert not (
+        home / ".fkst" / "machine" / "LaunchAgents" / "com.fkst.cadence.plist"
+    ).exists()
+
+
+@pytest.mark.usefixtures("fabricated_mechanism_tools")
 def test_package_sources_table_reports_located_validation_error(tmp_path: Path) -> None:
     repository, home, _ = prepared(tmp_path)
     declaration_path = repository / "deployment.toml"
