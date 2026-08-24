@@ -261,6 +261,66 @@ checkout's `origin` URL exactly with its declared lock source before fetching or
 accepting it. A different origin fails with `CHECKOUT_SOURCE_MISMATCH`; matching
 content at the requested SHA does not substitute for declared provenance.
 
+## Platform source qualification
+
+The platform source is the deployment's single versioned behaviour-and-
+compatibility coordinate. One captured platform commit `P` supplies the declared
+behaviour packages and exclusively selects the engine commit `E` that executes
+them. The following obligations derive from that purpose:
+
+1. **P contains every declared package root.** Each name in
+   `deployment.packages.platform` exists as `packages/<name>` in the platform
+   checkout. **PARTIALLY ENFORCED** -- declaration validation checks directory
+   presence in the materialized platform checkout at validation time
+   (`schema/validator.py:356-357`), which does not prove presence in the Git tree
+   of `P`. At operate time, the operator materializes captured `P`
+   (`ops/deployment_operator.sh:448-450`) and the host contract consumes its
+   package roots (`host/host_run.sh:467-470`).
+2. **P contains a valid committed engine revision at the declared path.** The
+   blob at `P:<engine_revision.path>` contains exactly one full lowercase SHA.
+   **ENFORCED AT ADOPTION AND OPERATE, NOT AT DECLARATION VALIDATION** -- artifact
+   hydration (`watch/generate_artifacts.py:670` ->
+   `watch/source_hydration.py:353`) reads the committed blob before publishing
+   machine artifacts; the sync path re-reads it through `cmd_sync` ->
+   `bin_ensure_fresh` -> `ensure_engine_binary_current`
+   (`ops/deployment_operator.sh:727`, `:298`, `:264`), and the post-build
+   re-assertion at `ops/deployment_operator.sh:289` checks it again.
+   This is deliberately absent from declaration validation because
+   `schema/validator.py` is the shared entry gate
+   (`ops/deployment_operator.sh:20-21`, before the dispatch `case`). Coupling that
+   gate to a Git read would break the exit contract at
+   `ops/deployment_operator.sh:624` and, through
+   `watch/cadence_round.py:297-301,313-314,326-327`, disable the stopped-
+   deployment restart guard.
+3. **The revision path is read from the platform checkout only.** No checkout
+   selector and no literal revision are expressible. **ENFORCED** -- the
+   validator makes alternatives inexpressible at `schema/validator.py:640`,
+   regression-guarded by `tests/schema/test_validator.py:435-437`; the operator
+   binds `REVISION_SOURCE` to `m["platform_checkout"]` at
+   `ops/deployment_operator.sh:78-81`. See
+   [Engine revision authority](#engine-revision-authority) for the authority-
+   reduction rationale.
+4. **Movement of P invalidates a process that logged a provenance binding for
+   the first declared platform package.** No path taxonomy is exempt.
+   **PARTIALLY ENFORCED** -- `ops/deployment_operator.sh:659` in `_proc_stale`.
+   Without that binding, the platform comparison is skipped and later checks
+   can return `current`.
+5. **A package source carries no engine-pairing obligation.** Packages supplied
+   through `[[deployment.package_sources]]` execute on the engine revision `E`
+   that the platform selects, with no mechanism verifying that those packages
+   were built or tested against `E`. **NOT ENFORCED.** This is the role's one
+   real correctness exposure, and closing it is separately fundable work. The
+   concrete instance belongs to the deployment declaration that introduces the
+   package source; that declaration is the layer that owns it.
+
+Relocating the pin path onto the `sources.platform` binding would make the
+`P` -> `E` relationship structural instead of reconstructed by the mechanism.
+It requires the declaration migration and mechanism pin advance to land
+atomically and is deliberately not part of this change. The path-taxonomy
+removal changes only the re-executed operator and becomes active on a machine
+running from the pinned mechanism checkout only at a separately approved pin
+advance. This change does not advance that pin.
+
 ## Declared package sources
 
 A deployment may extend its declared platform package composition with this
@@ -303,9 +363,9 @@ probes one declared package name per additional source because packages from a
 single checkout share its commit. For an exact source the desired version is
 `resolved.rev`; for a branch source it is the fetched integration-branch head.
 The logged version may be an unambiguous prefix of that revision. A comparable
-revision at a different commit is `pkg-stale` and requires reload, with no
-documentation-only exemption. `<revision>-dirty`, `unknown`, and malformed or
-unreadable provenance produce the distinct diagnostic verdicts
+revision at a different commit is `pkg-stale` and requires reload.
+`<revision>-dirty`, `unknown`, and malformed or unreadable provenance produce
+the distinct diagnostic verdicts
 `pkg-provenance-dirty`, `pkg-provenance-unknown`, and `pkg-provenance-invalid`.
 Fetch and revision-lookup failures are also invalid provenance evidence. These
 states do not trigger restart because restart cannot make them comparable.

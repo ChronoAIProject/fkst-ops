@@ -274,7 +274,6 @@ class DeclaredPackageSourceTest(unittest.TestCase):
             result = run(
                 extract(
                     "source_pin_values",
-                    "platform_paths_require_restart",
                     "package_source_probes",
                     "provenance_package_versions",
                     "provenance_package_version",
@@ -545,7 +544,6 @@ cmd_sync all
             }]
             result = run(
                 extract(
-                    "platform_paths_require_restart",
                     "package_source_probes",
                     "provenance_package_versions",
                     "provenance_package_version",
@@ -616,7 +614,6 @@ _proc_stale deployment
                     "sync_to_run_branch",
                     "sync_deployment_source",
                     "restart_one",
-                    "platform_paths_require_restart",
                     "package_source_probes",
                     "provenance_package_versions",
                     "provenance_package_version",
