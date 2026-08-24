@@ -20,8 +20,7 @@ class OperatorRestartDetectionTest(unittest.TestCase):
         *, running_generation: str = "generation-old",
         desired_generation: str = "generation-current",
     ) -> str:
-        command = f'''eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
-eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
+        command = f'''eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
 eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
 cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; PLATFORM_SOURCE_PIN=; return 0; }}
@@ -64,23 +63,57 @@ _proc_stale deployment
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
-    def _platform_paths_require_restart(self, *paths: str) -> bool:
-        command = f'''eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
-printf '%s\\n' "$@" | platform_paths_require_restart
+    def _classify_platform_advance(self, *paths: str) -> tuple[str, bool]:
+        command = f'''eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
+eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
+eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
+cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; PLATFORM_SOURCE_PIN=; return 0; }}
+pidof_df() {{ echo 123; }}
+latest_log() {{ echo "$TEST_LOG"; }}
+PLATFORM_PKGS=platform-package
+resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
+git() {{
+  case "$*" in
+    *" fetch "*) return 0 ;;
+    *" rev-parse "*) echo bbbbbbbb; return 0 ;;
+    *" diff --name-only "*)
+      printf 'requested\\n' > "$DIFF_MARKER"
+      printf '%s\\n' "$CHANGED_PATHS"
+      return 0
+      ;;
+  esac
+  return 1
+}}
+TEST_LOG="$1"
+CHANGED_PATHS="$2"
+DIFF_MARKER="$3"
+_proc_stale deployment
 '''
-        result = subprocess.run(
-            ["bash", "-c", command, "test", *paths],
-            text=True, capture_output=True, check=False,
-        )
-        self.assertIn(result.returncode, (0, 1), result.stderr)
-        return result.returncode == 0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log = Path(temp_dir) / "supervise.log"
+            diff_marker = Path(temp_dir) / "diff-requested"
+            log.write_text(
+                "EVENT=code_provenance PKG_VERS=platform-package@11111111 "
+                "ENGINE_VER=aaaaaaaa\n",
+                encoding="ascii",
+            )
+            result = subprocess.run(
+                [
+                    "bash", "-c", command, "test", str(log),
+                    "\n".join(paths), str(diff_marker),
+                ],
+                text=True, capture_output=True, check=False,
+            )
+            diff_requested = diff_marker.exists()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip(), diff_requested
 
     def test_platform_scripts_change_requires_restart(self) -> None:
         for path in ("scripts/run_bin.sh", "scripts/run.sh", "scripts/host_run.sh"):
             with self.subTest(path=path):
-                self.assertTrue(self._platform_paths_require_restart(path))
+                self.assertEqual(self._classify_platform_advance(path), ("pkg-stale", False))
 
-    def test_platform_ci_test_and_checker_changes_do_not_require_restart(self) -> None:
+    def test_platform_ci_test_and_checker_changes_require_restart(self) -> None:
         for path in (
             ".github/workflows/ci.yml",
             "scripts/ci_workflow_test.py",
@@ -89,58 +122,33 @@ printf '%s\\n' "$@" | platform_paths_require_restart
             "scripts/check_repo_library_layering.py",
         ):
             with self.subTest(path=path):
-                self.assertFalse(self._platform_paths_require_restart(path))
+                self.assertEqual(self._classify_platform_advance(path), ("pkg-stale", False))
 
     def test_platform_migration_and_launch_config_changes_require_restart(self) -> None:
         for path in ("migration/catalog.json", "fkst.workspace.toml", "fkst.lock"):
             with self.subTest(path=path):
-                self.assertTrue(self._platform_paths_require_restart(path))
+                self.assertEqual(self._classify_platform_advance(path), ("pkg-stale", False))
 
     def test_platform_packages_change_still_requires_restart(self) -> None:
-        self.assertTrue(
-            self._platform_paths_require_restart("packages/github-devloop/core.lua")
+        self.assertEqual(
+            self._classify_platform_advance("packages/github-devloop/core.lua"),
+            ("pkg-stale", False),
         )
 
     def test_platform_library_change_still_requires_restart(self) -> None:
-        self.assertTrue(self._platform_paths_require_restart("libraries/devloop/base.lua"))
+        self.assertEqual(
+            self._classify_platform_advance("libraries/devloop/base.lua"),
+            ("pkg-stale", False),
+        )
 
-    def test_proc_stale_fails_closed_when_git_diff_fails(self) -> None:
-        command = f'''eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
-eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
-eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
-eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
-cfg() {{ PKGSRC=/platform; INTEGRATION_BRANCH=dev; PYTHON=python3; return 0; }}
-pidof_df() {{ echo 123; }}
-latest_log() {{ echo "$TEST_LOG"; }}
-PLATFORM_PKGS=github-devloop
-resolve_engine_pair() {{ ENGINE_REVISION=aaaaaaaa; }}
-git() {{
-  case "$*" in
-    *" fetch "*) return 0 ;;
-    *" rev-parse "*) echo bbbbbbbb; return 0 ;;
-    *" diff --name-only "*) return 1 ;;
-  esac
-  return 1
-}}
-TEST_LOG="$1"
-_proc_stale "$2"
-'''
-        with tempfile.TemporaryDirectory() as temp_dir:
-            log = Path(temp_dir) / "supervise.log"
-            log.write_text(
-                "EVENT=code_provenance PKG_VERS=github-devloop@11111111 ENGINE_VER=aaaaaaaa\n",
-                encoding="ascii",
-            )
-            result = subprocess.run(
-                ["bash", "-c", command, "test", str(log), "packages"],
-                text=True, capture_output=True, check=False,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "pkg-stale")
+    def test_platform_advance_does_not_inspect_changed_paths(self) -> None:
+        self.assertEqual(
+            self._classify_platform_advance("docs/user/deployment.md"),
+            ("pkg-stale", False),
+        )
 
     def test_exact_package_lookup_does_not_interpret_ere_syntax(self) -> None:
-        command = f'''eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
-eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
+        command = f'''eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
 eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
 PYTHON=python3
@@ -204,7 +212,6 @@ _proc_stale deployment
 
     def test_adding_a_declared_package_source_changes_proc_identity(self) -> None:
         command = f'''source "{ROOT / 'ops' / 'deployment_launch_environment.sh'}"
-eval "$(sed -n '/^platform_paths_require_restart()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^_proc_stale()/,/^}}/p' "{OPERATOR}")"
 eval "$(sed -n '/^provenance_package_versions()/,/^}}/p' "{SOURCE_CONTROL}")"
 eval "$(sed -n '/^provenance_package_version()/,/^}}/p' "{SOURCE_CONTROL}")"
@@ -276,24 +283,27 @@ cmd_sync all
         self.assertIn("environment-stale -> auto-restart", result.stdout)
         self.assertIn("restarted:deployment", result.stdout)
 
-    def test_platform_docs_only_change_does_not_require_restart(self) -> None:
-        self.assertFalse(
-            self._platform_paths_require_restart("docs/user/deployment.md", "README.md")
+    def test_platform_docs_only_change_requires_restart(self) -> None:
+        self.assertEqual(
+            self._classify_platform_advance("docs/user/deployment.md", "README.md"),
+            ("pkg-stale", False),
         )
 
-    def test_platform_skill_only_change_does_not_require_restart(self) -> None:
-        self.assertFalse(
-            self._platform_paths_require_restart(
+    def test_platform_skill_only_change_requires_restart(self) -> None:
+        self.assertEqual(
+            self._classify_platform_advance(
                 ".claude/skills/dogfood-github-devloop/SKILL.md",
                 ".claude/skills/dogfood-github-devloop/dogfood.sh",
-            )
+            ),
+            ("pkg-stale", False),
         )
 
     def test_platform_code_change_is_not_hidden_by_docs_change(self) -> None:
-        self.assertTrue(
-            self._platform_paths_require_restart(
+        self.assertEqual(
+            self._classify_platform_advance(
                 "docs/user/deployment.md", "libraries/devloop/base.lua"
-            )
+            ),
+            ("pkg-stale", False),
         )
 
 
