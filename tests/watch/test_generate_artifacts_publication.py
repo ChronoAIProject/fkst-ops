@@ -411,7 +411,6 @@ def test_repeated_isolated_publication_is_bounded(tmp_path: Path) -> None:
 def _reconciliation_launchctl(tmp_path: Path) -> tuple[Path, Path]:
     executable = tmp_path / "launchctl"
     state = tmp_path / "schedule.state"
-    calls = tmp_path / "schedule.calls"
     executable.write_text(
         "#!/usr/bin/env python3\n"
         "import os, pathlib, sys\n"

@@ -125,8 +125,8 @@ elapsed_seconds() {
 }
 
 stray_supervise_report() {
-  local managed="" identity project durable engine pid cmd root stray=0
-  while IFS=$'\t' read -r identity project durable engine; do
+  local managed="" identity project durable pid cmd root stray=0
+  while IFS=$'\t' read -r identity project durable; do
     [ -n "$identity" ] || continue
     managed="${managed}${project}"$'\n'
   done < <(doctor_targets)

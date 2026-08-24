@@ -20,10 +20,6 @@ from ops.revision_derivation import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[2]
-CLI = ROOT / "ops" / "revision_derivation.py"
-
-
 def git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *args], text=True, capture_output=True, check=True
