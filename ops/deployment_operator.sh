@@ -628,33 +628,18 @@ status_one() {
 # _proc_stale <name> -> freshness verdict of the RUNNING process vs origin/dev. Authoritative =
 # the code the process loaded at startup (logged code_provenance PKG_VERS/ENGINE_VER), NOT the
 # worktree/BIN file (those can be updated without reloading the process — only a restart reloads).
-# Echoes: stopped | current | skew (dev moved, declared non-executed files only) |
-# pkg-stale (platform code may have changed) | engine-stale | environment-stale.
+# Echoes: stopped | current | pkg-stale (platform code may have changed) | engine-stale |
+# environment-stale.
 # PKG freshness is vs PKGSRC origin/$INTEGRATION_BRANCH (the run branch the deployment loads);
 # ENGINE freshness is the revision derived from the captured platform commit.
-platform_paths_require_restart() {
-  local path
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    case "$path" in
-      .github/*) ;; # CI-only configuration is not read by a running supervise.
-      scripts/*_test.*) ;; # Test-only scripts run under verification, not supervise.
-      scripts/check_repo*) ;; # Repository checker and lint scripts inspect source outside supervise.
-      docs/*|.claude/skills/*|AGENTS.md|CLAUDE.md|CONTRIBUTING.md|README.md|SECURITY.md|LICENSE) ;;
-      *) return 0 ;;
-    esac
-  done
-  return 1
-}
-
-# Emits "<checkout root>\t<one package name>\t<exact revision or empty>" for each declared
-# package source. One name is
-# enough: the engine logs a commit per loaded package, and every package from one source carries
-# that source's commit, so any one of them reports whether the source has moved.
+#
+# package_source_moved obtains rows from package_source_probes in ops/deployment_source_control.sh:
+# "<checkout root>\t<one package name>\t<exact revision or empty>". Every package from one source
+# carries that source's commit, so any one of them reports whether the source has moved.
 _proc_stale() {
   cfg "$1" || { echo unknown; return; }
   local LC_ALL=C
-  local p log platform_package package_versions procpkg proceng procenv desiredenv pdev changed_paths pin_revision skew=0; p=$(pidof_df); log=$(latest_log "$1")
+  local p log platform_package package_versions procpkg proceng procenv desiredenv pdev pin_revision; p=$(pidof_df); log=$(latest_log "$1")
   [ -z "$p" ] && { echo stopped; return; }
   if [ -n "${PLATFORM_SOURCE_PIN:-}" ]; then
     pin_revision=$(source_pin_values "$PLATFORM_SOURCE_PIN") || {
@@ -671,15 +656,9 @@ _proc_stale() {
   procpkg=$(provenance_package_version "$package_versions" "$platform_package")
   proceng=$(grep -aoE 'ENGINE_VER=[a-f0-9]+' "$log" 2>/dev/null | tail -1 | cut -d= -f2)
   if [ -n "$proceng" ] && [ "${ENGINE_REVISION:0:${#proceng}}" != "$proceng" ]; then echo engine-stale; return; fi
-  if [ -n "$procpkg" ] && [ "${pdev:0:${#procpkg}}" != "$procpkg" ]; then
-    changed_paths=$(git -C "$PKGSRC" diff --name-only "$procpkg" "$pdev" -- 2>/dev/null) \
-      || { echo pkg-stale; return; }
-    if platform_paths_require_restart <<<"$changed_paths"; then echo pkg-stale; return; fi
-    skew=1
-  fi
+  if [ -n "$procpkg" ] && [ "${pdev:0:${#procpkg}}" != "$procpkg" ]; then echo pkg-stale; return; fi
   # A package source that has moved means the running process loaded code that no longer exists
-  # upstream. Every path in a package source is package code, so unlike the platform there is no
-  # documentation-only class to exempt: any advance is a reload.
+  # upstream. Any source advance is a reload; the mechanism has no sound path-impact proof.
   local package_source_verdict
   package_source_verdict=$(package_source_moved "$package_versions")
   [ -z "$package_source_verdict" ] || { echo "$package_source_verdict"; return; }
@@ -688,16 +667,14 @@ _proc_stale() {
   resolve_deployment_child_environment || { echo environment-contract-error; return; }
   desiredenv=$(deployment_child_environment_sha256) || { echo environment-contract-error; return; }
   [ "$procenv" = "$desiredenv" ] || { echo environment-stale; return; }
-  [ "$skew" -eq 0 ] || { echo skew; return; }
   echo current
 }
 
 # cmd_sync: keep deployment-owned sources current in one call. The mechanism checkout is immutable:
 # its version is the deployment lock pin. Advance target/platform run branches, update and rebuild
 # each declared engine through its provider, then AUTO-RESTART only supervises whose RUNNING code may have changed
-# (pkg-stale/engine-stale/environment-stale). Unverifiable package provenance, skill/docs-only
-# skew, and already-current processes are left running - a restart cannot repair provenance and
-# would only churn in-flight codex for no code change.
+# (pkg-stale/engine-stale/environment-stale). Unverifiable package provenance and already-current
+# processes are left running - a restart cannot repair provenance.
 cmd_sync() {
   local n st failed=0 platform_pin target_pin package_source_checkouts source_root source_url
   local package_source_roots=()
