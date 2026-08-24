@@ -148,18 +148,7 @@ expand() { [ "${1:-all}" = all ] && echo "$DEPLOYMENT_OPERATOR_DEPLOYMENTS" || e
 invoke_provider() { PATH="$DEPLOYMENT_CHILD_PATH" "$PYTHON" "$_self_dir/invoke_provider.py" "$1" "$2"; }
 
 authorize_github_writer() {
-  [ -n "${GITHUB_CREDENTIAL_PROVIDER:-}" ] && [ -x "$GITHUB_CREDENTIAL_PROVIDER" ] || {
-    echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-helper-unavailable" >&2
-    return 1
-  }
   credential_source=$(printf '%s' "$GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["source"])') || return 1
-  case "$credential_source" in
-    github-app|github-cli-user) ;;
-    *)
-      echo "LEVEL=ERROR tag=FAILURE error_class=github-authentication-failed HEALTH=UNHEALTHY MSG=credential-source-unsupported" >&2
-      return 1
-      ;;
-  esac
   REAL_GH="${FKST_GITHUB_REAL_GH:-${REAL_GH:-}}"
   GITHUB_CREDENTIAL_RESOLVER="${FKST_GITHUB_CREDENTIAL_RESOLVER:-${GITHUB_CREDENTIAL_RESOLVER:-}}"
   [ -n "$REAL_GH" ] || {

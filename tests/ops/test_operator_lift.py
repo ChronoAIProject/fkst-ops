@@ -758,12 +758,25 @@ authorize_github_writer
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_gate_refuses_missing_refresh_helper(self) -> None:
-        command = f'''PYTHON="${{FKST_OPS_PYTHON:-python3}}"
+        command = f'''PYTHON="{sys.executable}"
 eval "$(sed -n '/^authorize_github_writer()/,/^}}/p' "{OPERATOR}")"
-BOT=declared-bot
+_self_dir="{ROOT / 'ops'}"
+BOT=declared-bot; REPO=example/repo; GITHUB_CREDENTIAL_PROVIDER_CONFIGURATION='{{"source":"github-app"}}'
 authorize_github_writer
 '''
-        result = subprocess.run(["bash", "-c", command], text=True, capture_output=True, check=False)
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                ["bash", "-c", command],
+                env={
+                    **os.environ,
+                    "GITHUB_CREDENTIAL_PROVIDER": str(Path(directory) / "missing-helper"),
+                    "FKST_GITHUB_REAL_GH": "/usr/bin/true",
+                    "FKST_GITHUB_CREDENTIAL_RESOLVER": "/usr/bin/true",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("credential-helper-unavailable", result.stderr)
         self.assertIn("HEALTH=UNHEALTHY", result.stderr)
